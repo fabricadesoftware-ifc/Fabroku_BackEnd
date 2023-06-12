@@ -1,9 +1,11 @@
 from typing import Union
 from fastapi import FastAPI
-from modules.ssh import sshConnector
+from modules.ssh.sshConnector import SSHConnector
 from modules.server import server
 
 app = FastAPI()
+
+sshClient = SSHConnector()
 
 
 @app.get("/")
@@ -13,20 +15,20 @@ def read_root():
 
 @app.get("/testSsh")
 def test_ssh_connection():
-    Data = sshConnector.testConnection()
+    Data = sshClient.testConnection()
 
     return {"data": Data}
 
 
 @app.post("/generatessh")
 def generate_ssh_connection():
-    Data = sshConnector.generateConnection()
+    Data = sshClient.generateConnection()
     return {"data": Data}
 
 
 @app.get("/closeconnection")
 def close_connection():
-    sshConnector.client.close()
+    sshClient.closeConnection()
     return "Connection closed"
 
 

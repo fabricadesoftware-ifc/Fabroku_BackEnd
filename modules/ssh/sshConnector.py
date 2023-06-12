@@ -17,31 +17,53 @@ client.set_missing_host_key_policy(AutoAddPolicy())
 host = os.getenv("HOST")
 
 
-def testConnection():
-    print(f"Host: {host}, Username: wharf")
-    client.connect(host, port=1022, username="wharf", pkey=private_key)
-    if client.get_transport().is_active():
-        print("Connection is active")
-        client.close()
-        return True
-    else:
-        print("Connection is not active")
-        client.close()
-        return False
+class SSHConnector:
+    __client = SSHClient()  # Create a new SSH Clients
+    __private_key = Ed25519Key.from_private_key_file(
+        "./modules/ssh/id_ed25519", password="qaqa.QA21"
+    )
 
+    def __init__(self):
+        self.__client.set_missing_host_key_policy(AutoAddPolicy())
 
-def generateConnection():
-    client.connect(host, port=1022, username="wharf", pkey=private_key)
-    return "Connection is active"
+    def testConnection(self):
+        print(f"Host: {host}, Username: wharf")
+        self.__client.connect(
+            host, port=1022, username="wharf", pkey=self.__private_key
+        )
+        if self.__client.get_transport().is_active():
+            print("Connection is active")
+            self.__client.close()
+            return True
+        else:
+            print("Connection is not active")
+            self.__client.close()
+            return False
 
+    def generateConnection(self):
+        self.__client.connect(
+            host, port=1022, username="wharf", pkey=self.__private_key
+        )
+        return "Connection is active"
 
-def verifyConnection():
-    if client.get_transport() is not None and client.get_transport().is_active():
-        return True
-    else:
-        return False
+    def verifyConnection(self):
+        if (
+            self.__client.get_transport() is not None
+            and self.__client.get_transport().is_active()
+        ):
+            return True
+        else:
+            return False
 
+    def closeConnection(self):
+        self.__client.close()
+        return "Connection closed"
 
-def runCommand(command):
-    _, stdout, stderr = client.exec_command(command)
-    return stdout.readlines()
+    # não sinto que é correto deixar esta função aqui, mas mais tarde refatoremos esta classe
+
+    def runCommand(self, command):
+        _, stdout, stderr = self.__client.exec_command(command)
+        if stderr == None:
+            return stdout.readlines()
+        else:
+            return stderr.readlines()
