@@ -10,30 +10,24 @@ app = FastAPI()
 def read_root():
     return "Hello there! This is the Fabroku Api, for more info about how to use, go to /docs"
 
+
 @app.get("/testSsh")
 def test_ssh_connection():
     Data = sshConnector.testConnection()
-    
+
     return {"data": Data}
+
 
 @app.post("/generatessh")
 def generate_ssh_connection():
     Data = sshConnector.generateConnection()
     return {"data": Data}
 
+
 @app.get("/closeconnection")
 def close_connection():
     sshConnector.client.close()
     return "Connection closed"
-
-@app.get("/runcommand/{command}")
-def run_command(command: str):
-    if(sshConnector.verifyConnection):
-        Data = sshConnector.runCommand(command)
-    else: 
-        Data = "Connection is not active"
-    
-    return {"data": Data}
 
 
 @app.get("/appslist")
