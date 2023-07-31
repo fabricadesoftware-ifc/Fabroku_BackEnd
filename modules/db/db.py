@@ -8,7 +8,7 @@ from prisma import Prisma
 
 def main() -> None:
     """
-    Conection to the database
+    Connection to the database
     """
     db_con = Prisma()
     db_con.connect()

@@ -5,7 +5,7 @@ The idea of making this system plugin-friendly is to make it simpler for specifi
 
 "Kong Plugin, auto manage kong for your group of applications"
 or 
-"DownDetector test, add your service to our downdetector website"
+"DownDetector test, add your service to our down detector website"
 
 and a lot of other things.
 
