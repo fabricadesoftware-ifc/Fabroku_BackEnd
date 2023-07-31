@@ -1,9 +1,9 @@
 # Fabroku
 Project manager for the fábrica.
 
-Made with Python with FastApi
+Made with Python and FastApi
 
-To run this project locally, utilize the start command:
+To run this project locally, use this:
 ```cmd
    pdm run uvicorn main:app --reload
 ```
