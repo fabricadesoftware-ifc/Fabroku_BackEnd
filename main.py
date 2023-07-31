@@ -10,7 +10,6 @@ app = FastAPI()
 
 sshClient = SSHConnector()
 
-
 @app.get("/")
 def read_root():
     """
