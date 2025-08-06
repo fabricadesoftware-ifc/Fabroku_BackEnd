@@ -1,17 +1,31 @@
-
 [project]
 name = "Fabroku"
-version = "0.1"
-description = "A system for managing the CI/CD of the F.S;"
+version = "0.1.0"
+description = "Default template for PDM package"
 authors = [
-    {name = "Snow-sr", email = "joaofelipi877@gmail.com, snowsr.dev@gmail.com, snowsr@cock.li"},
+    {name = "jonatasperaza", email = "jonatassilvaperaza@gmail.com"},
 ]
-dependencies = [
-    "fastapi>=0.96.1",
-    "uvicorn>=0.22.0",
-    "paramiko>=3.2.0",
-    "python-dotenv>=1.0.0",
-    "prisma>=0.9.0",
-]
-requires-python = ">=3.10"
+dependencies = ["django>=5.2.5", "python-dotenv>=1.1.1", "dj-database-url>=3.0.1"]
+requires-python = ">=3.13"
+readme = "README.md"
 license = {text = "MIT"}
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+
+[tool.pdm]
+distribution = true
+
+[tool.pdm.scripts]
+dev = "python src/manage.py runserver"
+runserver = "python src/manage.py runserver"
+createsuperuser = "python src/manage.py createsuperuser"
+migrate = "python src/manage.py migrate"
+makemigrations = "python src/manage.py makemigrations"
+shell = "python src/manage.py shell"
+test = "python src/manage.py test"
+startapp = "python src/manage.py startapp {args}"
+loaddata = "python src/manage.py loaddata {args}"
+dumpdata = "python src/manage.py dumpdata {args}"
