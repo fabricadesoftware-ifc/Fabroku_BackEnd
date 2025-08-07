@@ -4,15 +4,14 @@ from core.user.infra.user_django_app.models import User
 
 
 class Projeto(models.Model):
-    """Modelo para representar um projeto de aluno"""
     STATUS_CHOICES = [
-        ('Pendente', 'pendente'),
-        ('Concluido', 'enviado'),
-        ('Em andamento', "em andamento")
+        ('pendente', 'Pendente'),
+        ('concluido', 'Concluído'),
+        ('em_andamento', 'Em andamento')
     ]
     
     TIPO_FONTE_CHOICES = [
-        ('Docker', 'Imagem docker '),
+        ('Docker', 'Imagem Docker'),
         ('Github', 'Repositório GitHub'),
     ]
 
@@ -24,35 +23,35 @@ class Projeto(models.Model):
     usuario = models.ForeignKey(User, on_delete=models.CASCADE, related_name='projetos')
     nome = models.CharField(max_length=200, verbose_name="Nome do Projeto")
     descricao = models.TextField(verbose_name="Descrição")
-    tecnologia = models.CharField(max_length=100, choices=TIPO_TECNOLOGIA,verbose_name="Tecnologia Principal")
+    tecnologia = models.CharField(max_length=100, choices=TIPO_TECNOLOGIA, verbose_name="Tecnologia Principal")
     tipo_fonte = models.CharField(max_length=20, choices=TIPO_FONTE_CHOICES, default='Github', verbose_name="Tipo de Fonte")
     
     # Campos para GitHub
     github_repo = models.URLField(verbose_name="URL do Repositório GitHub")
     github_branch = models.CharField(max_length=100, default='main', verbose_name="Branch do GitHub")
-    github_token = models.CharField(max_length=255, blank=True, null=True, verbose_name="Token do GitHub (caso o repostório seja privado)")
+    github_token = models.CharField(max_length=255, blank=True, null=True, verbose_name="Token do GitHub (caso o repositório seja privado)")
 
     # Campos do Docker
-
-    image_repo = models.CharField(max_length=100, verbose_name="Repositorio da imagem(Dockerbub)")
+    image_repo = models.CharField(max_length=100, verbose_name="Repositório da imagem (DockerHub)")
     image_tag = models.CharField(max_length=50, verbose_name="Tag da imagem")
 
     # Configurações de deploy
     porta_personalizada = models.IntegerField(blank=True, null=True, verbose_name="Porta Personalizada")
     variaveis_ambiente = models.JSONField(blank=True, null=True, verbose_name="Variáveis de Ambiente")
     
-    dominio = models.CharField(max_length=100, verbose_name="Dominio do site")
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='rascunho')
+    dominio = models.CharField(max_length=100, verbose_name="Domínio do site")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pendente')
     data_criacao = models.DateTimeField(default=timezone.now)
     data_ultima_atualizacao = models.DateTimeField(auto_now=True)
     url_deploy = models.URLField(blank=True, null=True, verbose_name="URL do Deploy")
-    dominio = models.CharField(max_length=100)
     
     def save(self, *args, **kwargs):
         dominio_fabrica = ".fabricadesoftware"
-        self.dominio = f"{self.nome}{dominio_fabrica}:{self.porta_personalizada}"
+        if self.porta_personalizada:
+            self.dominio = f"{self.nome}{dominio_fabrica}:{self.porta_personalizada}"
+        else:
+            self.dominio = f"{self.nome}{dominio_fabrica}"
         super().save(*args, **kwargs)
-
 
     class Meta:
         verbose_name = "Projeto"
@@ -60,5 +59,4 @@ class Projeto(models.Model):
         ordering = ['-data_ultima_atualizacao']
     
     def __str__(self):
-        return f"{self.nome},{self.usuario}"
-
+        return f"{self.nome} - {self.usuario.name}"
