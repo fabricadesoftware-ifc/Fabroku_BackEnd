@@ -1,1 +1,2 @@
-from .user import User, Turma
+from .user import User
+from .aluno import Aluno, Turma
