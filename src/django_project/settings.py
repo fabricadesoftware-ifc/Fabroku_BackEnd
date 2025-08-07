@@ -32,7 +32,6 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
-    "drf_spectacular",
     "core.user.infra.user_django_app",
     "core.project.infra.project_django_app",
     "core.deploy.infra.deploy_django_app",
