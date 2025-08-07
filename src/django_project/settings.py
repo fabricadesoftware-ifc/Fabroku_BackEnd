@@ -32,9 +32,9 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
-    "core.user.infra.user_django_app",
-    "core.project.infra.project_django_app",
-    "core.deploy.infra.deploy_django_app",
+    "src.core.user.infra.user_django_app",
+    "src.core.project.infra.project_django_app",
+    "src.core.deploy.infra.deploy_django_app",
 ]
 
 MIDDLEWARE = [
@@ -48,6 +48,8 @@ MIDDLEWARE = [
 ]
 
 ROOT_URLCONF = 'django_project.urls'
+
+AUTH_USER_MODEL = "user_django_app.User"
 
 REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
