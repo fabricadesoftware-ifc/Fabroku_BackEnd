@@ -6,7 +6,6 @@ from src.core.user.infra.user_django_app.manager import CustomUserManager
 class User(AbstractUser):
     username = None
     name = models.CharField(max_length=100)
-    registration = models.CharField(max_length=50, blank=True, null=True)
     email = models.EmailField(unique=True, null=True, blank=True)
     password = models.CharField(max_length=255, null=True, blank=True)
 
