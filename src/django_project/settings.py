@@ -32,9 +32,9 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
-    "src.core.user.infra.user_django_app",
-    "src.core.project.infra.project_django_app",
-    "src.core.deploy.infra.deploy_django_app",
+    "core.user.infra.user_django_app",
+    "core.project.infra.project_django_app",
+    "core.deploy.infra.deploy_django_app",
 ]
 
 MIDDLEWARE = [

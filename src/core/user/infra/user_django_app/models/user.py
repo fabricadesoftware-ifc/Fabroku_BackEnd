@@ -8,6 +8,13 @@ class User(AbstractUser):
     username = None
     name = models.CharField(max_length=100)
     email = models.EmailField(unique=True, null=True, blank=True)
+    matricula = models.CharField(
+        max_length=10,
+        validators=[
+            RegexValidator(regex=r'^\d{10}$', message="A matrícula deve conter exatamente 10 números.")
+        ],
+        unique=True,
+        verbose_name="Matrícula")
 
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = ["name"]
@@ -19,6 +26,7 @@ class User(AbstractUser):
         return f"{self.name}"
     
     class Meta:
+        app_label = "user_django_app"
         verbose_name = "Usuário"
         verbose_name_plural = "Usuários"
 
