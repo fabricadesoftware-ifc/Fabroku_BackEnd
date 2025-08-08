@@ -26,20 +26,19 @@ class Projeto(models.Model):
     tecnologia = models.CharField(max_length=100, choices=TIPO_TECNOLOGIA, verbose_name="Tecnologia Principal")
     tipo_fonte = models.CharField(max_length=20, choices=TIPO_FONTE_CHOICES, default='Github', verbose_name="Tipo de Fonte")
     
-    # Campos para GitHub
-    github_repo = models.URLField(verbose_name="URL do Repositório GitHub")
-    github_branch = models.CharField(max_length=100, default='main', verbose_name="Branch do GitHub")
-    github_token = models.CharField(max_length=255, blank=True, null=True, verbose_name="Token do GitHub (caso o repositório seja privado)")
 
-    # Campos do Docker
-    image_repo = models.CharField(max_length=100, verbose_name="Repositório da imagem (DockerHub)")
-    image_tag = models.CharField(max_length=50, verbose_name="Tag da imagem")
+    github_repo = models.URLField(verbose_name="URL do Repositório GitHub", blank=True, null=True)
+    github_branch = models.CharField(max_length=100, default='main', verbose_name="Branch do GitHub", blank=True, null=True)
 
-    # Configurações de deploy
+
+    image_repo = models.CharField(max_length=200, verbose_name="Repositório da imagem (ex: usuario/repo ou registry/repo)", blank=True, null=True)
+    image_tag = models.CharField(max_length=50, default='latest', verbose_name="Tag da imagem", blank=True, null=True)
+
+
     porta_personalizada = models.IntegerField(blank=True, null=True, verbose_name="Porta Personalizada")
     variaveis_ambiente = models.JSONField(blank=True, null=True, verbose_name="Variáveis de Ambiente")
     
-    dominio = models.CharField(max_length=100, verbose_name="Domínio do site")
+    dominio = models.CharField(max_length=100, verbose_name="Domínio do site", blank=True, null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pendente')
     data_criacao = models.DateTimeField(default=timezone.now)
     data_ultima_atualizacao = models.DateTimeField(auto_now=True)
@@ -47,10 +46,11 @@ class Projeto(models.Model):
     
     def save(self, *args, **kwargs):
         dominio_fabrica = ".fabricadesoftware"
-        if self.porta_personalizada:
-            self.dominio = f"{self.nome}{dominio_fabrica}:{self.porta_personalizada}"
-        else:
-            self.dominio = f"{self.nome}{dominio_fabrica}"
+        if self.nome:
+            if self.porta_personalizada:
+                self.dominio = f"{self.nome}{dominio_fabrica}:{self.porta_personalizada}"
+            else:
+                self.dominio = f"{self.nome}{dominio_fabrica}"
         super().save(*args, **kwargs)
 
     class Meta:

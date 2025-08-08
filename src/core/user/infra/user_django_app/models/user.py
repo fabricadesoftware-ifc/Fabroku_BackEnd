@@ -1,6 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
-from src.core.user.infra.user_django_app.manager import CustomUserManager
+from core.user.infra.user_django_app.manager import CustomUserManager
 from django.utils import timezone
 from django.core.validators import RegexValidator
 
