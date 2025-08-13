@@ -28,6 +28,48 @@ fabroku ports clear <app_name>
 
 Observação: Para usar Dokku remoto via SSH, defina `DOKKU_HOST` (ex.: `user@dokku-host`) e opcionalmente `DOKKU_SSH_OPTS`.
 
+## API Web (Django + DRF)
+
+Endpoints principais (POST salvo quando indicado):
+- `POST /api/dokku/apps/create/` body: `{ "app_name": "minha-app", "initial_env": {"KEY":"VAL"} }`
+- `POST /api/dokku/deploy/` body: `{ "app_name": "minha-app", "git_url": "https://...#main" }` ou `{ "image": "usuario/repo:tag" }`
+- `DELETE /api/dokku/apps/<app_name>/` query: `?force=true`
+- `POST /api/dokku/plugins/install/` body: `{ "plugin_git_url": "https://...", "name": "opcional" }`
+- `POST /api/dokku/postgres/create/` body: `{ "service_name": "pg1", "options": ["--some", "--opts"] }`
+- `POST /api/dokku/postgres/link/` body: `{ "service_name": "pg1", "app_name": "minha-app" }`
+- `POST /api/dokku/rabbitmq/create/` body: `{ "service_name": "rmq1", "options": [] }`
+- `POST /api/dokku/rabbitmq/link/` body: `{ "service_name": "rmq1", "app_name": "minha-app" }`
+- `POST /api/dokku/config/set/` body: `{ "app_name": "minha-app", "env": {"KEY":"VAL"} }`
+- `POST /api/dokku/ports/set/` body: `{ "app_name": "minha-app", "mappings": ["http:80:5000"] }`
+- `POST /api/dokku/ports/add/` body: `{ "app_name": "minha-app", "mappings": ["http:8080:5000"] }`
+- `POST /api/dokku/ports/clear/` body: `{ "app_name": "minha-app" }`
+
+Documentação e schema:
+- OpenAPI: `/api/schema/`
+- Swagger UI: `/api/docs/`
+
+## Deploy no Dokku
+
+Pré-requisitos no servidor Dokku:
+- Plugins conforme necessidade (postgres, rabbitmq etc.)
+- Variáveis de ambiente (SECRET_KEY, DATABASE_URL, etc.)
+
+Passos:
+1. Crie a app: `dokku apps:create fabroku-api`
+2. Configure envs essenciais:
+   - `dokku config:set fabroku-api SECRET_KEY=...`
+   - `dokku config:set fabroku-api DEBUG=False`
+3. Deploy:
+   - Via Git: adicione o remoto do dokku e `git push dokku Feat-cli:main` (ou a branch que preferir)
+   - Ou use container registry com `dokku tags:deploy`
+4. Migrations são executadas automaticamente via `release` no Procfile.
+
+Procfile:
+```
+web: gunicorn django_project.wsgi --chdir src --bind 0.0.0.0:$PORT
+release: python src/manage.py migrate --noinput
+```
+
 ## Arquitetura
 
 ```
@@ -43,22 +85,3 @@ Para adicionar um novo comando:
 2. Se necessário, adicione capacidades às ports em `domain/ports.py`.
 3. Implemente/expanda um adapter em `infrastructure/adapters/` que satisfaça a port.
 4. Adicione um subcomando Click em `cli/cli.py` chamando o caso de uso.
-
-## Mapeamento para Dokku (exemplos)
-
-- create-app → `dokku apps:create <app>` e `dokku config:set` (se `--initial-env`)
-- deploy → `dokku tags:deploy` (imagem) ou `dokku git:sync` (git)
-- delete-app → `dokku apps:destroy <app> [--force]`
-- plugin install → `dokku plugin:install <git_url> [name]`
-- postgres create → `dokku postgres:create <service> [options...]`
-- postgres link → `dokku postgres:link <service> <app>`
-- rabbitmq create → `dokku rabbitmq:create <service> [options...]`
-- rabbitmq link → `dokku rabbitmq:link <service> <app>`
-- config set → `dokku config:set <app> KEY=VALUE ...`
-- ports set → `dokku proxy:ports-set <app> ...`
-- ports add → `dokku proxy:ports-add <app> ...`
-- ports clear → `dokku proxy:ports-clear <app>`
-
-## Variáveis de Ambiente (SSH)
-- `DOKKU_HOST`: `dokku@host` (ou outro usuário se necessário)
-- `DOKKU_SSH_OPTS`: por exemplo `-p 1022 -i C:\Users\User\.ssh\id_ed25519 -o StrictHostKeyChecking=accept-new`
