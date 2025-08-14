@@ -57,4 +57,13 @@ class DokkuService(Protocol):
     def proxy_ports_clear(self, app_name: str) -> OperationResult:
         ...
 
+    # Apps
+    def apps_list(self) -> List[str]:
+        """Lista nomes de aplicações Dokku."""
+        ...
+
+    def config_get(self, app_name: str, key: str) -> OperationResult:
+        """Obtém valor de uma variável de ambiente da app."""
+        ...
+
 

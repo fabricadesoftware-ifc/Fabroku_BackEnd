@@ -12,11 +12,13 @@ from .views import (
 	PortsSetView,
 	PortsAddView,
 	PortsClearView,
+	SmartDeployView,
 )
 
 urlpatterns = [
 	path("dokku/apps/create/", CreateAppView.as_view(), name="dokku-create-app"),
 	path("dokku/deploy/", DeployView.as_view(), name="dokku-deploy"),
+	path("dokku/smart-deploy/", SmartDeployView.as_view(), name="dokku-smart-deploy"),
 	path("dokku/apps/<str:app_name>/", DeleteAppView.as_view(), name="dokku-delete-app"),
 	path("dokku/plugins/install/", PluginInstallView.as_view(), name="dokku-plugin-install"),
 	path("dokku/postgres/create/", PostgresCreateView.as_view(), name="dokku-postgres-create"),

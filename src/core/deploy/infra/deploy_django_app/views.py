@@ -19,8 +19,11 @@ from fabroku.application.use_cases import (
 	ProxyPortsSetUseCase,
 	ProxyPortsAddUseCase,
 	ProxyPortsClearUseCase,
+	SmartDeployUseCase,
+	DeployStateSync,
 )
 from fabroku.infrastructure.adapters.dokku_shell_adapter import DokkuShellAdapter
+from .models import Deploy
 
 
 class BaseDokkuAPIView(APIView):
@@ -39,6 +42,7 @@ class BaseDokkuAPIView(APIView):
 			"ports_set": ProxyPortsSetUseCase(dokku),
 			"ports_add": ProxyPortsAddUseCase(dokku),
 			"ports_clear": ProxyPortsClearUseCase(dokku),
+			"smart_deploy": SmartDeployUseCase(dokku),
 		}
 
 
@@ -64,6 +68,49 @@ class DeployView(BaseDokkuAPIView):
 		services = self.get_services()
 		result = services["deploy"].execute(app_name=app_name, git_url=git_url, image=image, buildpack=buildpack)
 		return Response({"success": result.success, "message": result.message}, status=status.HTTP_200_OK if result.success else status.HTTP_400_BAD_REQUEST)
+
+
+class SmartDeployView(BaseDokkuAPIView):
+	def post(self, request):
+		app_name: str = request.data.get("app_name")
+		git_url: Optional[str] = request.data.get("git_url")
+		buildpack: Optional[str] = request.data.get("buildpack")
+		if not app_name or not git_url:
+			return Response({"detail": "'app_name' e 'git_url' são obrigatórios."}, status=status.HTTP_400_BAD_REQUEST)
+
+		deploy = Deploy.objects.create(app_name=app_name, github_repo=git_url, status="rascunho")
+
+		services = self.get_services()
+		use_case: SmartDeployUseCase = services["smart_deploy"]
+
+		class _DjangoState(DeployStateSync):
+			def __init__(self, deploy_obj: Deploy) -> None:
+				self.deploy = deploy_obj
+
+			def set_status(self, s: str) -> None:
+				Deploy.objects.filter(pk=self.deploy.pk).update(status=s)
+
+			def set_analysis(self, a: Dict) -> None:
+				Deploy.objects.filter(pk=self.deploy.pk).update(analysis=a)
+
+			def append_log(self, line: str) -> None:
+				obj = Deploy.objects.get(pk=self.deploy.pk)
+				new_logs = (obj.logs or "") + ("\n" if obj.logs else "") + line
+				Deploy.objects.filter(pk=self.deploy.pk).update(logs=new_logs)
+
+			def set_error(self, err_msg: str) -> None:
+				Deploy.objects.filter(pk=self.deploy.pk).update(error_message=err_msg)
+
+		state = _DjangoState(deploy)
+		state.set_status("em_andamento")
+
+		result = use_case.execute(app_name=app_name, git_url=git_url, state_sync=state, buildpack=buildpack)
+
+		return Response({
+			"success": result.success,
+			"message": result.message,
+			"deploy_id": deploy.id,
+		}, status=status.HTTP_200_OK if result.success else status.HTTP_400_BAD_REQUEST)
 
 
 class DeleteAppView(BaseDokkuAPIView):

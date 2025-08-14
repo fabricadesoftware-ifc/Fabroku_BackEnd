@@ -155,4 +155,19 @@ class DokkuShellAdapter(DokkuService):
     def proxy_ports_clear(self, app_name: str) -> OperationResult:
         return self._run(["proxy:ports-clear", app_name])
 
+    # Apps
+    def apps_list(self) -> list[str]:
+        # dokku apps:list
+        result = self._run(["apps:list"])
+        if not result.success:
+            return []
+        # Saída típica inclui cabeçalho; filtrar linhas vazias e cabeçalhos
+        lines = [ln.strip() for ln in result.message.splitlines()]
+        apps = [ln for ln in lines if ln and not ln.lower().startswith("apps ") and not ln.lower().startswith("====")]
+        return apps
+
+    def config_get(self, app_name: str, key: str) -> OperationResult:
+        # dokku config:get <app> KEY
+        return self._run(["config:get", app_name, key])
+
 

@@ -1,87 +1,121 @@
 # Fabroku
 
-Fabroku é uma CLI em Python (Click) que cria uma camada de abstração sobre o Dokku, seguindo arquitetura hexagonal (Ports and Adapters). Pode ser usada de forma independente ou integrada com a API Django deste projeto.
+Plataforma open-source, inspirada no Heroku, usando Dokku, para que alunos do Instituto Federal façam deploy gratuito de aplicações do GitHub.
 
-## Como instalar em modo desenvolvimento
+Este README é um tutorial de uso (passo a passo). Para documentação detalhada do código, veja `README-CLI.md` e `README-API.md`.
 
-1. Requer PDM e Python 3.13+
-2. Instale as dependências: `pdm install`
-3. Rode a CLI: `pdm run fabroku --help`
+## Pré-requisitos
+- Servidor Dokku acessível (local ou remoto via SSH)
+- Python 3.13+ e [PDM](https://pdm.fming.dev/) instalados
 
-## Uso
+## Setup local (API + CLI)
+1. Instalar dependências:
+   ```bash
+   pdm install
+   ```
+2. Configurar variáveis (opcional):
+   ```bash
+   export DEBUG=True
+   # se for usar Dokku remoto via SSH
+   export DOKKU_HOST=dokku@dokku.seudominio.com
+   export DOKKU_SSH_OPTS='-i ~/.ssh/id_rsa -p 22'
+   ```
+3. Rodar migrações e subir a API local (opcional para testes):
+   ```bash
+   pdm run python src/manage.py migrate
+   pdm run python src/manage.py runserver
+   # API em http://localhost:8000
+   ```
+4. Ver ajuda da CLI:
+   ```bash
+   pdm run fabroku --help
+   ```
 
-```
-fabroku --help
-fabroku create-app <app_name> [--initial-env '{"KEY":"VALUE"}']
-fabroku deploy <app_name> [--git-url <url>#<branch>] [--image user/repo:tag] [--buildpack <url>]
-fabroku delete-app <app_name> [--force]
-fabroku plugin install <plugin_git_url> [--name <name>]
-fabroku postgres create <service_name> [--option <opt> ...]
-fabroku postgres link <service_name> <app_name>
-fabroku rabbitmq create <service_name> [--option <opt> ...]
-fabroku rabbitmq link <service_name> <app_name>
-fabroku config set <app_name> --env KEY=VALUE [--env KEY2=VALUE2 ...]
-fabroku ports set <app_name> --map http:80:5000 [--map https:443:5000 ...]
-fabroku ports add <app_name> --map http:8080:5000
-fabroku ports clear <app_name>
-```
+## Fluxo do usuário (CLI)
+1. Criar conta (interativo):
+   ```bash
+   pdm run fabroku auth register
+   ```
+2. Fazer login (interativo):
+   ```bash
+   pdm run fabroku auth login
+   ```
+3. Criar app no Dokku (com variáveis iniciais):
+   ```bash
+   pdm run fabroku create-app minha-app \
+     --initial-env '{"SECRET_KEY":"s3cr3t","DEBUG":"False"}'
+   ```
+   Observação: a CLI marca automaticamente a app com uma tag única (`FABROKU_TAG`) do seu usuário. Você só verá/operará suas próprias apps.
 
-Observação: Para usar Dokku remoto via SSH, defina `DOKKU_HOST` (ex.: `user@dokku-host`) e opcionalmente `DOKKU_SSH_OPTS`.
+4. Definir portas do proxy (exemplo):
+   ```bash
+   pdm run fabroku ports set minha-app --map http:80:5000
+   ```
 
-## API Web (Django + DRF)
+5. Fazer deploy:
+   - Via Git (repositório com app):
+     ```bash
+     pdm run fabroku deploy minha-app --git-url https://github.com/user/repo#main
+     ```
+   - Via Smart Deploy (auto-detecção de Dockerfile):
+     ```bash
+     pdm run fabroku smart-deploy minha-app --git-url https://github.com/user/repo#main --log
+     ```
+   - Via Imagem Docker:
+     ```bash
+     pdm run fabroku deploy minha-app --image usuario/repo:tag
+     ```
 
+6. Gerenciar serviços (opcional):
+   ```bash
+   # Postgres
+   pdm run fabroku plugin install https://github.com/dokku/dokku-postgres.git --name postgres
+   pdm run fabroku postgres create pg1 --option '--image postgres:16'
+   pdm run fabroku postgres link pg1 minha-app
+
+   # RabbitMQ
+   pdm run fabroku plugin install https://github.com/dokku/dokku-rabbitmq.git --name rabbitmq
+   pdm run fabroku rabbitmq create rmq1
+   pdm run fabroku rabbitmq link rmq1 minha-app
+   ```
+
+7. Listar suas apps:
+   ```bash
+   pdm run fabroku apps list
+   ```
+
+8. Deletar sua app:
+   ```bash
+   pdm run fabroku delete-app minha-app --force
+   ```
+
+## Fluxo via API (opcional)
 Endpoints principais (POST salvo quando indicado):
 - `POST /api/dokku/apps/create/` body: `{ "app_name": "minha-app", "initial_env": {"KEY":"VAL"} }`
 - `POST /api/dokku/deploy/` body: `{ "app_name": "minha-app", "git_url": "https://...#main" }` ou `{ "image": "usuario/repo:tag" }`
-- `DELETE /api/dokku/apps/<app_name>/` query: `?force=true`
-- `POST /api/dokku/plugins/install/` body: `{ "plugin_git_url": "https://...", "name": "opcional" }`
-- `POST /api/dokku/postgres/create/` body: `{ "service_name": "pg1", "options": ["--some", "--opts"] }`
-- `POST /api/dokku/postgres/link/` body: `{ "service_name": "pg1", "app_name": "minha-app" }`
-- `POST /api/dokku/rabbitmq/create/` body: `{ "service_name": "rmq1", "options": [] }`
-- `POST /api/dokku/rabbitmq/link/` body: `{ "service_name": "rmq1", "app_name": "minha-app" }`
+- `POST /api/dokku/smart-deploy/` body: `{ "app_name": "minha-app", "git_url": "https://...#main" }`
+- `DELETE /api/dokku/apps/<app_name>/?force=true`
 - `POST /api/dokku/config/set/` body: `{ "app_name": "minha-app", "env": {"KEY":"VAL"} }`
 - `POST /api/dokku/ports/set/` body: `{ "app_name": "minha-app", "mappings": ["http:80:5000"] }`
-- `POST /api/dokku/ports/add/` body: `{ "app_name": "minha-app", "mappings": ["http:8080:5000"] }`
-- `POST /api/dokku/ports/clear/` body: `{ "app_name": "minha-app" }`
 
-Documentação e schema:
-- OpenAPI: `/api/schema/`
+Documentação:
 - Swagger UI: `/api/docs/`
+- OpenAPI: `/api/schema/`
 
-## Deploy no Dokku
-
-Pré-requisitos no servidor Dokku:
-- Plugins conforme necessidade (postgres, rabbitmq etc.)
-- Variáveis de ambiente (SECRET_KEY, DATABASE_URL, etc.)
-
-Passos:
-1. Crie a app: `dokku apps:create fabroku-api`
-2. Configure envs essenciais:
-   - `dokku config:set fabroku-api SECRET_KEY=...`
-   - `dokku config:set fabroku-api DEBUG=False`
+## Deploy da API no Dokku
+1. Criar app:
+   ```bash
+   dokku apps:create fabroku-api
+   ```
+2. Configurar envs essenciais:
+   ```bash
+   dokku config:set fabroku-api SECRET_KEY=... DEBUG=False
+   ```
 3. Deploy:
-   - Via Git: adicione o remoto do dokku e `git push dokku Feat-cli:main` (ou a branch que preferir)
-   - Ou use container registry com `dokku tags:deploy`
-4. Migrations são executadas automaticamente via `release` no Procfile.
+   - via Git: adicione remoto do Dokku e `git push dokku main`
+   - ou via container registry: `dokku tags:deploy fabroku-api <image:tag>`
 
-Procfile:
-```
-web: gunicorn django_project.wsgi --chdir src --bind 0.0.0.0:$PORT
-release: python src/manage.py migrate --noinput
-```
+O `Procfile` roda `gunicorn` (web) e executa migrações no `release` automaticamente.
 
-## Arquitetura
-
-```
-src/fabroku/
-  domain/            # Regras e contratos (ports)
-  application/       # Casos de uso
-  infrastructure/    # Adapters concretos (shell, django, http)
-  cli/               # Interface via Click
-```
-
-Para adicionar um novo comando:
-1. Crie um novo caso de uso em `application/use_cases/` que use apenas as ports do domínio.
-2. Se necessário, adicione capacidades às ports em `domain/ports.py`.
-3. Implemente/expanda um adapter em `infrastructure/adapters/` que satisfaça a port.
-4. Adicione um subcomando Click em `cli/cli.py` chamando o caso de uso.
+---
+- Detalhes técnicos da CLI e API: veja `README-CLI.md` e `README-API.md`.
