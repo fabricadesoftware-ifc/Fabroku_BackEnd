@@ -48,19 +48,20 @@ class CreateProjectUseCase:
 			return create_dokku_app_result
 
 		# Persiste no banco de dados Django
-		projeto = self._Projeto.objects.create(
-			usuario=user,
-			nome=nome,
-			descricao=descricao,
-			tecnologia=tecnologia,
-			source_type=source_type,
-			source_url=source_url,
-			network=network_obj,
-			porta=porta,
-			variaveis_ambiente=variaveis_ambiente,
-			status="rascunho", # Estado inicial conforme solicitado
-		)
-		return OperationResult(True, f"Projeto '{projeto.nome}' criado com sucesso. App Dokku: '{app_name}'.")
+		try:
+			projeto = self._Projeto.objects.create(
+				usuario=user,
+				nome=nome,
+				descricao=descricao,
+				tecnologia=tecnologia,
+				source_type=source_type,
+				source_url=source_url,
+				network=network_obj,
+				porta=porta,
+				variaveis_ambiente=variaveis_ambiente,
+				status="rascunho", # Estado inicial conforme solicitado
+			)
+			return OperationResult(True, f"Projeto '{projeto.nome}' criado com sucesso. App Dokku: '{app_name}'.")
 		except Exception as exc:
 			# TODO: Se a criação no Dokku falhar após o Django, precisamos de um rollback ou um estado de erro mais explícito.
 			return OperationResult(False, f"Falha ao criar projeto: {exc}") 
