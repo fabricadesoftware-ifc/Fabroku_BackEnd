@@ -32,71 +32,100 @@ Este README é um tutorial de uso (passo a passo). Para documentação detalhada
    ```
 
 ## Fluxo do usuário (CLI)
-1. Criar conta (interativo):
-   ```bash
-   pdm run fabroku auth register
-   ```
-2. Fazer login (interativo):
-   ```bash
-   pdm run fabroku auth login
-   ```
-3. Criar app no Dokku (com variáveis iniciais):
-   ```bash
-   pdm run fabroku create-app minha-app \
-     --initial-env '{"SECRET_KEY":"s3cr3t","DEBUG":"False"}'
-   ```
-   Observação: a CLI marca automaticamente a app com uma tag única (`FABROKU_TAG`) do seu usuário. Você só verá/operará suas próprias apps.
 
-4. Definir portas do proxy (exemplo):
-   ```bash
-   pdm run fabroku ports set minha-app --map http:80:5000
-   ```
+### 1. Criar conta (interativo)
+- Não pede matrícula.
+  ```bash
+  pdm run fabroku auth register
+  ```
 
-5. Fazer deploy:
-   - Via Git (repositório com app):
-     ```bash
-     pdm run fabroku deploy minha-app --git-url https://github.com/user/repo#main
-     ```
-   - Via Smart Deploy (auto-detecção de Dockerfile):
-     ```bash
-     pdm run fabroku smart-deploy minha-app --git-url https://github.com/user/repo#main --log
-     ```
-   - Via Imagem Docker:
-     ```bash
-     pdm run fabroku deploy minha-app --image usuario/repo:tag
-     ```
+### 2. Fazer login (interativo)
+  ```bash
+  pdm run fabroku auth login
+  ```
 
-6. Gerenciar serviços (opcional):
-   ```bash
-   # Postgres
-   pdm run fabroku plugin install https://github.com/dokku/dokku-postgres.git --name postgres
-   pdm run fabroku postgres create pg1 --option '--image postgres:16'
-   pdm run fabroku postgres link pg1 minha-app
+### 3. Criar projeto no Dokku
+- Cria um registro de projeto no banco e uma app no Dokku.
+- Os campos `nome`, `tecnologia`, `porta`, `url da fonte`, `tipo da fonte` e `rede` são obrigatórios.
+- A CLI marca automaticamente o projeto com uma tag única (`FABROKU_TAG`) do seu usuário. Você só verá/operará seus próprios projetos.
+  ```bash
+  pdm run fabroku project create \
+    --name meu-projeto-web \
+    --tecnologia Vue \
+    --porta 8000 \
+    --source-url https://github.com/usuario/meu-app-vue \
+    --source-type git \
+    --network default \
+    --descricao "Meu primeiro projeto Fabroku"
+    --env SECRET_KEY=abc --env DEBUG=False
+  ```
 
-   # RabbitMQ
-   pdm run fabroku plugin install https://github.com/dokku/dokku-rabbitmq.git --name rabbitmq
-   pdm run fabroku rabbitmq create rmq1
-   pdm run fabroku rabbitmq link rmq1 minha-app
-   ```
+### 4. Listar seus projetos
+  ```bash
+  pdm run fabroku project list
+  ```
 
-7. Listar suas apps:
-   ```bash
-   pdm run fabroku apps list
-   ```
+### 5. Obter status do projeto
+- Retorna `NAME`, `READY`, `ESTADO` e `AGE`.
+  ```bash
+  pdm run fabroku project meu-projeto-web status
+  ```
+  Exemplo de saída:
+  ```
+  NAME           READY    ESTADO       AGE
+  meu-projeto-web   0/1      Rascunho     1m
+  ```
 
-8. Deletar sua app:
-   ```bash
-   pdm run fabroku delete-app minha-app --force
-   ```
+### 6. Fazer deploy (smart-deploy)
+- Este comando ainda está em nível superior, mas futuramente pode ser movido para `fabroku project <name> deploy`.
+- O `smart-deploy` analisa a URL da fonte e o tipo (`git` ou `docker_image`) para decidir a melhor estratégia:
+  - Se `source-type` for `git`: clona o repositório, detecta `Dockerfile` e executa `dokku git:sync`. 
+  - Se `source-type` for `docker_image` e `source-url` for do Docker Hub: realiza `dokku tags:deploy`. 
+  - Se `source-type` for `docker_image` e `source-url` for do GitHub (com Dockerfile): procura Dockerfile e executa `dokku git:sync`.
+  ```bash
+  pdm run fabroku smart-deploy meu-projeto-web --git-url https://github.com/usuario/meu-app-vue --log
+  ```
+
+### 7. Deletar projeto
+- Exige confirmação digitando o nome do projeto.
+  ```bash
+  pdm run fabroku project meu-projeto-web destroy
+  ```
+
+### 8. Gerenciar serviços (ex: Postgres, RabbitMQ)
+- Estes comandos ainda estão em nível superior, mas futuramente podem ser movidos para subcomandos de projeto.
+  ```bash
+  # Postgres
+  pdm run fabroku plugin install https://github.com/dokku/dokku-postgres.git --name postgres
+  pdm run fabroku postgres create pg1 --option '--image postgres:16'
+  pdm run fabroku postgres link pg1 meu-projeto-web
+
+  # RabbitMQ
+  pdm run fabroku plugin install https://github.com/dokku/dokku-rabbitmq.git --name rabbitmq
+  pdm run fabroku rabbitmq create rmq1
+  pdm run fabroku rabbitmq link rmq1 meu-projeto-web
+  ```
+
+### 9. Configurar variáveis de ambiente (pode ser usado para o projeto)
+  ```bash
+  pdm run fabroku config set meu-projeto-web --env CHAVE=VALOR
+  ```
+
+### 10. Configurar portas (pode ser usado para o projeto)
+  ```bash
+  pdm run fabroku ports set meu-projeto-web --map http:80:5000
+  ```
 
 ## Fluxo via API (opcional)
-Endpoints principais (POST salvo quando indicado):
-- `POST /api/dokku/apps/create/` body: `{ "app_name": "minha-app", "initial_env": {"KEY":"VAL"} }`
-- `POST /api/dokku/deploy/` body: `{ "app_name": "minha-app", "git_url": "https://...#main" }` ou `{ "image": "usuario/repo:tag" }`
-- `POST /api/dokku/smart-deploy/` body: `{ "app_name": "minha-app", "git_url": "https://...#main" }`
-- `DELETE /api/dokku/apps/<app_name>/?force=true`
-- `POST /api/dokku/config/set/` body: `{ "app_name": "minha-app", "env": {"KEY":"VAL"} }`
-- `POST /api/dokku/ports/set/` body: `{ "app_name": "minha-app", "mappings": ["http:80:5000"] }`
+Endpoints principais:
+- `POST /api/project/projects/` (cria projeto)
+- `GET /api/project/projects/` (lista projetos)
+- `GET /api/project/projects/<nome>/` (detalhes do projeto)
+- `PUT /api/project/projects/<nome>/` (atualiza projeto)
+- `DELETE /api/project/projects/<nome>/` (deleta projeto)
+- `GET /api/project/projects/<nome>/status/` (status do projeto)
+- `POST /api/dokku/deploy/` (deploy genérico)
+- `POST /api/dokku/smart-deploy/` (smart deploy)
 
 Documentação:
 - Swagger UI: `/api/docs/`

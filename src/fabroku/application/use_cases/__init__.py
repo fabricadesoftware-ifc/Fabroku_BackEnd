@@ -1,20 +1,19 @@
 """Casos de uso da aplicação."""
 
-from .create_app import CreateAppUseCase
 from .deploy_app import DeployAppUseCase
-from .delete_app import DeleteAppUseCase
 from .plugins import InstallPluginUseCase
 from .postgres import CreatePostgresUseCase, LinkPostgresUseCase
 from .rabbitmq import CreateRabbitMQUseCase, LinkRabbitMQUseCase
 from .config import ConfigSetUseCase
 from .proxy import ProxyPortsSetUseCase, ProxyPortsAddUseCase, ProxyPortsClearUseCase
 from .deploy_smart import SmartDeployUseCase, DeployStateSync
-from .list_apps import ListAppsUseCase
+
+from .create_project import CreateProjectUseCase
+from .get_project_status import GetProjectStatusUseCase, ProjectStatus
+from .list_projects import ListProjectsUseCase
 
 __all__ = [
-	"CreateAppUseCase",
 	"DeployAppUseCase",
-	"DeleteAppUseCase",
 	"InstallPluginUseCase",
 	"CreatePostgresUseCase",
 	"LinkPostgresUseCase",
@@ -26,7 +25,10 @@ __all__ = [
 	"ProxyPortsClearUseCase",
 	"SmartDeployUseCase",
 	"DeployStateSync",
-	"ListAppsUseCase",
+	"CreateProjectUseCase",
+	"GetProjectStatusUseCase",
+	"ProjectStatus",
+	"ListProjectsUseCase",
 ]
 
 

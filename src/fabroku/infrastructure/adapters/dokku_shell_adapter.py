@@ -20,7 +20,7 @@ class DokkuShellAdapter(DokkuService):
         self._dokku_host = os.getenv("DOKKU_HOST")
         self._ssh_opts = os.getenv("DOKKU_SSH_OPTS", "")
 
-    def _run(self, args: list[str]) -> OperationResult:
+    def _run(self, args: list[str], input_data: Optional[str] = None) -> OperationResult:
         try:
             if self._dokku_host:
                 # Executa via SSH remoto. Se conectando como usuário 'dokku', NÃO prefixe com 'dokku'.
@@ -47,6 +47,7 @@ class DokkuShellAdapter(DokkuService):
                     encoding="utf-8",
                     errors="replace",
                     check=False,
+                    input=input_data, # Adiciona input para simular confirmação interativa
                 )
             else:
                 # Executa localmente
@@ -57,6 +58,7 @@ class DokkuShellAdapter(DokkuService):
                     encoding="utf-8",
                     errors="replace",
                     check=False,
+                    input=input_data, # Adiciona input para simular confirmação interativa
                 )
 
             stdout = (process.stdout or "").strip()
@@ -110,7 +112,13 @@ class DokkuShellAdapter(DokkuService):
         args = ["apps:destroy", app_name]
         if force:
             args.append("--force")
-        return self._run(args)
+        
+        # Para simular a confirmação interativa do Dokku, passamos o app_name como input
+        input_data = None
+        if not force:
+            input_data = app_name + "\n" # Dokku espera o nome da app seguido de Enter
+        
+        return self._run(args, input_data=input_data)
 
     # Plugins
     def plugin_install(self, plugin_git_url: str, name: Optional[str] = None) -> OperationResult:

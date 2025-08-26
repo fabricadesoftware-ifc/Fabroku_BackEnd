@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Optional, Any, Dict
 
 import click
 from dotenv import load_dotenv
 
 from fabroku.application.use_cases import (
-	CreateAppUseCase,
-	DeleteAppUseCase,
+	# CreateAppUseCase, # Removido
+	# DeleteAppUseCase, # Removido
 	DeployAppUseCase,
 	InstallPluginUseCase,
 	CreatePostgresUseCase,
@@ -21,12 +22,17 @@ from fabroku.application.use_cases import (
 	ProxyPortsAddUseCase,
 	ProxyPortsClearUseCase,
 	SmartDeployUseCase,
-	ListAppsUseCase,
+	# ListAppsUseCase, # Removido
+	CreateProjectUseCase,
+	GetProjectStatusUseCase,
+	ProjectStatus,
+	ListProjectsUseCase,
 )
 from fabroku.infrastructure.adapters.dokku_shell_adapter import DokkuShellAdapter
 from fabroku.application.use_cases.auth import AuthService
 from fabroku.infrastructure.session import load_session, save_session, clear_session
 from fabroku.infrastructure.user_store import get_or_create_user_tag
+from fabroku.infrastructure.django_bootstrap import setup_django
 
 
 # Carrega variáveis de ambiente do arquivo .env, se existir.
@@ -35,9 +41,12 @@ load_dotenv()
 
 def _build_default_services():
 	dokku = DokkuShellAdapter()
+	setup_django()
+	from core.project.infra.project_django_app.models import Projeto, Network # lazy import
+	from core.user.infra.user_django_app.models import User # lazy import
 	return {
 		"dokku": dokku,
-		"create": CreateAppUseCase(dokku),
+		"create_project": CreateProjectUseCase(dokku, Projeto, User, Network),
 		"deploy": DeployAppUseCase(dokku),
 		"delete": DeleteAppUseCase(dokku),
 		"plugin_install": InstallPluginUseCase(dokku),
@@ -50,7 +59,8 @@ def _build_default_services():
 
 		"ports_clear": ProxyPortsClearUseCase(dokku),
 		"smart_deploy": SmartDeployUseCase(dokku),
-		"apps_list": ListAppsUseCase(dokku),
+		"list_projects": ListProjectsUseCase(dokku, Projeto),
+		"get_project_status": GetProjectStatusUseCase(Projeto),
 	}
 
 
@@ -115,15 +125,58 @@ def auth_logout_cmd() -> None:
 	click.echo("Sessão encerrada")
 
 
-@cli.group("apps")
-def apps_group() -> None:
+@cli.group("project")
+def project_group() -> None:
 	pass
 
 
-@apps_group.command("list")
+@project_group.command("create")
+@click.option("--name", type=str, required=True, help="Nome do projeto/app (único no Dokku)")
+@click.option("--tecnologia", type=click.Choice(['Vue', 'Django']), required=True, help="Tecnologia principal do projeto")
+@click.option("--porta", type=int, required=True, help="Porta da aplicação (ex: 8000)")
+@click.option("--source-url", type=str, required=True, help="URL da fonte (repo Git ou imagem Docker)")
+@click.option("--source-type", type=click.Choice(['git', 'docker_image']), required=True, help="Tipo da fonte (git ou docker_image)")
+@click.option("--network", type=str, default="default", help="Nome da rede a ser vinculada (padrão: default)")
+@click.option("--descricao", type=str, default="", help="Descrição opcional do projeto")
+@click.option("--env", "initial_env", type=str, multiple=True, help="Variáveis de ambiente (KEY=VALUE)")
+def project_create_cmd(
+	name: str,
+	tecnologia: str,
+	porta: int,
+	source_url: str,
+	source_type: str,
+	network: str,
+	descricao: str,
+	initial_env: list[str],
+) -> None:
+	session = load_session()
+	if not session:
+		click.echo("Você precisa estar autenticado. Execute 'fabroku auth login' ou crie uma conta com 'fabroku auth register'", err=True)
+		raise SystemExit(1)
+
+	services = _build_default_services()
+	parsed_env: dict[str, str] = {k: v for item in initial_env for k, v in [item.split("=", 1)]}
+	parsed_env["FABROKU_TAG"] = get_or_create_user_tag(session.email)
+
+	result = services["create_project"].execute(
+		app_name=name,
+		user_email=session.email,
+		nome=name,
+		descricao=descricao,
+		tecnologia=tecnologia,
+		source_type=source_type,
+		source_url=source_url,
+		network_name=network,
+		porta=porta,
+		variaveis_ambiente=parsed_env,
+	)
+	click.echo(result.message)
+
+
+@project_group.command("list")
 @click.option("--tag", type=str, default=None, help="Filtra por FABROKU_TAG; padrão: tag do usuário autenticado")
-@click.option("--all", "include_all", is_flag=True, default=False, help="Lista todas as apps (ignora filtro de owner)")
-def apps_list_cmd(tag: Optional[str], include_all: bool) -> None:
+@click.option("--all", "include_all", is_flag=True, default=False, help="Lista todos os projetos (ignora filtro de tag)")
+def project_list_cmd(tag: Optional[str], include_all: bool) -> None:
 	session = load_session()
 	if not include_all and not tag:
 		if not session:
@@ -131,68 +184,61 @@ def apps_list_cmd(tag: Optional[str], include_all: bool) -> None:
 			raise SystemExit(1)
 		tag = get_or_create_user_tag(session.email)
 	services = _build_default_services()
-	use_case: ListAppsUseCase = services["apps_list"]
-	apps = use_case.execute(tag=tag, include_all=include_all)
-	for name in apps:
+	use_case: ListProjectsUseCase = services["list_projects"]
+	projects = use_case.execute(tag=tag, include_all=include_all)
+	for name in projects:
 		click.echo(name)
 
 
-@cli.command("create-app")
-@click.argument("app_name", type=str)
-@click.option("--initial-env", type=str, default=None, help="JSON com variáveis de ambiente iniciais")
-def create_app_cmd(app_name: str, initial_env: Optional[str]) -> None:
+@project_group.command("destroy")
+@click.argument("project_name", type=str)
+def project_destroy_cmd(project_name: str) -> None:
 	session = load_session()
 	if not session:
 		click.echo("Você precisa estar autenticado. Execute 'fabroku auth login' ou crie uma conta com 'fabroku auth register'", err=True)
 		raise SystemExit(1)
-	services = _build_default_services()
-	parsed_env = {}
-	if initial_env:
-		parsed_env = json.loads(initial_env)
-	# Enforce tag única de owner (política: enquanto não temos emissão de token próprio, usamos o email como tag; abaixo geramos FABROKU_TAG)
-	parsed_env["FABROKU_TAG"] = parsed_env.get("FABROKU_TAG") or get_or_create_user_tag(session.email)
-	# Persistir a tag no ambiente da app para filtros posteriores
-	result = services["create"].execute(app_name=app_name, initial_environment=parsed_env)
-	click.echo(result.message)
 
-
-@cli.command("delete-app")
-@click.argument("app_name", type=str)
-@click.option("--force", is_flag=True, default=False)
-def delete_app_cmd(app_name: str, force: bool) -> None:
-	session = load_session()
-	if not session:
-		click.echo("Você precisa estar autenticado. Execute 'fabroku auth login' ou crie uma conta com 'fabroku auth register'", err=True)
-		raise SystemExit(1)
 	services = _build_default_services()
-	# Verifica ownership: app deve conter FABROKU_TAG e deve coincidir com a tag informada (padrão: email como tag)
-	tag_cfg = services["dokku"].config_get(app_name, "FABROKU_TAG")
+	# Verifica ownership e pede confirmação
+	tag_cfg = services["dokku"].config_get(project_name, "FABROKU_TAG")
 	effective_tag = get_or_create_user_tag(session.email)
 	if (not tag_cfg.success) or ((tag_cfg.message or "").strip() != effective_tag):
-		click.echo("Permissão negada: você não é o owner desta app", err=True)
+		click.echo("Permissão negada: você não é o owner deste projeto", err=True)
 		raise SystemExit(1)
-	result = services["delete"].execute(app_name=app_name, force=force)
+
+	if not click.confirm(f"ATENÇÃO: Isso irá DESTRUIR o projeto {project_name}. Tem certeza? Para prosseguir, digite \"{project_name}\"", confirmation_prompt=True, default=False, abort=True):
+		raise SystemExit(0)
+
+	result = services["delete"].execute(app_name=project_name)
 	click.echo(result.message)
 
 
-@cli.command("deploy")
+@cli.command("deploy") # Mantido como comando de nível superior por simplicidade no primeiro momento, pode ser movido para project <name> deploy
 @click.argument("app_name", type=str)
 @click.option("--git-url", type=str, default=None)
 @click.option("--image", type=str, default=None)
 @click.option("--buildpack", type=str, default=None)
 def deploy_cmd(app_name: str, git_url: Optional[str], image: Optional[str], buildpack: Optional[str]) -> None:
+	session = load_session() # Adicionar verificação de sessão para deploy e smart-deploy
+	if not session:
+		click.echo("Você precisa estar autenticado. Execute 'fabroku auth login' ou crie uma conta com 'fabroku auth register'", err=True)
+		raise SystemExit(1)
 	services = _build_default_services()
 	use_case = services["deploy"]
 	result = use_case.execute(app_name=app_name, git_url=git_url, image=image, buildpack=buildpack)
 	click.echo(result.message)
 
 
-@cli.command("smart-deploy")
+@cli.command("smart-deploy") # Mantido como comando de nível superior por simplicidade no primeiro momento, pode ser movido para project <name> smart-deploy
 @click.argument("app_name", type=str)
 @click.option("--git-url", type=str, required=True, help="URL do repositório git (pode incluir #branch)")
 @click.option("--buildpack", type=str, default=None)
 @click.option("--log", "log_to_stderr", is_flag=True, default=False, help="Imprime logs de acompanhamento no stderr")
 def smart_deploy_cmd(app_name: str, git_url: str, buildpack: Optional[str], log_to_stderr: bool) -> None:
+	session = load_session() # Adicionar verificação de sessão para deploy e smart-deploy
+	if not session:
+		click.echo("Você precisa estar autenticado. Execute 'fabroku auth login' ou crie uma conta com 'fabroku auth register'", err=True)
+		raise SystemExit(1)
 	services = _build_default_services()
 	use_case: SmartDeployUseCase = services["smart_deploy"]
 
@@ -215,7 +261,105 @@ def smart_deploy_cmd(app_name: str, git_url: str, buildpack: Optional[str], log_
 	click.echo(result.message)
 
 
-@cli.group("plugin")
+@project_group.command("status")
+@click.argument("project_name", type=str)
+def project_status_cmd(project_name: str) -> None:
+	session = load_session()
+	if not session:
+		click.echo("Você precisa estar autenticado. Execute 'fabroku auth login' ou crie uma conta com 'fabroku auth register'", err=True)
+		raise SystemExit(1)
+	services = _build_default_services()
+
+	# Busca o projeto no banco de dados
+	from core.project.infra.project_django_app.models import Projeto # lazy import
+	try:
+		projeto = Projeto.objects.get(nome=project_name, usuario__email=session.email)
+	except Projeto.DoesNotExist:
+		click.echo(f"Projeto '{project_name}' não encontrado ou você não tem permissão.", err=True)
+		raise SystemExit(1)
+
+	# Formata a saída
+	name = projeto.nome
+	ready_status = "1/1" if projeto.status in ['pronto', 'em_andamento'] else "0/1"
+	estado = projeto.status.capitalize() # Capitaliza a primeira letra
+	age = (datetime.now(timezone.utc) - projeto.data_criacao).total_seconds()
+	age_minutes = int(age / 60)
+	age_str = f"{age_minutes}m" # Formato simples por enquanto
+
+	click.echo(f"{{'NAME':<12}} {{'READY':<8}} {{'ESTADO':<12}} {{'AGE':<8}}")
+	click.echo(f"{name:<12} {ready_status:<8} {estado:<12} {age_str:<8}")
+
+
+@cli.group("config") # Mantive config e ports fora de project, para que possam ser usados para configurar o dokku como um todo
+def config_group() -> None:
+	pass
+
+
+@config_group.command("set")
+@click.argument("app_name", type=str)
+@click.option("--env", "env_items", type=str, multiple=True, help="KEY=VALUE")
+def config_set_cmd(app_name: str, env_items: list[str]) -> None:
+	session = load_session() # Adicionar verificação de sessão para deploy e smart-deploy
+	if not session:
+		click.echo("Você precisa estar autenticado. Execute 'fabroku auth login' ou crie uma conta com 'fabroku auth register'", err=True)
+		raise SystemExit(1)
+	services = _build_default_services()
+	env: dict[str, str] = {}
+	for item in env_items:
+		if "=" not in item:
+			click.echo(f"Ignorando item inválido: {item}", err=True)
+			continue
+		k, v = item.split("=", 1)
+		env[k] = v
+	result = services["config_set"].execute(app_name=app_name, env_vars=env)
+	click.echo(result.message)
+
+
+@cli.group("ports") # Mantive config e ports fora de project, para que possam ser usados para configurar o dokku como um todo
+def ports_group() -> None:
+	pass
+
+
+@ports_group.command("set")
+@click.argument("app_name", type=str)
+@click.option("--map", "mappings", type=str, multiple=True, help="http:80:5000")
+def ports_set_cmd(app_name: str, mappings: list[str]) -> None:
+	session = load_session() # Adicionar verificação de sessão para deploy e smart-deploy
+	if not session:
+		click.echo("Você precisa estar autenticado. Execute 'fabroku auth login' ou crie uma conta com 'fabroku auth register'", err=True)
+		raise SystemExit(1)
+	services = _build_default_services()
+	result = services["ports_set"].execute(app_name=app_name, mappings=list(mappings))
+	click.echo(result.message)
+
+
+@ports_group.command("add")
+@click.argument("app_name", type=str)
+@click.option("--map", "mappings", type=str, multiple=True, help="http:8080:5000")
+def ports_add_cmd(app_name: str, mappings: list[str]) -> None:
+	session = load_session() # Adicionar verificação de sessão para deploy e smart-deploy
+	if not session:
+		click.echo("Você precisa estar autenticado. Execute 'fabroku auth login' ou crie uma conta com 'fabroku auth register'", err=True)
+		raise SystemExit(1)
+	services = _build_default_services()
+	result = services["ports_add"].execute(app_name=app_name, mappings=list(mappings))
+	click.echo(result.message)
+
+
+@ports_group.command("clear")
+@click.argument("app_name", type=str)
+def ports_clear_cmd(app_name: str) -> None:
+	session = load_session() # Adicionar verificação de sessão para deploy e smart-deploy
+	if not session:
+		click.echo("Você precisa estar autenticado. Execute 'fabroku auth login' ou crie uma conta com 'fabroku auth register'", err=True)
+		raise SystemExit(1)
+	services = _build_default_services()
+	use_case = services["ports_clear"]
+	result = use_case.execute(app_name=app_name)
+	click.echo(result.message)
+
+
+@cli.group("plugin") # Plugins também pode ser de nível superior
 def plugin_group() -> None:
 	pass
 
@@ -224,6 +368,10 @@ def plugin_group() -> None:
 @click.argument("plugin_git_url", type=str)
 @click.option("--name", type=str, default=None)
 def plugin_install_cmd(plugin_git_url: str, name: Optional[str]) -> None:
+	session = load_session() # Adicionar verificação de sessão para deploy e smart-deploy
+	if not session:
+		click.echo("Você precisa estar autenticado. Execute 'fabroku auth login' ou crie uma conta com 'fabroku auth register'", err=True)
+		raise SystemExit(1)
 	services = _build_default_services()
 	result = services["plugin_install"].execute(plugin_git_url=plugin_git_url, name=name)
 	click.echo(result.message)
@@ -238,6 +386,10 @@ def postgres_group() -> None:
 @click.argument("service_name", type=str)
 @click.option("--option", "options", type=str, multiple=True)
 def postgres_create_cmd(service_name: str, options: list[str]) -> None:
+	session = load_session() # Adicionar verificação de sessão para deploy e smart-deploy
+	if not session:
+		click.echo("Você precisa estar autenticado. Execute 'fabroku auth login' ou crie uma conta com 'fabroku auth register'", err=True)
+		raise SystemExit(1)
 	services = _build_default_services()
 	result = services["pg_create"].execute(service_name=service_name, options=list(options))
 	click.echo(result.message)
@@ -247,6 +399,10 @@ def postgres_create_cmd(service_name: str, options: list[str]) -> None:
 @click.argument("service_name", type=str)
 @click.argument("app_name", type=str)
 def postgres_link_cmd(service_name: str, app_name: str) -> None:
+	session = load_session() # Adicionar verificação de sessão para deploy e smart-deploy
+	if not session:
+		click.echo("Você precisa estar autenticado. Execute 'fabroku auth login' ou crie uma conta com 'fabroku auth register'", err=True)
+		raise SystemExit(1)
 	services = _build_default_services()
 	result = services["pg_link"].execute(service_name=service_name, app_name=app_name)
 	click.echo(result.message)
@@ -261,6 +417,10 @@ def rabbitmq_group() -> None:
 @click.argument("service_name", type=str)
 @click.option("--option", "options", type=str, multiple=True)
 def rabbitmq_create_cmd(service_name: str, options: list[str]) -> None:
+	session = load_session() # Adicionar verificação de sessão para deploy e smart-deploy
+	if not session:
+		click.echo("Você precisa estar autenticado. Execute 'fabroku auth login' ou crie uma conta com 'fabroku auth register'", err=True)
+		raise SystemExit(1)
 	services = _build_default_services()
 	result = services["rmq_create"].execute(service_name=service_name, options=list(options))
 	click.echo(result.message)
@@ -270,61 +430,12 @@ def rabbitmq_create_cmd(service_name: str, options: list[str]) -> None:
 @click.argument("service_name", type=str)
 @click.argument("app_name", type=str)
 def rabbitmq_link_cmd(service_name: str, app_name: str) -> None:
+	session = load_session() # Adicionar verificação de sessão para deploy e smart-deploy
+	if not session:
+		click.echo("Você precisa estar autenticado. Execute 'fabroku auth login' ou crie uma conta com 'fabroku auth register'", err=True)
+		raise SystemExit(1)
 	services = _build_default_services()
 	result = services["rmq_link"].execute(service_name=service_name, app_name=app_name)
-	click.echo(result.message)
-
-
-@cli.group("config")
-def config_group() -> None:
-	pass
-
-
-@config_group.command("set")
-@click.argument("app_name", type=str)
-@click.option("--env", "env_items", type=str, multiple=True, help="KEY=VALUE")
-def config_set_cmd(app_name: str, env_items: list[str]) -> None:
-	services = _build_default_services()
-	env: dict[str, str] = {}
-	for item in env_items:
-		if "=" not in item:
-			click.echo(f"Ignorando item inválido: {item}", err=True)
-			continue
-		k, v = item.split("=", 1)
-		env[k] = v
-	result = services["config_set"].execute(app_name=app_name, env_vars=env)
-	click.echo(result.message)
-
-
-@cli.group("ports")
-def ports_group() -> None:
-	pass
-
-
-@ports_group.command("set")
-@click.argument("app_name", type=str)
-@click.option("--map", "mappings", type=str, multiple=True, help="http:80:5000")
-def ports_set_cmd(app_name: str, mappings: list[str]) -> None:
-	services = _build_default_services()
-	result = services["ports_set"].execute(app_name=app_name, mappings=list(mappings))
-	click.echo(result.message)
-
-
-@ports_group.command("add")
-@click.argument("app_name", type=str)
-@click.option("--map", "mappings", type=str, multiple=True, help="http:8080:5000")
-def ports_add_cmd(app_name: str, mappings: list[str]) -> None:
-	services = _build_default_services()
-	result = services["ports_add"].execute(app_name=app_name, mappings=list(mappings))
-	click.echo(result.message)
-
-
-@ports_group.command("clear")
-@click.argument("app_name", type=str)
-def ports_clear_cmd(app_name: str) -> None:
-	services = _build_default_services()
-	use_case = services["ports_clear"]
-	result = use_case.execute(app_name=app_name)
 	click.echo(result.message)
 
 

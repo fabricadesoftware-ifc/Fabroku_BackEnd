@@ -7,8 +7,6 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from fabroku.application.use_cases import (
-	CreateAppUseCase,
-	DeleteAppUseCase,
 	DeployAppUseCase,
 	InstallPluginUseCase,
 	CreatePostgresUseCase,
@@ -30,9 +28,7 @@ class BaseDokkuAPIView(APIView):
 	def get_services(self) -> Dict[str, Any]:
 		dokku = DokkuShellAdapter()
 		return {
-			"create": CreateAppUseCase(dokku),
 			"deploy": DeployAppUseCase(dokku),
-			"delete": DeleteAppUseCase(dokku),
 			"plugin_install": InstallPluginUseCase(dokku),
 			"pg_create": CreatePostgresUseCase(dokku),
 			"pg_link": LinkPostgresUseCase(dokku),

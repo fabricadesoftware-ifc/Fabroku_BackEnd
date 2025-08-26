@@ -2,10 +2,6 @@
 
 A Fabroku CLI é uma interface de linha de comando que abstrai operações do Dokku, seguindo a arquitetura hexagonal do projeto (casos de uso -> porta `DokkuService` -> adapter shell/SSH).
 
-- Repositórios Git podem ser implantados diretamente via `dokku git:sync`.
-- Imagens Docker podem ser implantadas via `dokku tags:deploy`.
-- O comando `smart-deploy` analisa o repositório para detecção de `Dockerfile`/pasta `docker/` e ajusta a configuração automaticamente.
-
 ## Requisitos
 - Python 3.13+
 - [PDM](https://pdm.fming.dev/)
@@ -17,7 +13,7 @@ A Fabroku CLI é uma interface de linha de comando que abstrai operações do Do
 pdm install
 
 # Ver ajuda
-dm run fabroku --help
+pdm run fabroku --help
 ```
 
 ## Configuração
@@ -56,8 +52,8 @@ A sessão é salva em `~/.fabroku/session.json`.
 
 ## Ownership e Tag (FABROKU_TAG)
 - Cada usuário recebe uma tag única (estável) guardada em `~/.fabroku/users/<email>.json`.
-- Ao criar uma app, a CLI injeta automaticamente `FABROKU_TAG=<sua_tag>` na configuração da app (via `dokku config:set`).
-- `apps list` e `delete-app` operam somente sobre apps com `FABROKU_TAG` igual à sua tag.
+- Ao criar um projeto, a CLI injeta automaticamente `FABROKU_TAG=<sua_tag>` na configuração da app Dokku (via `dokku config:set`).
+- `project list`, `project destroy`, `project status`, `deploy`, `smart-deploy`, `config set`, `ports set/add/clear` e outros comandos operam somente sobre projetos com `FABROKU_TAG` igual à sua tag.
 
 ## Comandos
 
@@ -69,101 +65,138 @@ pdm run fabroku auth whoami
 pdm run fabroku auth logout
 ```
 
-### apps
-Listagem das suas apps (filtradas por `FABROKU_TAG`):
-```bash
-# Lista apenas suas apps
-pdm run fabroku apps list
+### project
+Grupo de comandos para gerenciar projetos. O nome do projeto (`<project_name>`) é frequentemente um argumento necessário para os subcomandos.
 
-# Lista todas as apps (ignora filtro)
-pdm run fabroku apps list --all
+- Criar projeto (requer login):
+  ```bash
+  pdm run fabroku project create \
+    --name meu-projeto-web \
+    --tecnologia Vue \
+    --porta 8000 \
+    --source-url https://github.com/usuario/meu-app-vue \
+    --source-type git \
+    --network default \
+    --descricao "Meu primeiro projeto Fabroku" \
+    --env "VAR1=VAL1" \
+    --env "VAR2=VAL2"
+  ```
+  Campos obrigatórios: `--name`, `--tecnologia`, `--porta`, `--source-url`, `--source-type`, `--network`.
 
-# Lista apps com uma tag específica
-pdm run fabroku apps list --tag <tag>
-```
+- Listar seus projetos (filtrados por `FABROKU_TAG`):
+  ```bash
+  # Lista apenas seus projetos
+  pdm run fabroku project list
 
-### create-app
-Cria uma aplicação no Dokku e define variáveis iniciais. Requer login e marca a app com sua `FABROKU_TAG` automaticamente.
-```bash
-pdm run fabroku create-app minha-app \
-  --initial-env '{"SECRET_KEY":"s3cr3t","DEBUG":"False"}'
-```
+  # Lista todos os projetos (ignora filtro)
+  pdm run fabroku project list --all
+
+  # Lista projetos com uma tag específica
+  pdm run fabroku project list --tag <tag>
+  ```
+
+- Deletar projeto (requer login e confirmação interativa):
+  ```bash
+  pdm run fabroku project meu-projeto-web destroy
+  ```
+
+- Status do projeto:
+  ```bash
+  pdm run fabroku project meu-projeto-web status
+  ```
+  Exemplo de saída:
+  ```
+  NAME           READY    ESTADO       AGE
+  meu-projeto-web   0/1      Rascunho     1m
+  ```
 
 ### deploy
-Realiza deploy via Git (dokku git:sync) ou via imagem Docker (dokku tags:deploy).
-```bash
-# Deploy via Git
-pdm run fabroku deploy minha-app --git-url https://github.com/user/repo#main
+Comando para realizar deploy de uma aplicação. Este comando está em nível superior, mas futuramente pode ser movido para `fabroku project <name> deploy`.
 
-# Deploy via Imagem
-pdm run fabroku deploy minha-app --image usuario/repo:tag
+- Deploy via Git:
+  ```bash
+  pdm run fabroku deploy meu-projeto-web --git-url https://github.com/usuario/meu-app-vue#main
+  ```
 
-# Com buildpack explícito (quando aplicável)
-pdm run fabroku deploy minha-app --git-url https://github.com/user/repo#main --buildpack https://github.com/heroku/heroku-buildpack-python
-```
+- Deploy via Imagem:
+  ```bash
+  pdm run fabroku deploy meu-projeto-web --image usuario/repo:tag
+  ```
+
+- Com buildpack explícito (quando aplicável):
+  ```bash
+  pdm run fabroku deploy meu-projeto-web --git-url https://github.com/usuario/meu-app-vue#main --buildpack https://github.com/heroku/heroku-buildpack-python
+  ```
 
 ### smart-deploy
-Fluxo que analisa o repositório e decide a melhor estratégia:
-- Clona de forma rasa (`--depth 1`) a branch indicada (padrão `main` ou a especificada em `<url>#<branch>`)
-- Detecta `Dockerfile` na raiz ou em pastas comuns (`docker/`, `deploy/`, `ops/`, `.docker/`)
-- Se o `Dockerfile` não estiver na raiz, define `DOKKU_DOCKERFILE_PATH` automaticamente
-- Executa `dokku git:sync`
+Comando para realizar deploy inteligente, analisando o repositório para a melhor estratégia. Este comando está em nível superior, mas futuramente pode ser movido para `fabroku project <name> smart-deploy`.
 
-```bash
-pdm run fabroku smart-deploy minha-app \
-  --git-url https://github.com/user/repo#main \
-  --log
-```
+- Smart Deploy de projeto (analisa repo para melhor estratégia):
+  - Se `source-type` for `git`: clona o repositório, detecta `Dockerfile` e executa `dokku git:sync`. 
+  - Se `source-type` for `docker_image` e `source-url` for do Docker Hub: realiza `dokku tags:deploy`. 
+  - Se `source-type` for `docker_image` e `source-url` for do GitHub (com Dockerfile): procura Dockerfile e executa `dokku git:sync`.
+  ```bash
+  pdm run fabroku smart-deploy meu-projeto-web \
+    --git-url https://github.com/usuario/meu-app-vue#main \
+    --log
+  ```
+  Flags úteis:
+  - `--log`: imprime no stderr os passos do smart-deploy (status, analysis, mensagens de erro)
 
-### delete-app
-Remove uma aplicação do Dokku. Requer login e ownership (verificação por `FABROKU_TAG`).
-```bash
-pdm run fabroku delete-app minha-app --force
-```
+### plugin
+Instalação de plugins Dokku. (Comando de nível superior por enquanto)
 
-### plugin install
-Instala um plugin Dokku via repositório Git.
+- Instalar plugin:
 ```bash
 pdm run fabroku plugin install https://github.com/dokku/dokku-postgres.git --name postgres
 ```
 
 ### postgres
-Gerencia serviço Postgres.
-```bash
-# Criar serviço
-pdm run fabroku postgres create pg1 --option '--image postgres:16'
+Gerenciamento do serviço Postgres. (Comando de nível superior por enquanto)
 
-# Linkar à app
-pdm run fabroku postgres link pg1 minha-app
+- Criar serviço:
+```bash
+pdm run fabroku postgres create pg1 --option '--image postgres:16'
+```
+- Linkar serviço à um projeto:
+```bash
+pdm run fabroku postgres link pg1 meu-projeto-web
 ```
 
 ### rabbitmq
-Gerencia serviço RabbitMQ.
+Gerenciamento do serviço RabbitMQ. (Comando de nível superior por enquanto)
+
+- Criar serviço:
 ```bash
-# Criar serviço
 pdm run fabroku rabbitmq create rmq1
-
-# Linkar à app
-pdm run fabroku rabbitmq link rmq1 minha-app
+```
+- Linkar serviço à um projeto:
+```bash
+pdm run fabroku rabbitmq link rmq1 meu-projeto-web
 ```
 
-### config set
-Define variáveis de ambiente na app.
+### config
+Gerenciamento de variáveis de ambiente do projeto. (Comando de nível superior por enquanto)
+
+- Definir variáveis de ambiente:
 ```bash
-pdm run fabroku config set minha-app --env SECRET_KEY=abc --env DEBUG=False
+pdm run fabroku config set meu-projeto-web --env SECRET_KEY=abc --env DEBUG=False
 ```
 
-### ports (proxy)
-Configura mapeamentos de portas do proxy do Dokku.
+### ports
+Configuração de mapeamentos de portas do proxy do Dokku para um projeto. (Comando de nível superior por enquanto)
+
+- Substituir mapeamentos:
 ```bash
-# Substitui os mapeamentos
-pdm run fabroku ports set minha-app --map http:80:5000 --map https:443:5000
-
-# Adiciona mapeamentos
-pdm run fabroku ports add minha-app --map http:8080:5000
-
-# Limpa mapeamentos
-pdm run fabroku ports clear minha-app
+pdm run fabroku ports set meu-projeto-web --map http:80:8000 --map https:443:8000
+```
+- Adicionar mapeamentos:
+```bash
+pdm run fabroku ports add meu-projeto-web --map http:8080:8000
+```
+- Limpar mapeamentos:
+```bash
+pdm run fabroku ports clear meu-projeto-web
 ```
 
 ## Integração com a API/Web
@@ -172,5 +205,6 @@ A CLI opera diretamente via shell/SSH. Para uso via API Web (Django/DRF), utiliz
 ## Solução de problemas
 - "Você precisa estar autenticado": faça `fabroku auth login` ou `fabroku auth register`.
 - "Comando 'dokku' não encontrado": configure `DOKKU_HOST` para SSH remoto ou instale a CLI do Dokku na máquina local.
+- "Permissão negada: você não é o owner deste projeto": certifique-se de estar logado e que a app foi criada por você (ver `FABROKU_TAG`).
 - Erros de buildpack: defina `--buildpack` no `deploy`/`smart-deploy` quando necessário.
 - Dockerfile em subpastas: o `smart-deploy` define `DOKKU_DOCKERFILE_PATH` automaticamente; verifique com `dokku config:get <app> DOKKU_DOCKERFILE_PATH`. 

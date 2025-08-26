@@ -1,18 +1,21 @@
 from django.db import models
 from django.utils import timezone
 from core.user.infra.user_django_app.models import User
+from .network import Network  # Importar o novo modelo Network
 
 
 class Projeto(models.Model):
     STATUS_CHOICES = [
-        ('pendente', 'Pendente'),
-        ('concluido', 'Concluído'),
-        ('em_andamento', 'Em andamento')
+        ('rascunho', 'Rascunho'),
+        ('em_andamento', 'Em Andamento'),
+        ('pronto', 'Pronto'),
+        ('abortado', 'Abortado'),
+        ('erro', 'Erro'),
     ]
     
     TIPO_FONTE_CHOICES = [
-        ('Docker', 'Imagem Docker'),
-        ('Github', 'Repositório GitHub'),
+        ('git', 'Repositório Git'),
+        ('docker_image', 'Imagem Docker'),
     ]
 
     TIPO_TECNOLOGIA = [
@@ -20,35 +23,30 @@ class Projeto(models.Model):
         ('Django', 'Django REST Framework')
     ]
     
-    usuario = models.ForeignKey(User, on_delete=models.CASCADE, related_name='projetos')
+    usuario = models.ForeignKey(User, on_delete=models.CASCADE, related_name='projetos', verbose_name="Usuário")
     nome = models.CharField(max_length=200, verbose_name="Nome do Projeto")
-    descricao = models.TextField(verbose_name="Descrição")
+    descricao = models.TextField(blank=True, verbose_name="Descrição") # Descrição pode ser opcional
     tecnologia = models.CharField(max_length=100, choices=TIPO_TECNOLOGIA, verbose_name="Tecnologia Principal")
-    tipo_fonte = models.CharField(max_length=20, choices=TIPO_FONTE_CHOICES, default='Github', verbose_name="Tipo de Fonte")
-    
+    source_type = models.CharField(max_length=20, choices=TIPO_FONTE_CHOICES, verbose_name="Tipo de Fonte")
+    source_url = models.URLField(verbose_name="URL da Fonte")
 
-    github_repo = models.URLField(verbose_name="URL do Repositório GitHub", blank=True, null=True)
-    github_branch = models.CharField(max_length=100, default='main', verbose_name="Branch do GitHub", blank=True, null=True)
+    # Nova chave estrangeira para Network
+    network = models.ForeignKey(Network, on_delete=models.CASCADE, related_name='projetos', verbose_name="Rede")
 
-
-    image_repo = models.CharField(max_length=200, verbose_name="Repositório da imagem (ex: usuario/repo ou registry/repo)", blank=True, null=True)
-    image_tag = models.CharField(max_length=50, default='latest', verbose_name="Tag da imagem", blank=True, null=True)
-
-
-    porta_personalizada = models.IntegerField(blank=True, null=True, verbose_name="Porta Personalizada")
+    porta = models.IntegerField(verbose_name="Porta") # Agora é obrigatório
     variaveis_ambiente = models.JSONField(blank=True, null=True, verbose_name="Variáveis de Ambiente")
     
     dominio = models.CharField(max_length=100, verbose_name="Domínio do site", blank=True, null=True)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pendente')
-    data_criacao = models.DateTimeField(default=timezone.now)
-    data_ultima_atualizacao = models.DateTimeField(auto_now=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='rascunho', verbose_name="Status")
+    data_criacao = models.DateTimeField(default=timezone.now, verbose_name="Data de Criação")
+    data_ultima_atualizacao = models.DateTimeField(auto_now=True, verbose_name="Última Atualização")
     url_deploy = models.URLField(blank=True, null=True, verbose_name="URL do Deploy")
     
     def save(self, *args, **kwargs):
-        dominio_fabrica = ".fabricadesoftware"
+        dominio_fabrica = ".fabricadesoftware.ifc.edu.br"
         if self.nome:
-            if self.porta_personalizada:
-                self.dominio = f"{self.nome}{dominio_fabrica}:{self.porta_personalizada}"
+            if self.porta:
+                self.dominio = f"{self.nome}{dominio_fabrica}:{self.porta}"
             else:
                 self.dominio = f"{self.nome}{dominio_fabrica}"
         super().save(*args, **kwargs)
