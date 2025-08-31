@@ -6,8 +6,8 @@ from rest_framework import status
 from rest_framework.generics import ListCreateAPIView, RetrieveUpdateDestroyAPIView
 from rest_framework.permissions import IsAuthenticatedOrReadOnly # Pode ser mais restrito depois
 
-from core.project.infra.project_django_app.models import Network, Projeto
-from core.project.infra.project_django_app.serializers import NetworkSerializer, ProjetoSerializer
+from core.project.infra.project_django_app.models import Network, Project
+from core.project.infra.project_django_app.serializers import NetworkSerializer, ProjectSerializer
 
 from fabroku.application.use_cases.create_project import CreateProjectUseCase
 from fabroku.application.use_cases.get_project_status import GetProjectStatusUseCase
@@ -28,8 +28,8 @@ class NetworkRetrieveUpdateDestroyView(RetrieveUpdateDestroyAPIView):
 
 
 class ProjectListCreateView(ListCreateAPIView):
-	queryset = Projeto.objects.all()
-	serializer_class = ProjetoSerializer
+	queryset = Project.objects.all()
+	serializer_class = ProjectSerializer
 	permission_classes = [IsAuthenticatedOrReadOnly]
 
 	def get_queryset(self):
@@ -78,8 +78,8 @@ class ProjectListCreateView(ListCreateAPIView):
 
 
 class ProjectRetrieveUpdateDestroyView(RetrieveUpdateDestroyAPIView):
-	queryset = Projeto.objects.all()
-	serializer_class = ProjetoSerializer
+	queryset = Project.objects.all()
+	serializer_class = ProjectSerializer
 	lookup_field = 'nome' # Usar o nome do projeto como lookup
 	permission_classes = [IsAuthenticatedOrReadOnly]
 

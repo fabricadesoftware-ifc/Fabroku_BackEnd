@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from core.project.infra.project_django_app.models import Network, Projeto
+from core.project.infra.project_django_app.models import Network, Project
 
 
 class NetworkSerializer(serializers.ModelSerializer):
@@ -8,24 +8,24 @@ class NetworkSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'description']
 
 
-class ProjetoSerializer(serializers.ModelSerializer):
+class ProjectSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Projeto
+        model = Project
         fields = [
             'id',
-            'usuario',
-            'nome',
-            'descricao',
-            'tecnologia',
+            'user',
+            'name',
+            'description',
+            'technology',
             'source_type',
-            'source_url',
+            'source_git',
+            'source_docker',
             'network',
-            'porta',
-            'variaveis_ambiente',
-            'dominio',
+            'port',
+            'variables',
+            'domain',
             'status',
-            'data_criacao',
-            'data_ultima_atualizacao',
-            'url_deploy',
+            'creation_date',
+            'last_update_date',
         ]
-        read_only_fields = ['usuario', 'dominio', 'status', 'data_criacao', 'data_ultima_atualizacao', 'url_deploy'] 
+        read_only_fields = ['user', 'domain', 'status', 'creation_date', 'last_update_date', 'source_type'] 
