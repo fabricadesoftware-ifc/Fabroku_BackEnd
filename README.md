@@ -78,7 +78,7 @@ Este README é um tutorial de uso (passo a passo). Para documentação detalhada
 
 ### 6. Fazer deploy (smart-deploy)
 - Este comando ainda está em nível superior, mas futuramente pode ser movido para `fabroku project <name> deploy`.
-- O `smart-deploy` analisa a URL da fonte e o tipo (`git` ou `docker_image`) para decidir a melhor estratégia:
+  - O `smart-deploy` analisa a URL da fonte e o tipo (`git` ou `docker_image`) para decidir a melhor estratégia. Para deploys baseados nas informações do projeto salvas, use `pdm run fabroku deploy <nome-do-projeto>`.
   - Se `source-type` for `git`: clona o repositório, detecta `Dockerfile` e executa `dokku git:sync`. 
   - Se `source-type` for `docker_image` e `source-url` for do Docker Hub: realiza `dokku tags:deploy`. 
   - Se `source-type` for `docker_image` e `source-url` for do GitHub (com Dockerfile): procura Dockerfile e executa `dokku git:sync`.

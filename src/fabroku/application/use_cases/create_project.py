@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Dict, Optional, TYPE_CHECKING
 
 from fabroku.domain.ports import DokkuService, OperationResult
-from core.project.infra.project_django_app.models import Projeto, Network
-from core.user.infra.user_django_app.models import User
+
+if TYPE_CHECKING:
+	from core.project.infra.project_django_app.models import Projeto, Network
+	from core.user.infra.user_django_app.models import User
 
 
 class CreateProjectUseCase:

@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 from fabroku.application.use_cases import (
 	# CreateAppUseCase, # Removido
-	# DeleteAppUseCase, # Removido
+	DeleteAppUseCase,
 	DeployAppUseCase,
 	InstallPluginUseCase,
 	CreatePostgresUseCase,
@@ -27,6 +27,8 @@ from fabroku.application.use_cases import (
 	GetProjectStatusUseCase,
 	ProjectStatus,
 	ListProjectsUseCase,
+	GetAppLogsUseCase,
+	GetDeployLogsUseCase,
 )
 from fabroku.infrastructure.adapters.dokku_shell_adapter import DokkuShellAdapter
 from fabroku.application.use_cases.auth import AuthService
@@ -41,14 +43,13 @@ load_dotenv()
 
 def _build_default_services():
 	dokku = DokkuShellAdapter()
-	setup_django()
 	from core.project.infra.project_django_app.models import Projeto, Network # lazy import
 	from core.user.infra.user_django_app.models import User # lazy import
 	return {
 		"dokku": dokku,
 		"create_project": CreateProjectUseCase(dokku, Projeto, User, Network),
-		"deploy": DeployAppUseCase(dokku),
-		"delete": DeleteAppUseCase(dokku),
+		"deploy": DeployAppUseCase(dokku, Projeto),
+		"delete": DeleteAppUseCase(dokku, Projeto, User),
 		"plugin_install": InstallPluginUseCase(dokku),
 		"pg_create": CreatePostgresUseCase(dokku),
 		"pg_link": LinkPostgresUseCase(dokku),
@@ -61,6 +62,8 @@ def _build_default_services():
 		"smart_deploy": SmartDeployUseCase(dokku),
 		"list_projects": ListProjectsUseCase(dokku, Projeto),
 		"get_project_status": GetProjectStatusUseCase(Projeto),
+		"get_app_logs": GetAppLogsUseCase(dokku),
+		"get_deploy_logs": GetDeployLogsUseCase(dokku),
 	}
 
 
@@ -215,16 +218,27 @@ def project_destroy_cmd(project_name: str) -> None:
 
 @cli.command("deploy") # Mantido como comando de nível superior por simplicidade no primeiro momento, pode ser movido para project <name> deploy
 @click.argument("app_name", type=str)
-@click.option("--git-url", type=str, default=None)
-@click.option("--image", type=str, default=None)
-@click.option("--buildpack", type=str, default=None)
-def deploy_cmd(app_name: str, git_url: Optional[str], image: Optional[str], buildpack: Optional[str]) -> None:
+def deploy_cmd(app_name: str) -> None:
 	session = load_session() # Adicionar verificação de sessão para deploy e smart-deploy
 	if not session:
 		click.echo("Você precisa estar autenticado. Execute 'fabroku auth login' ou crie uma conta com 'fabroku auth register'", err=True)
 		raise SystemExit(1)
 	services = _build_default_services()
 	use_case = services["deploy"]
+
+	# Buscar informações do projeto no banco de dados
+	try:
+		project_model = use_case._Projeto.objects.get(nome=app_name, usuario__email=session.email)
+	except use_case._Projeto.DoesNotExist:
+		click.echo(f"Projeto '{app_name}' não encontrado ou você não tem permissão.", err=True)
+		raise SystemExit(1)
+
+	# Determinar qual tipo de deploy fazer
+	git_url = project_model.source_url if project_model.source_type == "git" else None
+	image = project_model.source_url if project_model.source_type == "docker_image" else None
+	# TODO: Adicionar lógica para buildpack se for um campo no modelo Projeto
+	buildpack = None # Por enquanto, mantém como None
+
 	result = use_case.execute(app_name=app_name, git_url=git_url, image=image, buildpack=buildpack)
 	click.echo(result.message)
 
@@ -439,8 +453,42 @@ def rabbitmq_link_cmd(service_name: str, app_name: str) -> None:
 	click.echo(result.message)
 
 
+@cli.command("logs")
+@click.argument("app_name", type=str)
+@click.option("--tail", type=int, default=50, help="Número de linhas para exibir do final dos logs (padrão: 50).")
+def logs_cmd(app_name: str, tail: int) -> None:
+	session = load_session()
+	if not session:
+		click.echo("Você precisa estar autenticado. Execute 'fabroku auth login' ou crie uma conta com 'fabroku auth register'", err=True)
+		raise SystemExit(1)
+	services = _build_default_services()
+	use_case: GetAppLogsUseCase = services["get_app_logs"]
+	result = use_case.execute(app_name=app_name, tail=tail)
+	if result.success:
+		click.echo(result.message)
+	else:
+		click.echo(f"Erro ao obter logs: {result.message}", err=True)
+
+
+@cli.command("deploy-logs")
+@click.argument("app_name", type=str)
+def deploy_logs_cmd(app_name: str) -> None:
+	session = load_session()
+	if not session:
+		click.echo("Você precisa estar autenticado. Execute 'fabroku auth login' ou crie uma conta com 'fabroku auth register'", err=True)
+		raise SystemExit(1)
+	services = _build_default_services()
+	use_case: GetDeployLogsUseCase = services["get_deploy_logs"]
+	result = use_case.execute(app_name=app_name)
+	if result.success:
+		click.echo(result.message)
+	else:
+		click.echo(f"Erro ao obter logs de deploy: {result.message}", err=True)
+
+
 def main() -> int:
 	try:
+		setup_django()
 		cli(standalone_mode=True)
 		return 0
 	except SystemExit as exc:  # Click usa SystemExit

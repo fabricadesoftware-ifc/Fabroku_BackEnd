@@ -6,8 +6,8 @@ class Network(models.Model):
 	description = models.TextField(blank=True, verbose_name="Descrição")
 
 	class Meta:
-		verbose_name = "Rede"
-		verbose_name_plural = "Redes"
+		verbose_name = "Network"
+		verbose_name_plural = "Networks"
 
 	def __str__(self) -> str:
 		return self.name 

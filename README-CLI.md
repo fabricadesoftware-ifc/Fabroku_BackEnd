@@ -113,20 +113,11 @@ Grupo de comandos para gerenciar projetos. O nome do projeto (`<project_name>`) 
 ### deploy
 Comando para realizar deploy de uma aplicação. Este comando está em nível superior, mas futuramente pode ser movido para `fabroku project <name> deploy`.
 
-- Deploy via Git:
+- Deploy de projeto (requer login):
   ```bash
-  pdm run fabroku deploy meu-projeto-web --git-url https://github.com/usuario/meu-app-vue#main
+  pdm run fabroku deploy meu-projeto-web
   ```
-
-- Deploy via Imagem:
-  ```bash
-  pdm run fabroku deploy meu-projeto-web --image usuario/repo:tag
-  ```
-
-- Com buildpack explícito (quando aplicável):
-  ```bash
-  pdm run fabroku deploy meu-projeto-web --git-url https://github.com/usuario/meu-app-vue#main --buildpack https://github.com/heroku/heroku-buildpack-python
-  ```
+  Este comando utiliza as informações (URL da fonte, tipo de fonte) salvas no banco de dados durante a criação do projeto para realizar o deploy.
 
 ### smart-deploy
 Comando para realizar deploy inteligente, analisando o repositório para a melhor estratégia. Este comando está em nível superior, mas futuramente pode ser movido para `fabroku project <name> smart-deploy`.

@@ -120,7 +120,7 @@ class DockerService:
         return f"{repo}:{tag}"
 
     def _env_args(self):
-        envs = self.projeto.variaveis_ambiente or {}
+        envs = self.projeto.variables or {}
         if isinstance(envs, str):
             try:
                 envs = json.loads(envs)
@@ -133,8 +133,8 @@ class DockerService:
 
     def _port_mapping(self, detected_tech=None):
         # determina porta interna e porta host para mapear
-        if self.projeto.porta_personalizada:
-            host_port = self.projeto.porta_personalizada
+        if self.projeto.port:
+            host_port = self.projeto.port
         else:
             host_port = None
 
@@ -171,9 +171,9 @@ class DockerService:
 
             cmd = ['docker', 'run', '-d']
             # porta padrão não mapeada porque não sabemos a tech — se porta personalizada estiver setada, mapeia sem saber a interna
-            if self.projeto.porta_personalizada:
+            if self.projeto.port:
                 # apresenta um mapeamento simples: host_port:host_port (não ideal, mas atende caso usuário queira expor)
-                cmd += ['-p', f'{self.projeto.porta_personalizada}:{self.projeto.porta_personalizada}']
+                cmd += ['-p', f'{self.projeto.port}:{self.projeto.port}']
 
             cmd += self._env_args()
             cmd.append(image)

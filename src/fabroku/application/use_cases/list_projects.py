@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Optional, TYPE_CHECKING
 import getpass
 import os
 
 from fabroku.domain.ports import DokkuService
-from core.project.infra.project_django_app.models import Projeto # Importar modelo Projeto
+
+if TYPE_CHECKING:
+	from core.project.infra.project_django_app.models import Projeto # Importar modelo Projeto
 
 
 class ListProjectsUseCase: # Renomeado de ListAppsUseCase

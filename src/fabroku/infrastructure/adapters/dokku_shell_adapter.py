@@ -178,4 +178,12 @@ class DokkuShellAdapter(DokkuService):
         # dokku config:get <app> KEY
         return self._run(["config:get", app_name, key])
 
+    def logs_app(self, app_name: str, tail: int = 50) -> OperationResult:
+        # dokku logs <app> --tail <number>
+        return self._run(["logs", app_name, "--tail", str(tail)])
+
+    def deploy_logs(self, app_name: str) -> OperationResult:
+        # dokku logs <app>
+        return self._run(["logs", app_name])
+
 

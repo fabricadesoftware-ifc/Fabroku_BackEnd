@@ -2,16 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
-from core.project.infra.project_django_app.models import Projeto
+if TYPE_CHECKING:
+	from core.project.infra.project_django_app.models import Projeto
 
 
 @dataclass
 class ProjectStatus:
 	name: str
 	ready: str
-	estado: str # Alterado de 'available' para 'estado'
+	estado: str 
 	age: str
 
 
@@ -29,12 +30,12 @@ class GetProjectStatusUseCase:
 
 			name = projeto.nome
 			ready_status = "1/1" if projeto.status in ['pronto', 'em_andamento'] else "0/1"
-			estado = projeto.status.capitalize() # Capitaliza a primeira letra
+			estado = projeto.status.capitalize() 
 
 			age = (datetime.now(timezone.utc) - projeto.data_criacao).total_seconds()
 			age_minutes = int(age / 60)
-			age_str = f"{age_minutes}m" # Formato simples por enquanto
-			# TODO: Melhorar formatação da idade (horas, dias, etc.)
+			age_str = f"{age_minutes}m" 
+			
 
 			return ProjectStatus(name=name, ready=ready_status, estado=estado, age=age_str)
 		except self._Projeto.DoesNotExist:
