@@ -32,10 +32,10 @@ class Project(models.Model):
     description = models.TextField(blank=True, verbose_name="Descrição")
     technology = models.CharField(max_length=100, choices=SOURCE_TECHNOLOGY, verbose_name="Tecnologia")
     source_type = models.CharField(max_length=20, choices=SOURCE_TYPE_CHOICES, verbose_name="Fonte do código")
-    source_git = models.URLField(verbose_name="Repositório do Github")
+    source_git = models.URLField(verbose_name="Repositório do Github", blank=True, null=True)
     source_docker = models.CharField(verbose_name="Imagem do Dockerhub", blank=True, null=True)
 
-    network = models.ForeignKey(Network, on_delete=models.CASCADE, related_name='projetos', verbose_name="Rede")
+    network = models.ForeignKey(Network, on_delete=models.CASCADE, related_name='projetos', verbose_name="Network")
 
     port = models.IntegerField(verbose_name="Porta")
     variables = models.JSONField(blank=True, null=True, verbose_name="Variáveis de Ambiente")
