@@ -5,7 +5,7 @@ description = "Default template for PDM package"
 authors = [
     {name = "jonatasperaza", email = "jonatassilvaperaza@gmail.com"},
 ]
-dependencies = ["django>=5.2.8"]
+dependencies = ["django>=5.2.8", "djangorestframework>=3.16.1", "dj-database-url>=3.0.1", "psycopg2-binary>=2.9.11", "django-celery-results>=2.6.0", "djangorestframework-simplejwt>=5.5.1", "python-dotenv>=1.2.1", "drf-spectacular>=0.29.0", "celery>=5.5.3", "whitenoise>=6.11.0", "requests>=2.32.5", "gunicorn>=23.0.0"]
 requires-python = ">=3.13"
 readme = "README.md"
 license = {text = "MIT"}
@@ -17,3 +17,56 @@ build-backend = "pdm.backend"
 
 [tool.pdm]
 distribution = true
+
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "*/migrations/*",
+    "*/tests/*",
+    "*/__pycache__/*",
+    "*/venv/*",
+    "*/virtualenv/*"
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod"
+]
+
+[[tool.pdm.autoexport]]
+filename = "requirements.txt"
+without-hashes = "true"
+
+
+[tool.pdm.scripts]
+dev = "python src/manage.py runserver"
+runserver = "python src/manage.py runserver"
+createsuperuser = "python src/manage.py createsuperuser"
+migrate = "python src/manage.py migrate"
+makemigrations = "python src/manage.py makemigrations"
+shell = "python src/manage.py shell"
+model = "python src/manage.py graph_models -a -g -o models.png"
+startapp = "python src/manage.py startapp {args}"
+loaddata = "python src/manage.py loaddata {args}"
+dumpdata = "python src/manage.py dumpdata {args}"
+celery = "celery -A src.django_project worker --loglevel=INFO --concurrency=10 -n worker1.%h --pool=solo -E"
+beat = "celery -A src.django_project beat --loglevel=INFO"
+test = "pytest {args}"
+test-all = "pytest"
+test-cov = "pytest --cov=src --cov-report=html --cov-report=term {args}"
+test-unit = "pytest tests/unit {args}"
+test-integration = "pytest tests/integration {args}"
+test-e2e = "pytest tests/e2e {args}"
+
+
+[dependency-groups]
+dev = [
+    "pygraphviz>=1.14",
+]
