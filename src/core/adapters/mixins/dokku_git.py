@@ -23,3 +23,13 @@ class DokkuGitMixin():
             return "Failed to sync Git repository and deploy."
 
         return "Git sync successful."
+
+    def set_git_remote(self, app_name: str, git_url: str) -> str:
+        """Configura o repositório Git remoto para a aplicação Dokku."""
+        if not self.exists_app(app_name):
+            return "Application not found."
+
+        if not self._run_command(f"dokku git:remote-add {app_name} {git_url}"):
+            return "Failed to set Git remote."
+
+        return "Git remote set successfully."
