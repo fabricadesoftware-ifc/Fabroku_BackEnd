@@ -1,9 +1,8 @@
-from typing import Dict
 from abc import abstractmethod
+from typing import Dict
 
 
 class DokkuConfigMixin:
-
 
     @abstractmethod
     def _run_command(self, command: str) -> bool:

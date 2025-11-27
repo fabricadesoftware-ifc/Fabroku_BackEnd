@@ -5,7 +5,7 @@ description = "Default template for PDM package"
 authors = [
     {name = "jonatasperaza", email = "jonatassilvaperaza@gmail.com"},
 ]
-dependencies = ["django>=5.2.8", "djangorestframework>=3.16.1", "dj-database-url>=3.0.1", "psycopg2-binary>=2.9.11", "django-celery-results>=2.6.0", "djangorestframework-simplejwt>=5.5.1", "python-dotenv>=1.2.1", "drf-spectacular>=0.29.0", "celery>=5.5.3", "whitenoise>=6.11.0", "requests>=2.32.5", "gunicorn>=23.0.0", "paramiko>=4.0.0"]
+dependencies = ["django>=5.2.8", "djangorestframework>=3.16.1", "dj-database-url>=3.0.1", "psycopg2-binary>=2.9.11", "django-celery-results>=2.6.0", "djangorestframework-simplejwt>=5.5.1", "python-dotenv>=1.2.1", "drf-spectacular>=0.29.0", "celery>=5.5.3", "whitenoise>=6.11.0", "requests>=2.32.5", "gunicorn>=23.0.0", "paramiko>=4.0.0", "ruff>=0.14.6"]
 requires-python = ">=3.13"
 readme = "README.md"
 license = {text = "MIT"}
@@ -44,6 +44,19 @@ exclude_lines = [
 filename = "requirements.txt"
 without-hashes = "true"
 
+[tool.ruff]
+line-length = 120
+extend-exclude = ['migrations', '__init__.py', 'manage.py']
+
+[tool.ruff.lint]
+preview = true
+select = ['I', 'F', 'E', 'W', 'PL', 'PT']
+ignore = ["PLR6301"]
+
+[tool.ruff.format]
+preview = true
+quote-style = 'single'
+
 
 [tool.pdm.scripts]
 dev = "python src/manage.py runserver"
@@ -69,4 +82,7 @@ test-e2e = "pytest tests/e2e {args}"
 [dependency-groups]
 dev = [
     "pygraphviz>=1.14",
+    "pylint>=3.0.2",
+    "ipython>=8.26.0",
+    "ruff>=0.11.2",
 ]

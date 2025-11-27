@@ -3,8 +3,9 @@ from django.conf import settings
 
 
 class SSHAdapter:
-    def __init__(self,):
+    """Adapter para executar comandos via SSH."""
 
+    def __init__(self,):
         self.host = settings.DOKKU_SSH_HOST
         self.username = settings.DOKKU_SSH_USERNAME
         self.ssh_key_path = settings.DOKKU_SSH_KEY
