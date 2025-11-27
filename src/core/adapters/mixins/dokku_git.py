@@ -19,9 +19,7 @@ class DokkuGitMixin():
         if not self.exists_app(app_name):
             return "Application not found."
 
-        deploy_command = f"dokku git:sync {app_name} {git_url} --branch {branch}"
-
-        if not self._run_command(deploy_command):
+        if not self._run_command(f"dokku git:sync {app_name} {git_url} --branch {branch}"):
             return "Failed to sync Git repository and deploy."
 
         return "Git sync successful."

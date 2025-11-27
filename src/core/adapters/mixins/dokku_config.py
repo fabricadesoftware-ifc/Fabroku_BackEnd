@@ -12,16 +12,14 @@ class DokkuConfigMixin:
     def set_config(self, app_name: str, env_vars: Dict[str, str]) -> bool:
 
         for key, value in env_vars.items():
-            command = f'dokku config:set {app_name} {key}="{value}"'
-            if not self._run_command(command):
+            if not self._run_command(f'dokku config:set {app_name} {key}="{value}"'):
                 return False
         return True
 
     def unset_config(self, app_name: str, keys: Dict[str, str]) -> bool:
 
         for key in keys:
-            command = f'dokku config:unset {app_name} {key}'
-            if not self._run_command(command):
+            if not self._run_command(f'dokku config:unset {app_name} {key}'):
                 return False
         return True
 
