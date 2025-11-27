@@ -9,6 +9,7 @@ class SSHAdapter:
         self.host = settings.DOKKU_SSH_HOST
         self.username = settings.DOKKU_SSH_USERNAME
         self.ssh_key_path = settings.DOKKU_SSH_KEY
+        self.port = settings.DOKKU_SSH_PORT
 
     def _run_command(self, command: str) -> bool:
         client = paramiko.SSHClient()
