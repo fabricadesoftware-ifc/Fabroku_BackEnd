@@ -1,10 +1,13 @@
 import paramiko
+from django.conf import settings
+
 
 class SSHAdapter:
-    def __init__(self, host: str, username: str, ssh_key_path: str):
-        self.host = host
-        self.username = username
-        self.ssh_key_path = ssh_key_path
+    def __init__(self,):
+
+        self.host = settings.DOKKU_SSH_HOST
+        self.username = settings.DOKKU_SSH_USERNAME
+        self.ssh_key_path = settings.DOKKU_SSH_KEY
 
     def _run_command(self, command: str) -> bool:
         client = paramiko.SSHClient()
