@@ -1,4 +1,5 @@
 from rest_framework import serializers
+
 from core.apps.mixins import AppMixin
 from core.apps.models import App
 
