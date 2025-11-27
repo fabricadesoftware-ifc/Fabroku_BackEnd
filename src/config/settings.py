@@ -38,6 +38,8 @@ INSTALLED_APPS = [
 
     'rest_framework',
     'rest_framework_simplejwt',
+    'corsheaders',
+    'drf_spectacular',
 
     'core.adapters',
     'core.logs',
@@ -155,7 +157,7 @@ REST_FRAMEWORK = {
         'rest_framework_simplejwt.authentication.JWTAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ),
-    'DEFAULT_PAGINATION_CLASS': 'src.core.__seedwork__.infra.pagination.CustomPageNumberPagination',
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 10,
 }
 
@@ -169,3 +171,5 @@ SPECTACULAR_SETTINGS = {
     'DESCRIPTION': 'API para gerenciamento do Fabroku, incluindo endpoints e documentação.',
     'VERSION': '1.0.0',
 }
+
+AUTH_USER_MODEL = 'auth_user.User'

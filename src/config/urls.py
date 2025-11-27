@@ -27,7 +27,7 @@ def api_root(request, format=None):
 
 urlpatterns = [
     path('api/', api_root, name='api-root'),
-    path('api/auth/', include('core.auth_django.urls')),
+    path('api/auth/', include('core.auth_user.urls')),
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/admin/', django_admin.site.urls),

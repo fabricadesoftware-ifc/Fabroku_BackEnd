@@ -1,9 +1,10 @@
-from config.permission import CustomUserPermission
 from drf_spectacular.utils import extend_schema
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 from rest_framework_simplejwt.views import TokenObtainPairView
+
+from config.permission import CustomUserPermission
 
 from .models import User
 from .serializers import CustomTokenObtainPairSerializer, UserRetrieveSerializer, UserSerializer
@@ -15,7 +16,7 @@ class UserViewSet(ModelViewSet):
     serializer_class = UserSerializer
     permission_classes = [CustomUserPermission]
 
-    def get_serializer_class(self):
+    def get_serializer_class(self):  # type: ignore
         if self.action == 'retrieve':
             return UserRetrieveSerializer
         return UserSerializer
