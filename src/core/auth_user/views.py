@@ -1,3 +1,32 @@
-from django.shortcuts import render
+from config.permission import CustomUserPermission
+from drf_spectacular.utils import extend_schema
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework.viewsets import ModelViewSet
+from rest_framework_simplejwt.views import TokenObtainPairView
 
-# Create your views here.
+from .models import User
+from .serializers import CustomTokenObtainPairSerializer, UserRetrieveSerializer, UserSerializer
+
+
+@extend_schema(tags=["users"])
+class UserViewSet(ModelViewSet):
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+    permission_classes = [CustomUserPermission]
+
+    def get_serializer_class(self):
+        if self.action == 'retrieve':
+            return UserRetrieveSerializer
+        return UserSerializer
+
+    @action(detail=False, methods=['get'])
+    def me(self, request):
+        user = request.user
+        serializer = UserRetrieveSerializer(user)
+        return Response(serializer.data)
+
+
+@extend_schema(tags=["auth"])
+class CustomTokenObtainPairView(TokenObtainPairView):
+    serializer_class = CustomTokenObtainPairSerializer

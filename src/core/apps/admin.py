@@ -1,3 +1,11 @@
 from django.contrib import admin
 
-# Register your models here.
+from .models import App
+
+
+@admin.register(App)
+class AppAdmin(admin.ModelAdmin):
+    list_display = ('name', 'project', 'status', 'created_at', 'updated_at')
+    list_filter = ('status', 'created_at', 'updated_at')
+    search_fields = ('name', 'project__name', 'domain')
+    readonly_fields = ('created_at', 'updated_at')
