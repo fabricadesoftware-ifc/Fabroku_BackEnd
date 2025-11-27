@@ -1,7 +1,0 @@
-{
-    "python-envs.defaultEnvManager": "ms-python.python:system",
-    "python-envs.pythonProjects": [],
-    "python.terminal.executeInFileDir": false,
-    "python.terminal.activateEnvironment": true,
-    "python.defaultInterpreterPath": "C:/Python313/python.exe"
-}

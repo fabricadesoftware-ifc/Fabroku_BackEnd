@@ -1,3 +1,0 @@
-WAIT=5
-CHECKS="/healthz /api/docs/"
-ATTEMPTS=10
