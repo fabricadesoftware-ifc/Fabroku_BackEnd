@@ -1,3 +1,10 @@
+"""
+Django settings para o projeto Fabroku.
+
+Gerado por Django e customizado para integração com Dokku.
+Para mais informações: https://docs.djangoproject.com/en/5.2/topics/settings/
+"""
+
 import os
 from datetime import timedelta
 from pathlib import Path
@@ -9,12 +16,17 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-
 SECRET_KEY = os.getenv('SECRET_KEY')
+
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '').split(',')
 
+ROOT_URLCONF = 'config.urls'
+
+WSGI_APPLICATION = 'config.wsgi.application'
+
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -23,27 +35,27 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    "rest_framework",
-    "rest_framework_simplejwt",
+
+    'rest_framework',
+    'rest_framework_simplejwt',
+
     'core.adapters',
     'core.logs',
     'core.project',
     'core.apps',
-    'core.auth_user'
+    'core.auth_user',
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    "whitenoise.middleware.WhiteNoiseMiddleware",
 ]
-
-ROOT_URLCONF = 'config.urls'
 
 TEMPLATES = [
     {
@@ -59,25 +71,6 @@ TEMPLATES = [
         },
     },
 ]
-
-REST_FRAMEWORK = {
-    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
-    "DEFAULT_FILTER_BACKENDS": [
-        "django_filters.rest_framework.DjangoFilterBackend",
-        "rest_framework.filters.SearchFilter",
-        "rest_framework.filters.OrderingFilter",
-    ],
-    "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
-    "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
-        "rest_framework.authentication.SessionAuthentication",
-    ),
-    "DEFAULT_PAGINATION_CLASS": "src.core.__seedwork__.infra.pagination.CustomPageNumberPagination",
-    "PAGE_SIZE": 10,
-}
-
-WSGI_APPLICATION = 'config.wsgi.application'
-
 
 DATABASES = {
     'default': dj_database_url.config(default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}")
@@ -98,7 +91,6 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-
 LANGUAGE_CODE = 'pt-br'
 
 TIME_ZONE = 'America/Sao_Paulo'
@@ -111,54 +103,69 @@ STATIC_URL = 'static/'
 
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
-DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-
 CSRF_TRUSTED_ORIGINS = [
-    "https://*.fexcompany.me",
-    "https://*.fabricadesoftware.ifc.edu.br",
-    "http://localhost:8000",
-    "http://localhost:5173",
-    "http://localhost:3000",
+    'https://*.fexcompany.me',
+    'https://*.fabricadesoftware.ifc.edu.br',
+    'http://localhost:8000',
+    'http://localhost:5173',
+    'http://localhost:3000',
 ]
 
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://localhost:3000",
-    "https://*.fexcompany.me",
-    "https://*.fabricadesoftware.ifc.edu.br",
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'https://*.fexcompany.me',
+    'https://*.fabricadesoftware.ifc.edu.br',
 ]
 
 CORS_ALLOW_CREDENTIALS = True
 
 CORS_ALLOW_METHODS = [
-    "DELETE",
-    "GET",
-    "OPTIONS",
-    "PATCH",
-    "POST",
-    "PUT",
+    'DELETE',
+    'GET',
+    'OPTIONS',
+    'PATCH',
+    'POST',
+    'PUT',
 ]
 
-# Permitir todos os headers
 CORS_ALLOW_HEADERS = [
-    "accept",
-    "accept-encoding",
-    "authorization",
-    "content-type",
-    "dnt",
-    "origin",
-    "user-agent",
-    "x-csrftoken",
-    "x-requested-with",
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
 ]
+
+REST_FRAMEWORK = {
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'DEFAULT_FILTER_BACKENDS': [
+        'django_filters.rest_framework.DjangoFilterBackend',
+        'rest_framework.filters.SearchFilter',
+        'rest_framework.filters.OrderingFilter',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
+    ),
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+    ),
+    'DEFAULT_PAGINATION_CLASS': 'src.core.__seedwork__.infra.pagination.CustomPageNumberPagination',
+    'PAGE_SIZE': 10,
+}
 
 SIMPLE_JWT = {
-    "AUTH_HEADER_TYPES": ("Bearer",),
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
 }
 
 SPECTACULAR_SETTINGS = {
-    "TITLE": "Fabroku API",
-    "DESCRIPTION": "API para gerenciamento do Fabroku, incluindo endpoints e documentação.",
-    "VERSION": "1.0.0",
+    'TITLE': 'Fabroku API',
+    'DESCRIPTION': 'API para gerenciamento do Fabroku, incluindo endpoints e documentação.',
+    'VERSION': '1.0.0',
 }
