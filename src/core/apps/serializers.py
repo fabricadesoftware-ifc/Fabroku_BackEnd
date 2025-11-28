@@ -26,6 +26,8 @@ class AppSerializer(serializers.ModelSerializer):
             name=validated_data['name'],
             git=validated_data['git'],
             project_id=validated_data['project'].id,
+            env_vars=validated_data.get('variables', None),
+            user=self.context['user_id'],
         )
 
     def update(self, instance, validated_data):

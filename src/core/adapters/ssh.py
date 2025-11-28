@@ -10,7 +10,7 @@ class SSHAdapter:
         self.ssh_key_path = ssh_key_path
         self.port = port
 
-    def _run_command(self, command: str) -> bool:
+    def _run_command(self, command: str) -> str:
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
@@ -19,10 +19,10 @@ class SSHAdapter:
             exit_status = stdout.channel.recv_exit_status()
             if exit_status != 0:
                 print(f"Error executing '{command}': {stderr.read().decode()}")
-                return False
-            return True
+                return f"Failed to execute command: {command}"
+            return stdout.read().decode('utf-8')
         except Exception as e:
             print(f"SSH Connection Error: {e}")
-            return False
+            return f"SSH Connection Error: {e}"
         finally:
             client.close()

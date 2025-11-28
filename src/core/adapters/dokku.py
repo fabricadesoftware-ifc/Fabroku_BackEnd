@@ -12,6 +12,6 @@ class DokkuAdapter(SSHAdapter, DokkuAppsMixin, DokkuConfigMixin, DokkuGitMixin, 
         self.port = settings.DOKKU_SSH_PORT
         super().__init__(self.host, self.username, self.ssh_key_path, self.port)
 
-    def _run_command(self, command: str) -> bool:
+    def _run_command(self, command: str) -> str:
         """Executa comando via SSH no servidor Dokku."""
         return super()._run_command(command)

@@ -5,7 +5,7 @@ class DokkuGitMixin():
     """Mixin que fornece métodos para integração Git com Dokku."""
 
     @abstractmethod
-    def _run_command(self, command: str) -> bool:
+    def _run_command(self, command: str) -> str:
         """Executa um comando no servidor Dokku."""
         ...
 
@@ -51,3 +51,12 @@ class DokkuGitMixin():
             return "Failed to generate Git deploy key."
 
         return "Git deploy key generated successfully."
+
+    def get_git_deploy_key(self) -> str:
+        """Obtém a chave de deploy Git da aplicação Dokku."""
+
+        deploy_key = self._run_command("dokku git:deploy-key")
+        if not deploy_key:
+            return "Failed to get Git deploy key."
+
+        return str(deploy_key)

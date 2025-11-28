@@ -15,9 +15,9 @@ class GitRepoMixin:
             "repos": [r.full_name for r in repos]
         })
 
-    def add_deploy_key(self, repo_name: str, dokku_key: str, user_id: int):
+    def add_deploy_key(self, repo_name: str, dokku_key: str, user: User):
 
-        user = User.objects.get(id=user_id)
+        user = User.objects.get(user=user)
         gh = Github(user.git_token)
         repo = gh.get_repo(repo_name)
 
