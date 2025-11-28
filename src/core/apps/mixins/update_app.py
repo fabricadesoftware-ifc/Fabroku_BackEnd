@@ -1,5 +1,4 @@
-from adapters import DokkuAdapter
-
+from core.adapters import DokkuAdapter
 from core.apps.models import App
 
 

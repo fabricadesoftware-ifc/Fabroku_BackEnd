@@ -5,8 +5,12 @@ from rest_framework.decorators import api_view
 
 @api_view(['GET'])
 def get_git_repos(request):
+    git_token = request.GET.get("git_token")
+    return get_git_repos_func(git_token)
+
+
+def get_git_repos_func(git_token):
     try:
-        git_token = request.user.git_token
         repos_res = requests.get(
             "https://api.github.com/user/repos",
             headers={

@@ -14,7 +14,7 @@ from .serializers import CustomTokenObtainPairSerializer, UserRetrieveSerializer
 class UserViewSet(ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
-    permission_classes = [CustomUserPermission]
+    #permission_classes = [CustomUserPermission]
 
     def get_serializer_class(self):  # type: ignore
         if self.action == 'retrieve':

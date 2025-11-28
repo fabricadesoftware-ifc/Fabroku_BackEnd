@@ -25,12 +25,16 @@ from core.auth_user.views import TokenObtainPairView
 def api_root(request, format=None):
     return Response({
         'users': reverse('user-root', request=request, format=format),
+        'apps': reverse('app-root', request=request, format=format),
+        'projects': reverse('project-root', request=request, format=format),
     })
 
 
 urlpatterns = [
     path('api/', api_root, name='api-root'),
     path('api/auth/', include('core.auth_user.urls')),
+    path('api/apps/', include('core.apps.urls')),
+    path('api/projects/', include('core.project.urls')),
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/admin/', django_admin.site.urls),
