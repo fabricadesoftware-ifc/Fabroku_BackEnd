@@ -13,6 +13,6 @@ def github_login(request):
         "https://github.com/login/oauth/authorize"
         f"?client_id={client_id}"
         f"&redirect_uri={redirect_uri}"
-        "&scope=repo"
+        "&scope=repo%20user:email"
     )
     return redirect(url)

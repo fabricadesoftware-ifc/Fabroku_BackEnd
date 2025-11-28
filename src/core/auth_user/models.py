@@ -16,7 +16,7 @@ def remove_accent(text):
 class User(AbstractUser):
     username = None
     email = models.EmailField(_("e-mail address"), unique=True, db_index=True)
-    registration = models.IntegerField(null=True, unique=True, db_index=True)
+    avatar_url = models.URLField(max_length=500, null=True, blank=True)
     name = models.CharField(max_length=255, null=True, db_index=True)
     password_reset_token = models.CharField(
         _("Password Reset Token"), max_length=255, blank=True, null=True

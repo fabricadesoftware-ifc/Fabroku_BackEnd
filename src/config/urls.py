@@ -16,6 +16,8 @@ from rest_framework_simplejwt.views import (
 )
 
 from core.adapters.utils.git_callback import github_callback
+from core.adapters.utils.git_redirect import github_login
+from core.adapters.utils.git_repos import get_git_repos
 from core.auth_user.views import TokenObtainPairView
 
 
@@ -33,6 +35,9 @@ urlpatterns = [
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/admin/', django_admin.site.urls),
     path("auth/github/callback", github_callback),
+    path("auth/github/login", github_login),
+    path("api/git/repos", get_git_repos),
+
     path('', lambda request: redirect('api/', permanent=True)),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 

@@ -179,3 +179,5 @@ DOKKU_SSH_KEY = os.getenv('DOKKU_SSH_KEY')
 DOKKU_SSH_USERNAME = os.getenv('DOKKU_SSH_USERNAME', 'dokku')
 DOKKU_SSH_HOST = os.getenv('DOKKU_SSH_HOST', '127.0.0.1')
 DOKKU_SSH_PORT = int(os.getenv('DOKKU_SSH_PORT', 22))  # noqa: PLW1508
+GITHUB_REDIRECT_URI = os.getenv('GITHUB_REDIRECT_URI', 'http://localhost:8000/auth/github/callback')
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')  # noqa: PLW1508
