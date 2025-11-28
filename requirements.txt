@@ -36,7 +36,8 @@ paramiko==4.0.0
 prompt-toolkit==3.0.52
 psycopg2-binary==2.9.11
 pycparser==2.23; platform_python_implementation != "PyPy" and python_version >= "3.9" and implementation_name != "PyPy"
-pyjwt==2.10.1
+pygithub==2.8.1
+pyjwt[crypto]==2.10.1
 pynacl==1.6.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.1
@@ -47,6 +48,7 @@ rpds-py==0.29.0
 ruff==0.14.6
 six==1.17.0
 sqlparse==0.5.3
+typing-extensions==4.15.0
 tzdata==2025.2; sys_platform == "win32" or python_version >= "3.9"
 uritemplate==4.2.0
 urllib3==2.5.0

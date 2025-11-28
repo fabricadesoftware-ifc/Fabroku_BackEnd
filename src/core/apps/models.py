@@ -19,3 +19,29 @@ class App(models.Model):
     domain = models.CharField(max_length=255, null=True, blank=True)
     port = models.IntegerField(null=True, blank=True)
     variables = models.JSONField(default=dict)
+
+    def __str__(self):
+        return self.name
+    class Meta:
+        db_table = 'apps'
+        verbose_name = 'App'
+        verbose_name_plural = 'Apps'
+
+
+class Database(models.Model):
+    name = models.CharField(max_length=255)
+    user = models.CharField(max_length=255)
+    password = models.CharField(max_length=255)
+    host = models.CharField(max_length=255)
+    port = models.IntegerField()
+    app = models.ForeignKey(App, on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        db_table = 'databases'
+        verbose_name = 'Database'
+        verbose_name_plural = 'Databases'

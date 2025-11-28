@@ -24,6 +24,7 @@ class User(AbstractUser):
     password_reset_token_created = models.DateTimeField(
         _("Password Reset Token Created"), blank=True, null=True
     )
+    git_token = models.CharField(max_length=255, null=True, blank=True)
 
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = ['name']
