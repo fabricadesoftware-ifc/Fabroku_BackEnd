@@ -1,7 +1,10 @@
 # views.py
-from django.shortcuts import redirect
 from django.conf import settings
+from django.shortcuts import redirect
+from rest_framework.decorators import api_view
 
+
+@api_view(['GET'])
 def github_login(request):
     client_id = settings.GITHUB_CLIENT_ID
     redirect_uri = settings.GITHUB_REDIRECT_URI

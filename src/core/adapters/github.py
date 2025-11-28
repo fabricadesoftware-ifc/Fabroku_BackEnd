@@ -1,5 +1,6 @@
-from core.adapters.git_mixins import GitRepoMixin
 from django.conf import settings
+
+from core.adapters.git_mixins import GitRepoMixin
 
 
 class GitAdapter(GitRepoMixin):
