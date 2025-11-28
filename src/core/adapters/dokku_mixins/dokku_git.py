@@ -33,3 +33,21 @@ class DokkuGitMixin():
             return "Failed to set Git remote."
 
         return "Git remote set successfully."
+
+    def remove_git_remote(self, app_name: str) -> str:
+        """Remove o repositório Git remoto da aplicação Dokku."""
+        if not self.exists_app(app_name):
+            return "Application not found."
+
+        if not self._run_command(f"dokku git:remote-remove {app_name}"):
+            return "Failed to remove Git remote."
+
+        return "Git remote removed successfully."
+
+    def generate_git_deploy_key(self) -> str:
+        """Gera uma chave de deploy Git para a aplicação Dokku."""
+
+        if not self._run_command("dokku git:generate-deploy-key"):
+            return "Failed to generate Git deploy key."
+
+        return "Git deploy key generated successfully."

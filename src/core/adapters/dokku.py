@@ -1,6 +1,6 @@
 from django.conf import settings
 
-from core.adapters.mixins import DokkuAppsMixin, DokkuConfigMixin, DokkuGitMixin, DokkuPostgresMixin
+from core.adapters.dokku_mixins import DokkuAppsMixin, DokkuConfigMixin, DokkuGitMixin, DokkuPostgresMixin
 from core.adapters.ssh import SSHAdapter
 
 
