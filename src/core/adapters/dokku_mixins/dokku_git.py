@@ -10,7 +10,7 @@ class DokkuGitMixin():
         ...
 
     @abstractmethod
-    def exists_app(self, app_name: str) -> bool:
+    def exists_app(self, app_name: str) -> str:
         """Verifica se uma aplicação existe."""
         ...
 

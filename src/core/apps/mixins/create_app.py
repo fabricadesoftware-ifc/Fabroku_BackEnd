@@ -17,10 +17,9 @@ class CreateAppMixin:
         dokku_adapter.set_git_remote(app_name=name, git_url=git)
         repo_name = git.split(".com/")[-1].replace(".git", "")
         deploy_key = dokku_adapter.generate_git_deploy_key()
-        github_adapter.add_deploy_key(dokku_key=deploy_key, repo_name=repo_name, user_id=user.id)
+        github_adapter.add_deploy_key(dokku_key=deploy_key, repo_name=repo_name, user=user)
 
         if env_vars is not None:
             dokku_adapter.set_config(app_name=name, env_vars=env_vars or {})
-
 
         return App.objects.create(name=name, git=git, project_id=project_id)
