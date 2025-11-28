@@ -14,7 +14,7 @@ class DokkuPostgresMixin:
         return self._run_command(f"dokku postgres:create {db_name}")
 
     def delete_database(self, db_name: str) -> bool:
-        """Deleta um banco de dados PostgreSQL do Dokku (força a deleção)."""
+        """Deleta um banco de dados PostgreSQL do Dokku."""
         return self._run_command(f"dokku postgres:destroy {db_name} --force")
 
     def link_database(self, db_name: str, app_name: str) -> bool:

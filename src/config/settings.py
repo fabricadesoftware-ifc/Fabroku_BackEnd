@@ -171,3 +171,7 @@ AUTH_USER_MODEL = 'auth_user.User'
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+GITHUB_CLIENT_ID = os.getenv('GITHUB_CLIENT_ID')
+GITHUB_CLIENT_SECRET = os.getenv('GITHUB_CLIENT_SECRET')
+#TODO: Adicionar outras configurações conforme necessário faslar com o eduardo amanhã

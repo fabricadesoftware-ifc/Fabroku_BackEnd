@@ -22,7 +22,6 @@ def github_callback(request):
     token_json = token_res.json()
     access_token = token_json.get("access_token")
 
-    # salve no banco vinculado ao usuário logado
     user = request.user
     user.github_token = access_token
     user.save()
