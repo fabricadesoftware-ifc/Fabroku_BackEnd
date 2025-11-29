@@ -18,6 +18,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.getenv('SECRET_KEY')
 
+CELERY_BROKER_URL = os.getenv("BROKER_URL", 'amqp://paineluser:senha123@172.21.238.11:5672/painel')
+
+BROKER_URL = CELERY_BROKER_URL
+
+
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '*').split(',')

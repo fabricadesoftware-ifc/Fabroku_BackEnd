@@ -1,3 +1,4 @@
+import re
 from typing import cast
 
 from celery import Task, shared_task
@@ -22,7 +23,7 @@ class CreateAppMixin:
 
         app, user = CreateAppMixin._get_instances(app_id, user_id)
 
-        dokku_app_name = f"{app.name}_{app.project.name}"
+        dokku_app_name = CreateAppMixin.slugify_dokku(f"{app.name}-{app.project.id}")
         dokku_adapter = DokkuAdapter()
         github_adapter = GitHubAdapter()
 
@@ -103,3 +104,12 @@ class CreateAppMixin:
                 'current': 90, 'total': 100, 'status': 'Aplicando variáveis de ambiente...'
             })
             adapter.set_config(app_name=dokku_app_name, env_vars=env_vars)
+
+    @staticmethod
+    def slugify_dokku(name: str) -> str:
+
+        name = name.lower()
+        name = re.sub(r'[^a-z0-9\-]', '-', name)  # Mantém apenas a-z, 0-9 e hífen
+        name = re.sub(r'-+', '-', name)          # Evita hífens duplos
+        name = name.strip('-')                   # Remove hífens do começo/fim
+        return name
