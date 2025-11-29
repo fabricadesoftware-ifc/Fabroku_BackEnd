@@ -181,3 +181,11 @@ DOKKU_SSH_HOST = os.getenv('DOKKU_SSH_HOST', '127.0.0.1')
 DOKKU_SSH_PORT = int(os.getenv('DOKKU_SSH_PORT', 22))  # noqa: PLW1508
 GITHUB_REDIRECT_URI = os.getenv('GITHUB_REDIRECT_URI', 'http://localhost:8000/auth/github/callback')
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')  # noqa: PLW1508
+
+CELERY_TIMEZONE = "America/Sao_Paulo"
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 30 * 60
+CELERY_RESULT_BACKEND = "rpc://"
+CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+
+BROKER_URL = os.getenv("BROKER_URL", "amqp://paineluser:senha123@172.21.238.11:5672/painel")
