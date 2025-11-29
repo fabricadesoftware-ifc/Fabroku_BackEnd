@@ -29,7 +29,7 @@ GET /api/logs/
 
 ### Logs por aplicação
 ```http
-GET /api/logs/by-app/{app_id}/
+GET /api/logs/?app_id={app_id}
 ```
 
 Query params:
@@ -41,12 +41,12 @@ Query params:
 
 ### Logs por task (para acompanhar uma operação específica)
 ```http
-GET /api/logs/by-task/{task_id}/
+GET /api/logs/?task_id={task_id}
 ```
 
 ### Streaming/Polling de logs
 ```http
-GET /api/logs/stream/{task_id}/?after={last_log_id}
+GET /api/logs/stream/{task_id}/
 ```
 
 Resposta:
@@ -59,32 +59,6 @@ Resposta:
 }
 ```
 
-### Resumo de uma operação
-```http
-GET /api/logs/summary/{task_id}/
-```
-
-Resposta:
-```json
-{
-    "task_id": "abc123",
-    "app_id": 1,
-    "app_name": "meu-app",
-    "total_logs": 25,
-    "current_progress": 75,
-    "last_message": "Configurando Git...",
-    "last_level": "INFO",
-    "started_at": "2024-01-01T10:00:00Z",
-    "last_update": "2024-01-01T10:05:00Z",
-    "has_errors": false,
-    "is_complete": false
-}
-```
-
-### Limpar logs de uma aplicação
-```http
-DELETE /api/logs/clear/{app_id}/
-```
 
 ## Exemplo de Uso no Frontend (React)
 

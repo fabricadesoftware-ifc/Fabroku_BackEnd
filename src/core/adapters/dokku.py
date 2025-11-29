@@ -4,13 +4,22 @@ from core.adapters.dokku_mixins import (
     DokkuAppsMixin,
     DokkuConfigMixin,
     DokkuGitMixin,
+    DokkuLetsencryptMixin,
     DokkuPortsMixin,
     DokkuPostgresMixin,
 )
 from core.adapters.ssh import SSHAdapter
 
 
-class DokkuAdapter(SSHAdapter, DokkuAppsMixin, DokkuConfigMixin, DokkuGitMixin, DokkuPostgresMixin, DokkuPortsMixin):
+class DokkuAdapter(
+    SSHAdapter,
+    DokkuAppsMixin,
+    DokkuConfigMixin,
+    DokkuGitMixin,
+    DokkuPostgresMixin,
+    DokkuPortsMixin,
+    DokkuLetsencryptMixin
+    ):
     def __init__(
         self,
     ):

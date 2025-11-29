@@ -13,6 +13,16 @@ class CreateAppMixin:
     """
     Mixin para criação de aplicações.
     Contém a task principal e métodos auxiliares estáticos para organização.
+
+    Distribuição de progresso (baseado no tempo real de cada etapa):
+    - 0-5%:   Inicialização
+    - 5-10%:  Verificar existência do app
+    - 10-15%: Criar container Dokku
+    - 15-25%: Variáveis de ambiente
+    - 25-40%: Verificar GitHub + deploy keys
+    - 40-85%: Git sync (etapa mais demorada)
+    - 85-95%: Let's Encrypt
+    - 95-100%: Finalização
     """
 
     @shared_task(bind=True)
@@ -31,11 +41,13 @@ class CreateAppMixin:
 
         # Inicializa o logger
         logger = AppLogManager(app, task_id)
-        logger.info('Iniciando criação da aplicação...', category=LogCategory.CREATE, progress=5)
+        logger.info('Iniciando criação da aplicação...', category=LogCategory.CREATE, progress=2)
 
         dokku_app_name = slugify_dokku(f'{app.name}-{app.project.id}')
         dokku_adapter = DokkuAdapter()
         github_adapter = GitHubAdapter()
+        app.name_dokku = dokku_app_name
+        app.save(update_fields=['name_dokku'])
 
         try:
             if CreateAppMixin._ensure_dokku_app(task, dokku_adapter, app, dokku_app_name, logger):
@@ -50,8 +62,9 @@ class CreateAppMixin:
 
             CreateAppMixin._configure_git(task, dokku_adapter, dokku_app_name, app.git, logger)
 
+            CreateAppMixin._set_letsencrypt(self, app, dokku_app_name, logger)
+
             app.status = 'RUNNING'
-            app.name_dokku = dokku_app_name
             app.save()
 
             logger.success(f'Aplicação {app.name} criada com sucesso!', category=LogCategory.CREATE, progress=100)
@@ -86,74 +99,22 @@ class CreateAppMixin:
     ) -> bool:
         """Cria o container se não existir. Retorna True se já existia."""
         task.update_state(
-            state='PROGRESS', meta={'current': 10, 'total': 100, 'status': 'Verificando existência do app...'}
+            state='PROGRESS', meta={'current': 5, 'total': 100, 'status': 'Verificando existência do app...'}
         )
-        logger.info('Verificando se a aplicação já existe no Dokku...', category=LogCategory.CREATE, progress=10)
+        logger.info('Verificando se a aplicação já existe no Dokku...', category=LogCategory.CREATE, progress=5)
 
         if adapter.exists_app(dokku_app_name):
             return True
 
         task.update_state(
-            state='PROGRESS', meta={'current': 30, 'total': 100, 'status': f'Criando container {dokku_app_name}...'}
+            state='PROGRESS', meta={'current': 10, 'total': 100, 'status': f'Criando container {dokku_app_name}...'}
         )
-        logger.info(f'Criando container {dokku_app_name}...', category=LogCategory.CREATE, progress=30)
+        logger.info(f'Criando container {dokku_app_name}...', category=LogCategory.CREATE, progress=10)
 
         output = adapter.create_app(app_name=dokku_app_name)
-        logger.dokku(output, command=f'dokku apps:create {dokku_app_name}', category=LogCategory.CREATE, progress=35)
+        logger.dokku(output, command=f'dokku apps:create {dokku_app_name}', category=LogCategory.CREATE, progress=15)
 
         return False
-
-    @staticmethod
-    def _configure_git(task: Task, adapter: DokkuAdapter, dokku_app_name: str, git_url: str, logger: AppLogManager):
-        """Configura o remote do Git no Dokku."""
-        task.update_state(
-            state='PROGRESS', meta={'current': 90, 'total': 100, 'status': 'Configurando repositório Git...'}
-        )
-        logger.info('Configurando repositório Git no Dokku...', category=LogCategory.GIT, progress=90)
-
-        output = adapter.set_git_remote(app_name=dokku_app_name, git_url=git_url)
-        logger.dokku(
-            output, command=f'dokku git:sync {dokku_app_name} {git_url}', category=LogCategory.GIT, progress=95
-        )
-
-    @staticmethod
-    def _handle_deploy_keys(
-        task: Task, d_adapter: DokkuAdapter, gh_adapter: GitHubAdapter, user: User, git_url: str, logger: AppLogManager
-    ):
-        """Verifica permissões e gera chaves SSH se necessário."""
-        task.update_state(
-            state='PROGRESS', meta={'current': 70, 'total': 100, 'status': 'Verificando permissões do GitHub...'}
-        )
-        logger.info('Verificando permissões do repositório GitHub...', category=LogCategory.GIT, progress=70)
-
-        repo_name = git_url.rsplit('.com/', maxsplit=1)[-1].replace('.git', '')
-
-        user_git_repos_list = gh_adapter.list_user_repos(user_id=user.id)  # type: ignore
-        user_git_repos = {repo.full_name: {'private': repo.private} for repo in user_git_repos_list}
-
-        if repo_name in user_git_repos and user_git_repos[repo_name].get('private', False):
-            task.update_state(
-                state='PROGRESS', meta={'current': 75, 'total': 100, 'status': 'Gerando chaves de acesso seguro...'}
-            )
-            logger.info(
-                f'Repositório {repo_name} é privado. Gerando chave de deploy...', category=LogCategory.GIT, progress=75
-            )
-
-            deploy_key = d_adapter.generate_git_deploy_key()
-            logger.dokku(
-                f'Chave gerada: {deploy_key[:50]}...', command='ssh-keygen', category=LogCategory.GIT, progress=78
-            )
-
-            gh_adapter.add_deploy_key(dokku_key=deploy_key, repo_name=repo_name, user_id=user.id)  # type: ignore
-            logger.success(
-                f'Chave de deploy adicionada ao repositório {repo_name}', category=LogCategory.GIT, progress=85
-            )
-        else:
-            logger.info(
-                f'Repositório {repo_name} é público. Chave de deploy não necessária.',
-                category=LogCategory.GIT,
-                progress=85,
-            )
 
     @staticmethod
     def _apply_env_vars(
@@ -162,20 +123,82 @@ class CreateAppMixin:
         """Aplica variáveis de ambiente se fornecidas."""
         if env_vars:
             task.update_state(
-                state='PROGRESS', meta={'current': 50, 'total': 100, 'status': 'Aplicando variáveis de ambiente...'}
+                state='PROGRESS', meta={'current': 18, 'total': 100, 'status': 'Aplicando variáveis de ambiente...'}
             )
-            logger.info(f'Aplicando {len(env_vars)} variáveis de ambiente...', category=LogCategory.CONFIG, progress=50)
+            logger.info(f'Aplicando {len(env_vars)} variáveis de ambiente...', category=LogCategory.CONFIG, progress=18)
 
             output = adapter.set_config(app_name=dokku_app_name, env_vars=env_vars)
 
-            # Log das variáveis (sem mostrar valores sensíveis)
             var_names = ', '.join(env_vars.keys())
             logger.dokku(
                 output,
                 command=f'dokku config:set {dokku_app_name} [vars: {var_names}]',
                 category=LogCategory.CONFIG,
-                progress=60,
+                progress=22,
             )
-            logger.success('Variáveis de ambiente aplicadas com sucesso', category=LogCategory.CONFIG, progress=65)
+            logger.success('Variáveis de ambiente aplicadas com sucesso', category=LogCategory.CONFIG, progress=25)
         else:
-            logger.info('Nenhuma variável de ambiente para configurar', category=LogCategory.CONFIG, progress=65)
+            logger.info('Nenhuma variável de ambiente para configurar', category=LogCategory.CONFIG, progress=25)
+
+    @staticmethod
+    def _handle_deploy_keys(
+        task: Task, d_adapter: DokkuAdapter, gh_adapter: GitHubAdapter, user: User, git_url: str, logger: AppLogManager
+    ):
+        """Verifica permissões e gera chaves SSH se necessário."""
+        task.update_state(
+            state='PROGRESS', meta={'current': 28, 'total': 100, 'status': 'Verificando permissões do GitHub...'}
+        )
+        logger.info('Verificando permissões do repositório GitHub...', category=LogCategory.GIT, progress=28)
+
+        repo_name = git_url.rsplit('.com/', maxsplit=1)[-1].replace('.git', '')  # type: ignore
+
+        user_git_repos_list = gh_adapter.list_user_repos(user_id=user.id)  # type: ignore
+        user_git_repos = {repo.full_name: {'private': repo.private} for repo in user_git_repos_list}
+
+        if repo_name in user_git_repos and user_git_repos[repo_name].get('private', False):
+            task.update_state(
+                state='PROGRESS', meta={'current': 32, 'total': 100, 'status': 'Gerando chaves de acesso seguro...'}
+            )
+            logger.info(
+                f'Repositório {repo_name} é privado. Gerando chave de deploy...', category=LogCategory.GIT, progress=32
+            )
+
+            deploy_key = d_adapter.generate_git_deploy_key()
+            logger.dokku(
+                f'Chave gerada: {deploy_key[:50]}...', command='ssh-keygen', category=LogCategory.GIT, progress=35
+            )
+
+            gh_adapter.add_deploy_key(dokku_key=deploy_key, repo_name=repo_name, user_id=user.id)  # type: ignore
+            logger.success(
+                f'Chave de deploy adicionada ao repositório {repo_name}', category=LogCategory.GIT, progress=40
+            )
+        else:
+            logger.info(
+                f'Repositório {repo_name} é público. Chave de deploy não necessária.',
+                category=LogCategory.GIT,
+                progress=40,
+            )
+
+    @staticmethod
+    def _configure_git(task: Task, adapter: DokkuAdapter, dokku_app_name: str, git_url: str, logger: AppLogManager):
+        """Configura o remote do Git no Dokku. Etapa mais demorada."""
+        task.update_state(
+            state='PROGRESS', meta={'current': 45, 'total': 100, 'status': 'Sincronizando repositório Git...'}
+        )
+        logger.info('Iniciando sincronização do repositório Git...', category=LogCategory.GIT, progress=45)
+        logger.info('⏳ Esta etapa pode demorar alguns minutos...', category=LogCategory.GIT, progress=50)
+
+        output = adapter.set_git_remote(app_name=dokku_app_name, git_url=git_url)
+        logger.dokku(
+            output, command=f'dokku git:sync {dokku_app_name} {git_url}', category=LogCategory.GIT, progress=85
+        )
+
+    def _set_letsencrypt(self, app: App, dokku_app_name: str, logger: AppLogManager):
+        """Configura Let's Encrypt para a aplicação."""
+        dokku_adapter = DokkuAdapter()
+
+        logger.info("Configurando certificado SSL (Let's Encrypt)...", category=LogCategory.SSL, progress=88)
+        output = dokku_adapter.enable_letsencrypt(app_name=dokku_app_name)
+        logger.dokku(
+            output, command=f'dokku letsencrypt:enable {dokku_app_name}', category=LogCategory.SSL, progress=95
+        )

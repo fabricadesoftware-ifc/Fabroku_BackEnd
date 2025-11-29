@@ -1,4 +1,5 @@
 from celery.result import AsyncResult
+from drf_spectacular.utils import extend_schema
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
@@ -7,6 +8,7 @@ from .models import App
 from .serializers import AppSerializer
 
 
+@extend_schema(tags=['apps'])
 class AppViewSet(ModelViewSet):
     queryset = App.objects.all()
     serializer_class = AppSerializer

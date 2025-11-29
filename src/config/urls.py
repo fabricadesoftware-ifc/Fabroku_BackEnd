@@ -11,13 +11,11 @@ from drf_spectacular.views import (
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
-from rest_framework_simplejwt.views import (
-    TokenRefreshView,
-)
 
 from core.adapters.utils.git_callback import github_callback
 from core.adapters.utils.git_redirect import github_login
 from core.adapters.utils.git_repos import get_git_repos
+from core.auth_user.views import CustomTokenRefreshView
 
 
 @api_view(['GET'])
@@ -36,7 +34,7 @@ urlpatterns = [
     path('api/apps/', include('core.apps.urls')),
     path('api/projects/', include('core.project.urls')),
     path('api/logs/', include('core.logs.urls')),
-    path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('api/token/refresh/', CustomTokenRefreshView.as_view(), name='token_refresh'),
     path('api/admin/', django_admin.site.urls),
     path('auth/github/callback', github_callback),
     path('auth/github/login', github_login),

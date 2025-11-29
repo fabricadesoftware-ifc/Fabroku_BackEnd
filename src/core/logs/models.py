@@ -77,13 +77,19 @@ class AppLogManager:
 
     def _log(
         self,
-        message: str,
+        message: str | None,
         level: str = LogLevel.INFO,
         category: str = LogCategory.SYSTEM,
         progress: int = 0,
         metadata: dict | None = None,
     ) -> AppLog:
         """Cria um registro de log."""
+        # Garante que message nunca seja None
+        if message is None:
+            message = '(sem saída)'
+        elif not message.strip():
+            message = '(saída vazia)'
+
         return AppLog.objects.create(
             app=self.app,
             task_id=self.task_id,
@@ -94,22 +100,22 @@ class AppLogManager:
             metadata=metadata or {},
         )
 
-    def debug(self, message: str, **kwargs) -> AppLog:
+    def debug(self, message: str | None, **kwargs) -> AppLog:
         return self._log(message, level=LogLevel.DEBUG, **kwargs)
 
-    def info(self, message: str, **kwargs) -> AppLog:
+    def info(self, message: str | None, **kwargs) -> AppLog:
         return self._log(message, level=LogLevel.INFO, **kwargs)
 
-    def warning(self, message: str, **kwargs) -> AppLog:
+    def warning(self, message: str | None, **kwargs) -> AppLog:
         return self._log(message, level=LogLevel.WARNING, **kwargs)
 
-    def error(self, message: str, **kwargs) -> AppLog:
+    def error(self, message: str | None, **kwargs) -> AppLog:
         return self._log(message, level=LogLevel.ERROR, **kwargs)
 
-    def success(self, message: str, **kwargs) -> AppLog:
+    def success(self, message: str | None, **kwargs) -> AppLog:
         return self._log(message, level=LogLevel.SUCCESS, **kwargs)
 
-    def dokku(self, output: str, command: str = '', **kwargs) -> AppLog:
+    def dokku(self, output: str | None, command: str = '', **kwargs) -> AppLog:
         """Log específico para output de comandos Dokku."""
         metadata = kwargs.pop('metadata', {})
         metadata['command'] = command

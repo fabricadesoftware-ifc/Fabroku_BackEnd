@@ -2,6 +2,7 @@ from drf_spectacular.utils import extend_schema
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
+from rest_framework_simplejwt.views import TokenRefreshView
 
 # from config.permission import CustomUserPermission
 from .models import User
@@ -29,3 +30,11 @@ class UserViewSet(ModelViewSet):
         user = request.user
         serializer = UserRetrieveSerializer(user)
         return Response(serializer.data)
+
+
+@extend_schema(tags=['auth'])
+class CustomTokenRefreshView(TokenRefreshView):
+    """
+    View para refresh de tokens JWT.
+    """
+    pass
