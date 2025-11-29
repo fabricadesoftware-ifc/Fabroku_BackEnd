@@ -18,6 +18,6 @@ def authentication_root(request, format=None):
 
 
 urlpatterns = [
-     path('', include(router.urls)),
-     path('', authentication_root, name='app-root'),
+    path('', include(router.urls)),
+    path('', authentication_root, name='app-root'),
 ]

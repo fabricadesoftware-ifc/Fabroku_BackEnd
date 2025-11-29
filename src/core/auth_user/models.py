@@ -15,27 +15,23 @@ def remove_accent(text):
 
 class User(AbstractUser):
     username = None
-    email = models.EmailField(_("e-mail address"), unique=True, db_index=True)
+    email = models.EmailField(_('e-mail address'), unique=True, db_index=True)
     avatar_url = models.URLField(max_length=500, null=True, blank=True)
     name = models.CharField(max_length=255, null=True, db_index=True)
-    password_reset_token = models.CharField(
-        _("Password Reset Token"), max_length=255, blank=True, null=True
-    )
-    password_reset_token_created = models.DateTimeField(
-        _("Password Reset Token Created"), blank=True, null=True
-    )
+    password_reset_token = models.CharField(_('Password Reset Token'), max_length=255, blank=True, null=True)
+    password_reset_token_created = models.DateTimeField(_('Password Reset Token Created'), blank=True, null=True)
     git_token = models.CharField(max_length=255, null=True, blank=True)
 
-    USERNAME_FIELD = "email"
+    USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['name']
-    EMAIL_FIELD = "email"
+    EMAIL_FIELD = 'email'
 
     objects = CustomUserManager()  # type: ignore
 
     def __str__(self):
-        return self.email + " - " + (self.name or "No Name")
+        return self.email + ' - ' + (self.name or 'No Name')
 
     class Meta:
-        verbose_name = "Usuário"
-        verbose_name_plural = "Usuários"
-        ordering = ["-date_joined"]
+        verbose_name = 'Usuário'
+        verbose_name_plural = 'Usuários'
+        ordering = ['-date_joined']

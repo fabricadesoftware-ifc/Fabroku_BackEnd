@@ -9,7 +9,7 @@ from .models import User
 from .serializers import CustomTokenObtainPairSerializer, UserRetrieveSerializer, UserSerializer
 
 
-@extend_schema(tags=["users"])
+@extend_schema(tags=['users'])
 class UserViewSet(ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
@@ -27,6 +27,6 @@ class UserViewSet(ModelViewSet):
         return Response(serializer.data)
 
 
-@extend_schema(tags=["auth"])
+@extend_schema(tags=['auth'])
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer

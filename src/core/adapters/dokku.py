@@ -1,11 +1,19 @@
 from django.conf import settings
 
-from core.adapters.dokku_mixins import DokkuAppsMixin, DokkuConfigMixin, DokkuGitMixin, DokkuPostgresMixin
+from core.adapters.dokku_mixins import (
+    DokkuAppsMixin,
+    DokkuConfigMixin,
+    DokkuGitMixin,
+    DokkuPortsMixin,
+    DokkuPostgresMixin,
+)
 from core.adapters.ssh import SSHAdapter
 
 
-class DokkuAdapter(SSHAdapter, DokkuAppsMixin, DokkuConfigMixin, DokkuGitMixin, DokkuPostgresMixin):
-    def __init__(self, ):
+class DokkuAdapter(SSHAdapter, DokkuAppsMixin, DokkuConfigMixin, DokkuGitMixin, DokkuPostgresMixin, DokkuPortsMixin):
+    def __init__(
+        self,
+    ):
         self.host = settings.DOKKU_SSH_HOST
         self.username = settings.DOKKU_SSH_USERNAME
         self.ssh_key_path = settings.DOKKU_SSH_KEY

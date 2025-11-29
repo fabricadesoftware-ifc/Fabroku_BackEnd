@@ -16,13 +16,13 @@ class DeleteAppMixin:
         try:
             app = App.objects.get(id=app_id)
         except App.DoesNotExist:
-            return {"status": "deleted", "message": "App already deleted from DB"}
+            return {'status': 'deleted', 'message': 'App already deleted from DB'}
 
         task.update_state(state='PROGRESS', meta={'status': f'Removendo container {app.name}...'})
 
         dokku_adapter = DokkuAdapter()
         try:
-            dokku_adapter.delete_app(app_name=f"{app.name}_{app.project.name}")
+            dokku_adapter.delete_app(app_name=f'{app.name}_{app.project.name}')
 
         except Exception:
             # TODO: fazer erro
@@ -30,4 +30,4 @@ class DeleteAppMixin:
 
         app.delete()
 
-        return {"status": "deleted", "app_id": app_id}
+        return {'status': 'deleted', 'app_id': app_id}

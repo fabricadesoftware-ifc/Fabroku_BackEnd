@@ -19,8 +19,9 @@ class AppSerializer(serializers.ModelSerializer):
             'port',
             'variables',
             'task_id',
+            'name_dokku',
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at', 'status', 'domain', 'port']
+        read_only_fields = ['id', 'created_at', 'updated_at', 'status', 'domain', 'port', 'task_id', 'name_dokku']
 
     def create(self, validated_data):
         user = self.context['request'].user

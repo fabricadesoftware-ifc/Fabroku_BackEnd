@@ -3,7 +3,6 @@ from typing import Dict
 
 
 class DokkuConfigMixin:
-
     @abstractmethod
     def _run_command(self, command: str) -> str:
         """Executa um comando no servidor Dokku."""
@@ -25,4 +24,4 @@ class DokkuConfigMixin:
 
     def show_config(self, app_name: str) -> str:
         """Exibe todas as configurações de uma aplicação."""
-        return self._run_command(f"config:show {app_name}")
+        return self._run_command(f'config:show {app_name}')

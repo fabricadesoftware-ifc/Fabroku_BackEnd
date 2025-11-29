@@ -1,7 +1,7 @@
 from abc import abstractmethod
 
 
-class DokkuGitMixin():
+class DokkuGitMixin:
     """Mixin que fornece métodos para integração Git com Dokku."""
 
     @abstractmethod
@@ -14,14 +14,14 @@ class DokkuGitMixin():
         """Verifica se uma aplicação existe."""
         ...
 
-    def sync_git(self, app_name: str, git_url: str, branch: str = "main") -> str:
+    def sync_git(self, app_name: str, git_url: str, branch: str = 'main') -> str:
         """Sincroniza repositório Git com aplicação Dokku."""
         if not self.exists_app(app_name):
-            return "Application not found."
+            return 'Application not found.'
 
-        command_output = self._run_command(f"git:sync --build {app_name} {git_url} {branch} --quiet")
-        if "Failed to execute command" in command_output:
-            return "Failed to sync Git repository and deploy."
+        command_output = self._run_command(f'git:sync --build {app_name} {git_url} {branch} --quiet')
+        if 'Failed to execute command' in command_output:
+            return 'Failed to sync Git repository and deploy.'
 
         return command_output
 
@@ -32,26 +32,26 @@ class DokkuGitMixin():
     def remove_git_remote(self, app_name: str) -> str:
         """Remove o repositório Git remoto da aplicação Dokku."""
         if not self.exists_app(app_name):
-            return "Application not found."
+            return 'Application not found.'
 
-        if not self._run_command(f"git:remote-remove {app_name}"):
-            return "Failed to remove Git remote."
+        if not self._run_command(f'git:remote-remove {app_name}'):
+            return 'Failed to remove Git remote.'
 
-        return "Git remote removed successfully."
+        return 'Git remote removed successfully.'
 
     def generate_git_deploy_key(self) -> str:
         """Gera uma chave de deploy Git para a aplicação Dokku."""
 
-        if not self._run_command("git:generate-deploy-key"):
-            return "Failed to generate Git deploy key."
+        if not self._run_command('git:generate-deploy-key'):
+            return 'Failed to generate Git deploy key.'
 
-        return "Git deploy key generated successfully."
+        return 'Git deploy key generated successfully.'
 
     def get_git_deploy_key(self) -> str:
         """Obtém a chave de deploy Git da aplicação Dokku."""
 
-        deploy_key = self._run_command("git:deploy-key")
+        deploy_key = self._run_command('git:deploy-key')
         if not deploy_key:
-            return "Failed to get Git deploy key."
+            return 'Failed to get Git deploy key.'
 
         return str(deploy_key)

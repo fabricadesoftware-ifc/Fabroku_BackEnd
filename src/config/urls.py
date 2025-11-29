@@ -38,17 +38,16 @@ urlpatterns = [
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/admin/', django_admin.site.urls),
-    path("auth/github/callback", github_callback),
-    path("auth/github/login", github_login),
-    path("api/git/repos", get_git_repos),
-
+    path('auth/github/callback', github_callback),
+    path('auth/github/login', github_login),
+    path('api/git/repos', get_git_repos),
     path('', lambda request: redirect('api/', permanent=True)),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 
 
 if settings.DEBUG:
     urlpatterns += [
-        path("api/swagger/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
-        path("api/redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
-        path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
+        path('api/swagger/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
+        path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
+        path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     ]

@@ -11,20 +11,22 @@ class DokkuLetsencryptMixin:
 
     def active_letsencrypt(self, app_name: str) -> str:
         """Activate Let's Encrypt for a Dokku application."""
-        return self.run_command(f"letsencrypt:active {app_name}")
+        return self.run_command(f'letsencrypt:active {app_name}')
 
     def disable_letsencrypt(self, app_name: str) -> str:
         """Deactivate Let's Encrypt for a Dokku application."""
-        return self.run_command(f"letsencrypt:disable {app_name}")
+        return self.run_command(f'letsencrypt:disable {app_name}')
 
     def enable_letsencrypt(self) -> str:
         """Enable Let's Encrypt globally on Dokku."""
-        return self.run_command("letsencrypt:enable")
+        return self.run_command('letsencrypt:enable')
 
     def set_property_letsencrypt(self, property_name: str, value: str) -> str:
         """Set a Let's Encrypt property."""
-        return self.run_command(f"letsencrypt:set {property_name} {value}")
+        return self.run_command(f'letsencrypt:set {property_name} {value}')
 
-    def list_letsencrypt(self,) -> str:
+    def list_letsencrypt(
+        self,
+    ) -> str:
         """list Let's Encrypt information for a Dokku application."""
-        return self.run_command("letsencrypt:list")
+        return self.run_command('letsencrypt:list')

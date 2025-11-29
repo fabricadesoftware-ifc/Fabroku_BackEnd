@@ -10,9 +10,9 @@ def github_login(request):
     redirect_uri = settings.GITHUB_REDIRECT_URI
 
     url = (
-        "https://github.com/login/oauth/authorize"
-        f"?client_id={client_id}"
-        f"&redirect_uri={redirect_uri}"
-        "&scope=repo%20user:email"
+        'https://github.com/login/oauth/authorize'
+        f'?client_id={client_id}'
+        f'&redirect_uri={redirect_uri}'
+        '&scope=repo%20user:email'
     )
     return redirect(url)

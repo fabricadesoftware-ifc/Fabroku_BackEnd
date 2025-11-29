@@ -4,13 +4,13 @@ from core.project.models import Project
 
 
 class App(models.Model):
-
     SATATUS_CHOICES = [
         ('running', 'Running'),
         ('stopped', 'Stopped'),
         ('error', 'Error'),
     ]
     name = models.CharField(max_length=255)
+    name_dokku = models.CharField(max_length=255, unique=True)
     git = models.URLField()
     project = models.ForeignKey(Project, on_delete=models.CASCADE)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -23,6 +23,7 @@ class App(models.Model):
 
     def __str__(self):
         return self.name
+
     class Meta:
         db_table = 'apps'
         verbose_name = 'App'
@@ -34,7 +35,7 @@ class Service(models.Model):
         ('postgres', 'Postgres'),
         ('rabbitmq', 'RabbitMQ'),
         ('redis', 'Redis'),
-        ]
+    ]
 
     name = models.CharField(max_length=255)
     user = models.CharField(max_length=255)

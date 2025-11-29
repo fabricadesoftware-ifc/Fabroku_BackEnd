@@ -10,13 +10,15 @@ class UpdateAppMixin:
     """Mixin para atualização de aplicações via Celery."""
 
     @shared_task(bind=True)
-    def update_app(self, app_id: int, name: str | None = None, git: str | None = None, env_vars: dict | None = None) -> dict:  # noqa: E501
+    def update_app(
+        self, app_id: int, name: str | None = None, git: str | None = None, env_vars: dict | None = None
+    ) -> dict:  # noqa: E501
         task = cast(Task, self)
 
         try:
             app = App.objects.get(id=app_id)
         except App.DoesNotExist:
-            return {"status": "error", "message": "App not found"}
+            return {'status': 'error', 'message': 'App not found'}
 
         dokku_adapter = DokkuAdapter()
 
@@ -38,4 +40,4 @@ class UpdateAppMixin:
             app.variables = env_vars
             app.save()
 
-        return {"status": "updated", "app_id": app.id}  # type: ignore
+        return {'status': 'updated', 'app_id': app.id}  # type: ignore
