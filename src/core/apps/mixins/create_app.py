@@ -30,11 +30,11 @@ class CreateAppMixin:
         if CreateAppMixin._ensure_dokku_app(task, dokku_adapter, app, dokku_app_name):
             return {'status': 'already_exists', 'app_id': app.id}  # type: ignore
 
-        CreateAppMixin._configure_git(task, dokku_adapter, dokku_app_name, app.git)
+        CreateAppMixin._apply_env_vars(task, dokku_adapter, dokku_app_name, env_vars)
 
         CreateAppMixin._handle_deploy_keys(task, dokku_adapter, github_adapter, user, app.git)
 
-        CreateAppMixin._apply_env_vars(task, dokku_adapter, dokku_app_name, env_vars)
+        CreateAppMixin._configure_git(task, dokku_adapter, dokku_app_name, app.git)
 
         app.status = 'RUNNING'
         app.name_dokku = dokku_app_name
@@ -74,7 +74,7 @@ class CreateAppMixin:
     def _configure_git(task: Task, adapter: DokkuAdapter, dokku_app_name: str, git_url: str):
         """Configura o remote do Git no Dokku."""
         task.update_state(
-            state='PROGRESS', meta={'current': 50, 'total': 100, 'status': 'Configurando repositório Git...'}
+            state='PROGRESS', meta={'current': 90, 'total': 100, 'status': 'Configurando repositório Git...'}
         )
         adapter.set_git_remote(app_name=dokku_app_name, git_url=git_url)
 
@@ -102,6 +102,6 @@ class CreateAppMixin:
         """Aplica variáveis de ambiente se fornecidas."""
         if env_vars:
             task.update_state(
-                state='PROGRESS', meta={'current': 90, 'total': 100, 'status': 'Aplicando variáveis de ambiente...'}
+                state='PROGRESS', meta={'current': 50, 'total': 100, 'status': 'Aplicando variáveis de ambiente...'}
             )
             adapter.set_config(app_name=dokku_app_name, env_vars=env_vars)
