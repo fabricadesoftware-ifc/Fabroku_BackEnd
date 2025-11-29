@@ -22,7 +22,7 @@ class SSHAdapter:
                 return f"Failed to execute command: {command}"
             return stdout.read().decode('utf-8')
         except Exception as e:
-            print(f"SSH Connection Error: {e}")
+            print(f"SSH Connection Error: {e}, paramters: host={self.host}, username={self.username}, port={self.port}")  # noqa: E501
             return f"SSH Connection Error: {e}"
         finally:
             client.close()

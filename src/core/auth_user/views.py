@@ -4,8 +4,7 @@ from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from config.permission import CustomUserPermission
-
+# from config.permission import CustomUserPermission
 from .models import User
 from .serializers import CustomTokenObtainPairSerializer, UserRetrieveSerializer, UserSerializer
 
@@ -14,7 +13,7 @@ from .serializers import CustomTokenObtainPairSerializer, UserRetrieveSerializer
 class UserViewSet(ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
-    #permission_classes = [CustomUserPermission]
+    # permission_classes = [CustomUserPermission]
 
     def get_serializer_class(self):  # type: ignore
         if self.action == 'retrieve':

@@ -11,9 +11,7 @@ class GitRepoMixin:
         gh = Github(user.git_token)
         repos = gh.get_user().get_repos()
 
-        return JsonResponse({
-            "repos": [r.full_name for r in repos]
-        })
+        return repos
 
     def add_deploy_key(self, repo_name: str, dokku_key: str, user_id: int):
         from core.auth_user.models import User
@@ -28,4 +26,4 @@ class GitRepoMixin:
             read_only=False
         )
 
-        return JsonResponse({"status": "deploy key cadastrada"})
+        return {"status": "deploy key cadastrada"}
