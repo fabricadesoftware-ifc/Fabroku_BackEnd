@@ -1,6 +1,9 @@
-from core.apps.mixins import CreateAppMixin, DeleteAppMixin, UpdateAppMixin
+from .create_app import CreateAppMixin
+from .delete_app import DeleteAppMixin
+from .update_app import UpdateAppMixin
 
 
 class AppMixin(CreateAppMixin, DeleteAppMixin, UpdateAppMixin):
     """Mixin agregador para operações de aplicações."""
+
     pass

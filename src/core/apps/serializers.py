@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from core.apps.mixins import AppMixin
+from core.apps.mixins.app import AppMixin
 from core.apps.models import App
 
 
@@ -18,17 +18,20 @@ class AppSerializer(serializers.ModelSerializer):
             'domain',
             'port',
             'variables',
+            'task_id',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'status', 'domain', 'port']
 
     def create(self, validated_data):
-        return AppMixin().create_app(
-            name=validated_data['name'],
-            git=validated_data['git'],
-            project_id=validated_data['project'].id,
-            env_vars=validated_data.get('variables', None),
-            user=self.context['request'].user,
-        )
+        user = self.context['request'].user
+        instance = super().create(validated_data)
+
+        task_result = AppMixin.create_app.delay(app_id=instance.id, user_id=user.id)  # type: ignore
+
+        instance.task_id = task_result.id
+        instance.save()
+
+        return instance
 
     def update(self, instance, validated_data):
         return AppMixin().update_app(

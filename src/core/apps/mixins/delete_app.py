@@ -1,17 +1,33 @@
+from typing import cast
+
+from celery import Task, shared_task
+
 from core.adapters import DokkuAdapter
 from core.apps.models import App
 
 
 class DeleteAppMixin:
-    """Mixin para exclusão de aplicações."""
+    """Mixin para exclusão de aplicações via Celery."""
 
-    def delete_app(self, id: int) -> App:
-        """Cria uma nova aplicação e a provisiona no servidor Dokku."""
-        app = App.objects.get(id=id)
+    @shared_task(bind=True)
+    def delete_app(self, app_id: int) -> dict:
+        task = cast(Task, self)
+
+        try:
+            app = App.objects.get(id=app_id)
+        except App.DoesNotExist:
+            return {"status": "deleted", "message": "App already deleted from DB"}
+
+        task.update_state(state='PROGRESS', meta={'status': f'Removendo container {app.name}...'})
 
         dokku_adapter = DokkuAdapter()
-        dokku_adapter.delete_app(app_name=app.name)
+        try:
+            dokku_adapter.delete_app(app_name=f"{app.name}_{app.project.name}")
+
+        except Exception:
+            # TODO: fazer erro
+            pass
 
         app.delete()
 
-        return app
+        return {"status": "deleted", "app_id": app_id}

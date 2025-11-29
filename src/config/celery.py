@@ -4,11 +4,12 @@ from celery import Celery
 from dotenv import load_dotenv
 
 load_dotenv()
-BROKER_URL = os.getenv("BROKER_URL", "amqp://admin:admin@localhost/fabricapainel")
+BROKER_URL = os.getenv("BROKER_URL", 'amqp://paineluser:senha123@172.21.238.11:5672/painel'
+)
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'django_project.settings')
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 
-app = Celery('django_project', broker=BROKER_URL)
+app = Celery('config', broker=BROKER_URL)
 
 app.conf.update(
     broker_connection_retry_on_startup=True,

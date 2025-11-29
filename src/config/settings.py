@@ -187,5 +187,3 @@ CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30 * 60
 CELERY_RESULT_BACKEND = "rpc://"
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
-
-BROKER_URL = os.getenv("BROKER_URL", "amqp://paineluser:senha123@172.21.238.11:5672/painel")

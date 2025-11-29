@@ -19,6 +19,7 @@ class App(models.Model):
     domain = models.CharField(max_length=255, null=True, blank=True)
     port = models.IntegerField(null=True, blank=True)
     variables = models.JSONField(default=dict)
+    task_id = models.CharField(max_length=255, null=True, blank=True)
 
     def __str__(self):
         return self.name
