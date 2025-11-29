@@ -12,6 +12,11 @@ from .serializers import UserRetrieveSerializer, UserSerializer
 class UserViewSet(ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
+    filterset_fields = ['id', 'name']
+    search_fields = ['name']
+    ordering_fields = ['id', 'name']
+    ordering = ['id']
+
     # permission_classes = [CustomUserPermission]
 
     def get_serializer_class(self):  # type: ignore

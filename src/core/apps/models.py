@@ -10,7 +10,7 @@ class App(models.Model):
         ('error', 'Error'),
     ]
     name = models.CharField(max_length=255)
-    name_dokku = models.CharField(max_length=255, unique=True)
+    name_dokku = models.CharField(max_length=255, null=True, blank=True)
     git = models.URLField()
     project = models.ForeignKey(Project, on_delete=models.CASCADE)
     created_at = models.DateTimeField(auto_now_add=True)

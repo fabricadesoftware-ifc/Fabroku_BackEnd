@@ -26,6 +26,7 @@ def api_root(request, format=None):
         'users': reverse('user-root', request=request, format=format),
         'apps': reverse('app-root', request=request, format=format),
         'projects': reverse('project-root', request=request, format=format),
+        'logs': reverse('logs-list', request=request, format=format),
     })
 
 
@@ -34,6 +35,7 @@ urlpatterns = [
     path('api/auth/', include('core.auth_user.urls')),
     path('api/apps/', include('core.apps.urls')),
     path('api/projects/', include('core.project.urls')),
+    path('api/logs/', include('core.logs.urls')),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/admin/', django_admin.site.urls),
     path('auth/github/callback', github_callback),
