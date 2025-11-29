@@ -1,3 +1,4 @@
+import re
 from typing import cast
 
 from celery import Task, shared_task
@@ -7,6 +8,18 @@ from core.apps.models import App
 from core.apps.utils import slugify_dokku
 from core.auth_user.models import User
 from core.logs.models import AppLogManager, LogCategory
+
+
+def https_to_ssh_url(url: str) -> str:
+    """
+    Converte URL HTTPS do GitHub para SSH.
+    https://github.com/user/repo.git -> git@github.com:user/repo.git
+    """
+    match = re.match(r'https://github\.com/([^/]+)/([^/]+?)(\.git)?$', url)
+    if match:
+        owner, repo = match.group(1), match.group(2)
+        return f'git@github.com:{owner}/{repo}.git'
+    return url
 
 
 class CreateAppMixin:
@@ -58,9 +71,9 @@ class CreateAppMixin:
 
             CreateAppMixin._apply_env_vars(task, dokku_adapter, dokku_app_name, env_vars, logger)
 
-            CreateAppMixin._handle_deploy_keys(task, dokku_adapter, github_adapter, user, app.git, logger)
+            git_url = CreateAppMixin._handle_deploy_keys(task, dokku_adapter, github_adapter, user, app.git, logger)
 
-            CreateAppMixin._configure_git(task, dokku_adapter, dokku_app_name, app.git, logger)
+            CreateAppMixin._configure_git(task, dokku_adapter, dokku_app_name, git_url, app.branch, logger)
 
             CreateAppMixin._set_letsencrypt(self, app, dokku_app_name, logger)
 
@@ -143,8 +156,11 @@ class CreateAppMixin:
     @staticmethod
     def _handle_deploy_keys(
         task: Task, d_adapter: DokkuAdapter, gh_adapter: GitHubAdapter, user: User, git_url: str, logger: AppLogManager
-    ):
-        """Verifica permissões e gera chaves SSH se necessário."""
+    ) -> str:
+        """
+        Verifica permissões e gera chaves SSH se necessário.
+        Retorna a URL correta para usar (SSH para privado, original para público).
+        """
         task.update_state(
             state='PROGRESS', meta={'current': 28, 'total': 100, 'status': 'Verificando permissões do GitHub...'}
         )
@@ -155,7 +171,9 @@ class CreateAppMixin:
         user_git_repos_list = gh_adapter.list_user_repos(user_id=user.id)  # type: ignore
         user_git_repos = {repo.full_name: {'private': repo.private} for repo in user_git_repos_list}
 
-        if repo_name in user_git_repos and user_git_repos[repo_name].get('private', False):
+        is_private = repo_name in user_git_repos and user_git_repos[repo_name].get('private', False)
+
+        if is_private:
             task.update_state(
                 state='PROGRESS', meta={'current': 32, 'total': 100, 'status': 'Gerando chaves de acesso seguro...'}
             )
@@ -172,25 +190,37 @@ class CreateAppMixin:
             logger.success(
                 f'Chave de deploy adicionada ao repositório {repo_name}', category=LogCategory.GIT, progress=40
             )
+
+            # Para repos privados, usar URL SSH
+            ssh_url = https_to_ssh_url(git_url)
+            logger.info(f'Usando URL SSH: {ssh_url}', category=LogCategory.GIT, progress=42)
+            return ssh_url
         else:
             logger.info(
                 f'Repositório {repo_name} é público. Chave de deploy não necessária.',
                 category=LogCategory.GIT,
                 progress=40,
             )
+            return git_url
 
     @staticmethod
-    def _configure_git(task: Task, adapter: DokkuAdapter, dokku_app_name: str, git_url: str, logger: AppLogManager):
+    def _configure_git(
+        task: Task, adapter: DokkuAdapter, dokku_app_name: str, git_url: str, branch: str, logger: AppLogManager
+    ):
         """Configura o remote do Git no Dokku. Etapa mais demorada."""
         task.update_state(
             state='PROGRESS', meta={'current': 45, 'total': 100, 'status': 'Sincronizando repositório Git...'}
         )
         logger.info('Iniciando sincronização do repositório Git...', category=LogCategory.GIT, progress=45)
-        logger.info('⏳ Esta etapa pode demorar alguns minutos...', category=LogCategory.GIT, progress=50)
+        logger.info(
+            f'⏳ Clonando branch "{branch}"... Esta etapa pode demorar alguns minutos.',
+            category=LogCategory.GIT,
+            progress=50,
+        )
 
-        output = adapter.set_git_remote(app_name=dokku_app_name, git_url=git_url)
+        output = adapter.sync_git(app_name=dokku_app_name, git_url=git_url, branch=branch)
         logger.dokku(
-            output, command=f'dokku git:sync {dokku_app_name} {git_url}', category=LogCategory.GIT, progress=85
+            output, command=f'dokku git:sync {dokku_app_name} {git_url} {branch}', category=LogCategory.GIT, progress=85
         )
 
     def _set_letsencrypt(self, app: App, dokku_app_name: str, logger: AppLogManager):

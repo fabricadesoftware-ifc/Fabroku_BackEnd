@@ -40,18 +40,21 @@ class DokkuGitMixin:
         return 'Git remote removed successfully.'
 
     def generate_git_deploy_key(self) -> str:
-        """Gera uma chave de deploy Git para a aplicação Dokku."""
+        """
+        Obtém a chave de deploy Git existente ou gera uma nova se não existir.
+        Retorna a chave pública no formato OpenSSH.
+        """
+        # Primeiro tenta obter a chave existente
+        existing_key = self._run_command('git:public-key')
 
-        if not self._run_command('git:generate-deploy-key'):
-            return 'Failed to generate Git deploy key.'
+        # Se já existe uma chave válida (começa com ssh-), retorna ela
+        if existing_key and existing_key.strip().startswith('ssh-'):
+            return existing_key.strip()
 
-        return 'Git deploy key generated successfully.'
+        # Se não existe, gera uma nova
+        self._run_command('git:generate-deploy-key')
+        return self._run_command('git:public-key').strip()
 
     def get_git_deploy_key(self) -> str:
-        """Obtém a chave de deploy Git da aplicação Dokku."""
-
-        deploy_key = self._run_command('git:deploy-key')
-        if not deploy_key:
-            return 'Failed to get Git deploy key.'
-
-        return str(deploy_key)
+        """Obtém a chave de deploy Git pública existente."""
+        return self._run_command('git:public-key').strip()

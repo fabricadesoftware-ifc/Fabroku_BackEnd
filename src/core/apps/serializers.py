@@ -11,6 +11,7 @@ class AppSerializer(serializers.ModelSerializer):
             'id',
             'name',
             'git',
+            'branch',
             'project',
             'created_at',
             'updated_at',

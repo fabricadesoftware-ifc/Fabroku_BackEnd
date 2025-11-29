@@ -12,6 +12,7 @@ class App(models.Model):
     name = models.CharField(max_length=255)
     name_dokku = models.CharField(max_length=255, null=True, blank=True)
     git = models.URLField()
+    branch = models.CharField(max_length=255, default='main')
     project = models.ForeignKey(Project, on_delete=models.CASCADE)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
