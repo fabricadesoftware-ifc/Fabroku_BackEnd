@@ -29,20 +29,28 @@ class App(models.Model):
         verbose_name_plural = 'Apps'
 
 
-class Database(models.Model):
+class Service(models.Model):
+    service_choices = [
+        ('postgres', 'Postgres'),
+        ('rabbitmq', 'RabbitMQ'),
+        ('redis', 'Redis'),
+        ]
+
     name = models.CharField(max_length=255)
     user = models.CharField(max_length=255)
     password = models.CharField(max_length=255)
     host = models.CharField(max_length=255)
     port = models.IntegerField()
     app = models.ForeignKey(App, on_delete=models.CASCADE)
+    project = models.ForeignKey(Project, on_delete=models.CASCADE)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    service_type = models.CharField(max_length=50, choices=service_choices)
 
     def __str__(self):
         return self.name
 
     class Meta:
-        db_table = 'databases'
-        verbose_name = 'Database'
-        verbose_name_plural = 'Databases'
+        db_table = 'services'
+        verbose_name = 'Service'
+        verbose_name_plural = 'Services'
