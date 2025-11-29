@@ -65,7 +65,8 @@ def github_callback(request):
         )
         user = User.objects.get(id=user_git_json.get('id'))
         refresh = RefreshToken.for_user(user)
-        jwt_access_token = str(refresh.access_token)
-        return redirect(f'{settings.FRONTEND_URL}/login/success#token={jwt_access_token}')
+        return redirect(
+            f'{settings.FRONTEND_URL}/login/success#access={str(refresh.access_token)}&refresh={str(refresh)}'
+        )
     except Exception as e:
         return JsonResponse({'status': 'error', 'message': 'Token invalido ou expirado', 'error': str(e)})

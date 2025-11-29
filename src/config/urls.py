@@ -18,7 +18,6 @@ from rest_framework_simplejwt.views import (
 from core.adapters.utils.git_callback import github_callback
 from core.adapters.utils.git_redirect import github_login
 from core.adapters.utils.git_repos import get_git_repos
-from core.auth_user.views import TokenObtainPairView
 
 
 @api_view(['GET'])
@@ -35,7 +34,6 @@ urlpatterns = [
     path('api/auth/', include('core.auth_user.urls')),
     path('api/apps/', include('core.apps.urls')),
     path('api/projects/', include('core.project.urls')),
-    path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/admin/', django_admin.site.urls),
     path('auth/github/callback', github_callback),

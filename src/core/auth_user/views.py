@@ -6,7 +6,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 
 # from config.permission import CustomUserPermission
 from .models import User
-from .serializers import CustomTokenObtainPairSerializer, UserRetrieveSerializer, UserSerializer
+from .serializers import UserRetrieveSerializer, UserSerializer
 
 
 @extend_schema(tags=['users'])
@@ -25,8 +25,3 @@ class UserViewSet(ModelViewSet):
         user = request.user
         serializer = UserRetrieveSerializer(user)
         return Response(serializer.data)
-
-
-@extend_schema(tags=['auth'])
-class CustomTokenObtainPairView(TokenObtainPairView):
-    serializer_class = CustomTokenObtainPairSerializer
