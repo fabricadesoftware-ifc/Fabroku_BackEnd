@@ -19,4 +19,3 @@ class UserSerializer(serializers.ModelSerializer):
             'name',
             'avatar_url',
         ]
-

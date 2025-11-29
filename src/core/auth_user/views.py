@@ -2,7 +2,6 @@ from drf_spectacular.utils import extend_schema
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
-from rest_framework_simplejwt.views import TokenObtainPairView
 
 # from config.permission import CustomUserPermission
 from .models import User
