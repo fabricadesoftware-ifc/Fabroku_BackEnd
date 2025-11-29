@@ -14,7 +14,7 @@ class SSHAdapter:
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
-            client.connect(self.host, username=self.username, key_filename=self.ssh_key_path)
+            client.connect(self.host, port=self.port, username=self.username, key_filename=self.ssh_key_path)
             stdin, stdout, stderr = client.exec_command(command)
             exit_status = stdout.channel.recv_exit_status()
             if exit_status != 0:
