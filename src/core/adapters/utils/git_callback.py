@@ -9,6 +9,35 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from core.auth_user.models import User
 
 
+def set_auth_cookies(response, access_token: str, refresh_token: str):
+    """Define os cookies de autenticação na resposta."""
+    # Cookie do access token
+    response.set_cookie(
+        key=settings.AUTH_COOKIE_NAME,
+        value=access_token,
+        max_age=int(settings.SIMPLE_JWT['ACCESS_TOKEN_LIFETIME'].total_seconds()),
+        secure=settings.AUTH_COOKIE_SECURE,
+        httponly=settings.AUTH_COOKIE_HTTP_ONLY,
+        samesite=settings.AUTH_COOKIE_SAMESITE,
+        path=settings.AUTH_COOKIE_PATH,
+        domain=settings.AUTH_COOKIE_DOMAIN,
+    )
+
+    # Cookie do refresh token (duração maior)
+    response.set_cookie(
+        key=settings.AUTH_COOKIE_REFRESH_NAME,
+        value=refresh_token,
+        max_age=int(settings.SIMPLE_JWT['REFRESH_TOKEN_LIFETIME'].total_seconds()),
+        secure=settings.AUTH_COOKIE_SECURE,
+        httponly=settings.AUTH_COOKIE_HTTP_ONLY,
+        samesite=settings.AUTH_COOKIE_SAMESITE,
+        path=settings.AUTH_COOKIE_PATH,
+        domain=settings.AUTH_COOKIE_DOMAIN,
+    )
+
+    return response
+
+
 @api_view(['GET'])
 def github_callback(request):
     try:
@@ -65,8 +94,11 @@ def github_callback(request):
         )
         user = User.objects.get(id=user_git_json.get('id'))
         refresh = RefreshToken.for_user(user)
-        return redirect(
-            f'{settings.FRONTEND_URL}/login/success#access={str(refresh.access_token)}&refresh={str(refresh)}'
-        )
+
+        # Redireciona para o frontend e seta os cookies
+        response = redirect(f'{settings.FRONTEND_URL}/callback')
+        set_auth_cookies(response, str(refresh.access_token), str(refresh))
+
+        return response
     except Exception as e:
         return JsonResponse({'status': 'error', 'message': 'Token invalido ou expirado', 'error': str(e)})

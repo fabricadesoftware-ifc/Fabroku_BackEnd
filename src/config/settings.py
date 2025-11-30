@@ -148,7 +148,10 @@ CORS_ALLOW_HEADERS = [
 ]
 
 REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': ('rest_framework_simplejwt.authentication.JWTAuthentication',),
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'core.auth_user.authentication.CookieJWTAuthentication',  # Cookie auth (prioridade)
+        'rest_framework_simplejwt.authentication.JWTAuthentication',  # Header auth (fallback)
+    ),
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticatedOrReadOnly',
     ],
@@ -174,6 +177,15 @@ SIMPLE_JWT = {
     'ROTATE_REFRESH_TOKENS': True,
 }
 
+# Configurações de Cookies para autenticação
+AUTH_COOKIE_NAME = 'access_token'
+AUTH_COOKIE_REFRESH_NAME = 'refresh_token'
+AUTH_COOKIE_SECURE = not DEBUG  # True em produção (HTTPS)
+AUTH_COOKIE_HTTP_ONLY = True  # Não acessível via JavaScript
+AUTH_COOKIE_SAMESITE = 'Lax'  # 'Lax' para compatibilidade, 'Strict' para mais segurança
+AUTH_COOKIE_PATH = '/'
+AUTH_COOKIE_DOMAIN = os.getenv('COOKIE_DOMAIN', None)  # None = domínio atual
+
 SPECTACULAR_SETTINGS = {
     'TITLE': 'Fabroku API',
     'DESCRIPTION': 'API para gerenciamento do Fabroku, incluindo endpoints e documentação.',
@@ -193,7 +205,7 @@ DOKKU_SSH_USERNAME = os.getenv('DOKKU_SSH_USERNAME', 'dokku')
 DOKKU_SSH_HOST = os.getenv('DOKKU_SSH_HOST', '127.0.0.1')
 DOKKU_SSH_PORT = int(os.getenv('DOKKU_SSH_PORT', 22))  # noqa: PLW1508
 GITHUB_REDIRECT_URI = os.getenv('GITHUB_REDIRECT_URI', 'http://localhost:8000/api/auth/github/callback')
-FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')  # noqa: PLW1508
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')  # noqa: PLW1508
 
 CELERY_TIMEZONE = 'America/Sao_Paulo'
 CELERY_TASK_TRACK_STARTED = True
