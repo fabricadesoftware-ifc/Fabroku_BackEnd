@@ -36,8 +36,8 @@ urlpatterns = [
     path('api/logs/', include('core.logs.urls')),
     path('api/token/refresh/', CustomTokenRefreshView.as_view(), name='token_refresh'),
     path('api/admin/', django_admin.site.urls),
-    path('auth/github/callback', github_callback),
-    path('auth/github/login', github_login),
+    path('api/auth/github/callback', github_callback),
+    path('api/auth/github/login', github_login),
     path('api/git/repos', get_git_repos),
     path('', lambda request: redirect('api/', permanent=True)),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

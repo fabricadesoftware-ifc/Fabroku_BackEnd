@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from core.apps.mixins.app import AppMixin
+from core.apps.mixins import AppMixin
 from core.apps.models import App
 
 
@@ -31,6 +31,7 @@ class AppSerializer(serializers.ModelSerializer):
         task_result = AppMixin.create_app.delay(app_id=instance.id, user_id=user.id)  # type: ignore
 
         instance.task_id = task_result.id
+        instance.status = 'starting'
         instance.save()
 
         return instance

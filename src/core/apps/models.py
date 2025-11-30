@@ -5,6 +5,7 @@ from core.project.models import Project
 
 class App(models.Model):
     SATATUS_CHOICES = [
+        ('starting', 'Starting'),
         ('running', 'Running'),
         ('stopped', 'Stopped'),
         ('error', 'Error'),

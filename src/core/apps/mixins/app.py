@@ -1,6 +1,6 @@
-from .create_app import CreateAppMixin
-from .delete_app import DeleteAppMixin
-from .update_app import UpdateAppMixin
+from .apps.create_app import CreateAppMixin
+from .apps.delete_app import DeleteAppMixin
+from .apps.update_app import UpdateAppMixin
 
 
 class AppMixin(CreateAppMixin, DeleteAppMixin, UpdateAppMixin):
