@@ -37,13 +37,8 @@ class AppSerializer(serializers.ModelSerializer):
         return instance
 
     def update(self, instance, validated_data):
-        return AppMixin().update_app(
-            name=validated_data.get('name', instance.name),
-            git=validated_data.get('git', instance.git),
-            id=instance.id,
-        )
+        AppMixin.update_app.delay(
+            name=validated_data.get('name', instance.name), git=validated_data.get('git', instance.git), id=instance.id
+        )  # type: ignore  # noqa: E501
 
-    def destroy(self, instance):
-        return AppMixin().delete_app(
-            id=instance.id,
-        )
+        return instance

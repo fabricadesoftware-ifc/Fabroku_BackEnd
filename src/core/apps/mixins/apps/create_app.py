@@ -75,7 +75,12 @@ class CreateAppMixin:
 
             CreateAppMixin._configure_git(task, dokku_adapter, dokku_app_name, git_url, app.branch, logger)
 
-            CreateAppMixin._set_letsencrypt(self, app, dokku_app_name, logger)
+            CreateAppMixin._set_letsencrypt(self, dokku_app_name, logger)
+
+            domain = CreateAppMixin._get_domain(self, dokku_app_name, logger)
+            if domain:
+                app.domain = domain
+                app.save(update_fields=['domain'])
 
             app.status = 'RUNNING'
             app.save()
@@ -207,7 +212,7 @@ class CreateAppMixin:
     def _configure_git(
         task: Task, adapter: DokkuAdapter, dokku_app_name: str, git_url: str, branch: str, logger: AppLogManager
     ):
-        """Configura o remote do Git no Dokku. Etapa mais demorada."""
+        """Configura o remote do Git no Dokku. Etapa mais demorada com streaming de logs."""
         task.update_state(
             state='PROGRESS', meta={'current': 45, 'total': 100, 'status': 'Sincronizando repositório Git...'}
         )
@@ -218,12 +223,44 @@ class CreateAppMixin:
             progress=50,
         )
 
-        output = adapter.sync_git(app_name=dokku_app_name, git_url=git_url, branch=branch)
-        logger.dokku(
-            output, command=f'dokku git:sync {dokku_app_name} {git_url} {branch}', category=LogCategory.GIT, progress=85
+        # Contador de linhas para calcular progresso incremental
+        line_count = [0]  # Usando lista para poder modificar dentro do callback
+        base_progress = 50
+        max_progress = 85
+
+        def on_log_line(line: str):
+            """Callback chamado para cada linha de log do git:sync."""
+            if not line.strip():
+                return
+
+            line_count[0] += 1
+            # Progresso incremental entre 50% e 85%
+            # Aumenta 0.5% a cada linha, até o máximo
+            progress = min(base_progress + (line_count[0] * 0.5), max_progress - 1)
+
+            logger.dokku(line, category=LogCategory.GIT, progress=int(progress))
+
+        output = adapter.sync_git_streaming(
+            app_name=dokku_app_name,
+            git_url=git_url,
+            branch=branch,
+            on_line=on_log_line,
         )
 
-    def _set_letsencrypt(self, app: App, dokku_app_name: str, logger: AppLogManager):
+        # Verifica se houve erro
+        if 'Failed' in output:
+            logger.error(f'Erro no git:sync: {output}', category=LogCategory.GIT, progress=85)
+            raise RuntimeError(f'Falha ao sincronizar repositório: {output}')
+
+        # Log final
+        logger.dokku(
+            f'✅ Sync concluído ({line_count[0]} linhas processadas)',
+            command=f'dokku git:sync {dokku_app_name} {git_url} {branch}',
+            category=LogCategory.GIT,
+            progress=85,
+        )
+
+    def _set_letsencrypt(self, dokku_app_name: str, logger: AppLogManager):
         """Configura Let's Encrypt para a aplicação."""
         dokku_adapter = DokkuAdapter()
 
@@ -232,3 +269,13 @@ class CreateAppMixin:
         logger.dokku(
             output, command=f'dokku letsencrypt:enable {dokku_app_name}', category=LogCategory.SSL, progress=95
         )
+
+    def _get_domain(self, name_dokku: str, logger: AppLogManager) -> str | None:
+        """Obtém o domínio principal da aplicação Dokku."""
+
+        dokku_adapter = DokkuAdapter()
+
+        logger.info('Obtendo domínio principal da aplicação...', category=LogCategory.SSL, progress=97)
+        domains = dokku_adapter.get_app_domain(app_name=name_dokku)
+        logger.dokku(domains, command=f'dokku domains:report {name_dokku}', category=LogCategory.SSL, progress=99)
+        return domains if domains else None

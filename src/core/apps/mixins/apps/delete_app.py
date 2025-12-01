@@ -18,16 +18,20 @@ class DeleteAppMixin:
         except App.DoesNotExist:
             return {'status': 'deleted', 'message': 'App already deleted from DB'}
 
-        task.update_state(state='PROGRESS', meta={'status': f'Removendo container {app.name}...'})
+        dokku_app_name = app.name_dokku
+        task.update_state(state='PROGRESS', meta={'status': f'Removendo container {dokku_app_name}...'})
 
         dokku_adapter = DokkuAdapter()
-        try:
-            dokku_adapter.delete_app(app_name=f'{app.name}_{app.project.name}')
 
-        except Exception:
-            # TODO: fazer erro
-            pass
+        # Só tenta deletar no Dokku se o name_dokku existir
+        if dokku_app_name:
+            try:
+                result = dokku_adapter.delete_app(app_name=dokku_app_name)
+                print(f'Dokku delete result: {result}')
+            except Exception as e:
+                print(f'Erro ao deletar app no Dokku: {e}')
+                # Continua para deletar do banco mesmo se falhar no Dokku
 
         app.delete()
 
-        return {'status': 'deleted', 'app_id': app_id}
+        return {'status': 'deleted', 'app_id': app_id, 'dokku_app': dokku_app_name}

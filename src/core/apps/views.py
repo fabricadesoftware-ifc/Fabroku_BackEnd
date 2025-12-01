@@ -1,8 +1,11 @@
 from celery.result import AsyncResult
 from drf_spectacular.utils import extend_schema
+from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
+
+from core.apps.mixins import AppMixin
 
 from .models import App
 from .serializers import AppSerializer
@@ -12,6 +15,26 @@ from .serializers import AppSerializer
 class AppViewSet(ModelViewSet):
     queryset = App.objects.all()
     serializer_class = AppSerializer
+
+    def destroy(self, request, *args, **kwargs):
+        """Override destroy para lançar task de deleção no Dokku."""
+        instance = self.get_object()
+
+        # Atualiza status para indicar que está deletando
+        instance.status = 'deleting'
+        instance.save(update_fields=['status'])
+
+        # Lança a task de deleção
+        task_result = AppMixin.delete_app.delay(app_id=instance.id)  # type: ignore
+
+        return Response(
+            {
+                'status': 'deleting',
+                'message': f'Deletando aplicação {instance.name}...',
+                'task_id': task_result.id,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 
     # @action(detail=True, methods=['post'])
     # def deploy(self, request, pk=None):

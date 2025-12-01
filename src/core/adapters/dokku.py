@@ -3,6 +3,7 @@ from django.conf import settings
 from core.adapters.dokku_mixins import (
     DokkuAppsMixin,
     DokkuConfigMixin,
+    DokkuDomainsMixin,
     DokkuGitMixin,
     DokkuLetsencryptMixin,
     DokkuPortsMixin,
@@ -18,7 +19,8 @@ class DokkuAdapter(
     DokkuGitMixin,
     DokkuPostgresMixin,
     DokkuPortsMixin,
-    DokkuLetsencryptMixin
+    DokkuLetsencryptMixin,
+    DokkuDomainsMixin,
     ):
     def __init__(
         self,

@@ -1,4 +1,5 @@
 import paramiko
+from collections.abc import Generator
 
 
 class SSHAdapter:
@@ -26,3 +27,39 @@ class SSHAdapter:
             return f'SSH Connection Error: {e}'
         finally:
             client.close()
+
+    def _run_command_streaming(self, command: str) -> Generator[str, None, int]:
+        """
+        Executa um comando SSH e faz yield de cada linha conforme ela chega.
+        Retorna o exit status no final.
+
+        Uso:
+            for line in adapter._run_command_streaming('git:sync ...'):
+                print(line)
+        """
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        exit_status = -1
+
+        try:
+            client.connect(self.host, port=self.port, username=self.username, key_filename=self.ssh_key_path)
+            stdin, stdout, stderr = client.exec_command(command, get_pty=True)
+
+            # Lê linha por linha conforme chegam
+            for line in iter(stdout.readline, ''):
+                yield line.rstrip('\n\r')
+
+            exit_status = stdout.channel.recv_exit_status()
+
+            # Se houve erro, yield as linhas de erro também
+            if exit_status != 0:
+                for line in stderr:
+                    yield f'[ERROR] {line.rstrip()}'
+
+        except Exception as e:
+            yield f'[SSH ERROR] {e}'
+
+        finally:
+            client.close()
+
+        return exit_status

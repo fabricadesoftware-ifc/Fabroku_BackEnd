@@ -9,6 +9,7 @@ class App(models.Model):
         ('running', 'Running'),
         ('stopped', 'Stopped'),
         ('error', 'Error'),
+        ('deleting', 'Deleting'),
     ]
     name = models.CharField(max_length=255)
     name_dokku = models.CharField(max_length=255, null=True, blank=True)
