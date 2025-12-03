@@ -9,9 +9,9 @@ class DokkuPostgresMixin:
         """Executa um comando no servidor Dokku."""
         ...
 
-    def create_database(self, db_name: str) -> str:
+    def create_database(self, db_name: str, password: str) -> str:
         """Cria um novo banco de dados PostgreSQL no Dokku."""
-        return self._run_command(f'postgres:create {db_name}')
+        return self._run_command(f'postgres:create {db_name} -p {password}')
 
     def delete_database(self, db_name: str) -> str:
         """Deleta um banco de dados PostgreSQL do Dokku."""

@@ -1,0 +1,108 @@
+from typing import cast
+
+from celery import Task, shared_task
+
+from core.adapters import DokkuAdapter
+from core.apps.models import App
+from core.logs.models import AppLogManager, LogCategory
+
+
+class RedeployAppMixin:
+    """Mixin para redeploy de aplicações via webhook."""
+
+    @shared_task(bind=True)
+    def redeploy_app(self, app_id: int, commit: str | None = None) -> dict:
+        """
+        Faz redeploy de uma aplicação existente.
+        Chamado pelo webhook do GitHub quando há push na branch configurada.
+        """
+        task = cast(Task, self)
+        task_id = task.request.id
+
+        try:
+            app = App.objects.get(id=app_id)
+        except App.DoesNotExist:
+            return {'status': 'error', 'message': f'App {app_id} not found'}
+
+        # Atualiza task_id e status
+        app.task_id = task_id
+        app.status = 'deploying'
+        app.save(update_fields=['task_id', 'status'])
+
+        # Inicializa logger
+        logger = AppLogManager(app, task_id)
+        logger.info(
+            f'Iniciando redeploy da aplicação (commit: {commit[:7] if commit else "latest"})...',
+            category=LogCategory.DEPLOY,
+            progress=5,
+        )
+
+        dokku_adapter = DokkuAdapter()
+        dokku_app_name = app.name_dokku
+
+        if not dokku_app_name:
+            logger.error('App não tem name_dokku configurado', category=LogCategory.DEPLOY)
+            return {'status': 'error', 'message': 'App não tem name_dokku'}
+
+        try:
+            # Verifica se o app existe no Dokku
+            if not dokku_adapter.exists_app(dokku_app_name):
+                logger.error(f'App {dokku_app_name} não existe no Dokku', category=LogCategory.DEPLOY)
+                app.status = 'error'
+                app.save(update_fields=['status'])
+                return {'status': 'error', 'message': 'App não existe no Dokku'}
+
+            task.update_state(
+                state='PROGRESS',
+                meta={'current': 10, 'total': 100, 'status': 'Sincronizando repositório...'},
+            )
+            logger.info('Sincronizando repositório Git...', category=LogCategory.GIT, progress=10)
+
+            # Contador para progresso incremental
+            line_count = [0]
+            base_progress = 10
+            max_progress = 90
+
+            def on_log_line(line: str):
+                if not line.strip():
+                    return
+                line_count[0] += 1
+                progress = min(base_progress + (line_count[0] * 0.5), max_progress - 1)
+                logger.dokku(line, category=LogCategory.GIT, progress=int(progress))
+
+            # Usa streaming para mostrar logs em tempo real
+            output = dokku_adapter.sync_git_streaming(
+                app_name=dokku_app_name,
+                git_url=app.git,
+                branch=app.branch,
+                on_line=on_log_line,
+            )
+
+            if 'Failed' in output:
+                logger.error(f'Erro no redeploy: {output}', category=LogCategory.DEPLOY, progress=90)
+                app.status = 'error'
+                app.save(update_fields=['status'])
+                return {'status': 'error', 'message': output}
+
+            # Sucesso
+            app.status = 'running'
+            app.save(update_fields=['status'])
+
+            logger.success(
+                f'Redeploy concluído com sucesso! ({line_count[0]} linhas processadas)',
+                category=LogCategory.DEPLOY,
+                progress=100,
+            )
+
+            return {
+                'status': 'success',
+                'app_id': app_id,
+                'commit': commit,
+                'dokku_app': dokku_app_name,
+            }
+
+        except Exception as e:
+            logger.error(f'Erro no redeploy: {str(e)}', category=LogCategory.DEPLOY)
+            app.status = 'error'
+            app.save(update_fields=['status'])
+            raise

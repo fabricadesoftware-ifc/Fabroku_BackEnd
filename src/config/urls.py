@@ -15,6 +15,7 @@ from rest_framework.reverse import reverse
 from core.adapters.utils.git_callback import github_callback
 from core.adapters.utils.git_redirect import github_login
 from core.adapters.utils.git_repos import get_git_repos
+from core.adapters.utils.git_webhook import github_webhook
 from core.auth_user.views import CustomTokenRefreshView
 
 
@@ -39,6 +40,7 @@ urlpatterns = [
     path('api/auth/github/callback/', github_callback),
     path('api/auth/github/login/', github_login),
     path('api/git/repos', get_git_repos),
+    path('api/webhooks/github/<int:app_id>/', github_webhook, name='github-webhook'),
     path('', lambda request: redirect('api/', permanent=True)),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 

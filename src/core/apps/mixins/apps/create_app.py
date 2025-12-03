@@ -37,6 +37,10 @@ class CreateAppMixin:
     - 85-95%: Let's Encrypt
     - 95-100%: Finalização
     """
+    @shared_task(bind=True)
+    def websocket_deploy_update(self, app_id: int, message: str) -> None:
+        """Task auxiliar para enviar atualizações via WebSocket durante o deploy."""
+        
 
     @shared_task(bind=True)
     def create_app(self, app_id: int, user_id: int, env_vars: dict | None = None) -> dict:

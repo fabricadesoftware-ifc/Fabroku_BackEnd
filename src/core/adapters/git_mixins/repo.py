@@ -1,5 +1,5 @@
 from github import Github, GithubException
-
+from django.conf import settings
 
 class GitRepoMixin:
     def list_user_repos(self, user_id: int):
@@ -35,3 +35,23 @@ class GitRepoMixin:
             if e.status == 422 and 'already in use' in str(e.data):
                 return {'status': 'deploy key já existe em outro repositório'}
             raise
+
+    def create_webhook(repo_name: str, project_id: int, user_id: int):
+        from core.auth_user.models import User  # noqa: PLC0415
+        user = User.objects.get(id=user_id)
+
+        gh = Github(user.git_token)
+        repo = gh.get_repo(repo_name)
+
+        config = {
+            "url": f"https://fabroku.com/deploy/hooks/{project_id}",
+            "content_type": "json",
+            "secret": settings.GITHUB_WEBHOOK_SECRET,
+        }
+
+        repo.create_hook(
+            name="web",
+            config=config,
+            events=["push"],
+            active=True
+        )

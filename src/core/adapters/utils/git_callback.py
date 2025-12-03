@@ -3,7 +3,8 @@ import requests
 from django.conf import settings
 from django.http import JsonResponse
 from django.shortcuts import redirect
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from core.auth_user.models import User
@@ -39,6 +40,7 @@ def set_auth_cookies(response, access_token: str, refresh_token: str):
 
 
 @api_view(['GET'])
+@permission_classes([AllowAny])
 def github_callback(request):
     try:
         code = request.GET.get('code')

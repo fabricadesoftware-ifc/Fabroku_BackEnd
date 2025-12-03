@@ -10,6 +10,7 @@ class App(models.Model):
         ('stopped', 'Stopped'),
         ('error', 'Error'),
         ('deleting', 'Deleting'),
+        ('deploying', 'Deploying'),
     ]
     name = models.CharField(max_length=255)
     name_dokku = models.CharField(max_length=255, null=True, blank=True)
@@ -33,15 +34,15 @@ class App(models.Model):
         verbose_name_plural = 'Apps'
 
 
-class Service(models.Model):
-    service_choices = [
-        ('postgres', 'Postgres'),
-        ('rabbitmq', 'RabbitMQ'),
-        ('redis', 'Redis'),
-    ]
+class ServiceType(models.TextChoices):
+    POSTGRES = 'postgres', 'Postgres'
+    RABBITMQ = 'rabbitmq', 'RabbitMQ'
+    REDIS = 'redis', 'Redis'
 
+
+class Service(models.Model):
     name = models.CharField(max_length=255)
-    user = models.CharField(max_length=255)
+    user = models.CharField(max_length=255, default='postgres')
     password = models.CharField(max_length=255)
     host = models.CharField(max_length=255)
     port = models.IntegerField()
@@ -49,7 +50,8 @@ class Service(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    service_type = models.CharField(max_length=50, choices=service_choices)
+    service_type = models.CharField(max_length=50, choices=ServiceType.choices)
+    container_name = models.CharField(max_length=255, null=True, blank=True)
 
     def __str__(self):
         return self.name
