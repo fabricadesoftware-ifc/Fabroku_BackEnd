@@ -44,7 +44,7 @@ class GitRepoMixin:
         repo = gh.get_repo(repo_name)
 
         config = {
-            "url": f"https://fabroku.com/deploy/hooks/{project_id}",
+            "url": f"https://fabroku.com/deploy/hooks/{project_id}", # TODO: mudar isso 
             "content_type": "json",
             "secret": settings.GITHUB_WEBHOOK_SECRET,
         }
