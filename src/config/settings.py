@@ -200,7 +200,7 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 GITHUB_CLIENT_ID = os.getenv('GITHUB_CLIENT_ID')
 GITHUB_CLIENT_SECRET = os.getenv('GITHUB_CLIENT_SECRET')
 GITHUB_WEBHOOK_SECRET = os.getenv('GITHUB_WEBHOOK_SECRET')  # Opcional: para validar assinatura dos webhooks
-# TODO: Adicionar outras configurações conforme necessário faslar com o eduardo amanhã
+# TODO: Adicionar outras configurações conforme necessário falar com o eduardo amanhã
 DOKKU_SSH_KEY = os.getenv('DOKKU_SSH_KEY')
 DOKKU_SSH_USERNAME = os.getenv('DOKKU_SSH_USERNAME', 'dokku')
 DOKKU_SSH_HOST = os.getenv('DOKKU_SSH_HOST', '127.0.0.1')

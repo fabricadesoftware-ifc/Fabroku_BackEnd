@@ -3,8 +3,7 @@
 import django.db.models.deletion
 from django.conf import settings
 from django.db import migrations, models
-
-
+import uuid
 class Migration(migrations.Migration):
 
     initial = True
@@ -17,7 +16,12 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name='Project',
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('id', models.UUIDField(
+    primary_key=True,
+    default=uuid.uuid4,
+    editable=False,
+    serialize=False,
+)),
                 ('name', models.CharField(max_length=255)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('updated_at', models.DateTimeField(auto_now=True)),
