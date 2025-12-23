@@ -6,6 +6,9 @@ from django.utils.translation import gettext_lazy as _
 
 from .managers import CustomUserManager
 
+# Import do modelo AllowedEmail para que seja detectado pelas migrations
+from .allowed_emails.models import AllowedEmail  # noqa: F401
+
 
 def remove_accent(text):
     text_normal = unicodedata.normalize('NFKD', text)

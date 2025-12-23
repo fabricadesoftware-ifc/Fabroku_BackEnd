@@ -11,12 +11,18 @@ from drf_spectacular.views import (
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
+from rest_framework.routers import DefaultRouter
 
 from core.adapters.utils.git_callback import github_callback
 from core.adapters.utils.git_redirect import github_login
 from core.adapters.utils.git_repos import get_git_repos
 from core.adapters.utils.git_webhook import github_webhook
+from core.auth_user.allowed_emails.views import AllowedEmailViewSet
 from core.auth_user.views import CustomTokenRefreshView
+
+# Router para AllowedEmails
+allowed_emails_router = DefaultRouter()
+allowed_emails_router.register(r'allowed-emails', AllowedEmailViewSet, basename='allowed-email')
 
 
 @api_view(['GET'])
@@ -26,11 +32,13 @@ def api_root(request, format=None):
         'apps': reverse('app-root', request=request, format=format),
         'projects': reverse('project-root', request=request, format=format),
         'logs': reverse('logs-list', request=request, format=format),
+        'allowed_emails': reverse('allowed-email-list', request=request, format=format),
     })
 
 
 urlpatterns = [
     path('api/', api_root, name='api-root'),
+    path('api/', include(allowed_emails_router.urls)),
     path('api/auth/', include('core.auth_user.urls')),
     path('api/apps/', include('core.apps.urls')),
     path('api/projects/', include('core.project.urls')),
