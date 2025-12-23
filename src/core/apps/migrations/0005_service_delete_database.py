@@ -8,7 +8,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('apps', '0004_app_task_id'),
-        ('project', '0003_alter_project_options_remove_project_user_and_more'),
+        ('project', '0002_alter_project_options_remove_project_user_and_more'),
     ]
 
     operations = [
