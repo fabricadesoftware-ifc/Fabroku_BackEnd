@@ -1,6 +1,7 @@
 from github import Github, GithubException
 from django.conf import settings
 
+
 class GitRepoMixin:
     def list_user_repos(self, user_id: int):
         from core.auth_user.models import User  # noqa: PLC0415
@@ -36,22 +37,46 @@ class GitRepoMixin:
                 return {'status': 'deploy key já existe em outro repositório'}
             raise
 
-    def create_webhook(repo_name: str, project_id: int, user_id: int):
+    def create_webhook(self, repo_name: str, app_id: int, user_id: int) -> dict:
+        """
+        Cria um webhook no repositório GitHub para deploys automáticos.
+        Verifica se já existe um webhook para o mesmo app antes de criar.
+        """
         from core.auth_user.models import User  # noqa: PLC0415
-        user = User.objects.get(id=user_id)
 
+        user = User.objects.get(id=user_id)
         gh = Github(user.git_token)
         repo = gh.get_repo(repo_name)
 
+        # URL do webhook - usa a configuração do backend
+        webhook_url = f'{settings.BACKEND_URL}/api/webhooks/github/{app_id}/'
+
+        # Verifica se já existe um webhook para este app
+        existing_hooks = repo.get_hooks()
+        for hook in existing_hooks:
+            if hook.config.get('url') == webhook_url:
+                return {'status': 'webhook já existe', 'hook_id': hook.id}
+
+        # Configuração do webhook
         config = {
-            "url": f"https://fabroku.com/deploy/hooks/{project_id}", # TODO: mudar isso 
-            "content_type": "json",
-            "secret": settings.GITHUB_WEBHOOK_SECRET,
+            'url': webhook_url,
+            'content_type': 'json',
         }
 
-        repo.create_hook(
-            name="web",
-            config=config,
-            events=["push"],
-            active=True
-        )
+        # Adiciona secret se configurado
+        webhook_secret = getattr(settings, 'GITHUB_WEBHOOK_SECRET', None)
+        if webhook_secret:
+            config['secret'] = webhook_secret
+
+        try:
+            hook = repo.create_hook(
+                name='web',
+                config=config,
+                events=['push'],
+                active=True,
+            )
+            return {'status': 'webhook criado', 'hook_id': hook.id, 'url': webhook_url}
+        except GithubException as e:
+            if e.status == 422:
+                return {'status': 'erro ao criar webhook', 'error': str(e.data)}
+            raise

@@ -37,10 +37,10 @@ class CreateAppMixin:
     - 85-95%: Let's Encrypt
     - 95-100%: Finalização
     """
+
     @shared_task(bind=True)
     def websocket_deploy_update(self, app_id: int, message: str) -> None:
         """Task auxiliar para enviar atualizações via WebSocket durante o deploy."""
-
 
     @shared_task(bind=True)
     def create_app(self, app_id: int, user_id: int, env_vars: dict | None = None) -> dict:
@@ -78,6 +78,9 @@ class CreateAppMixin:
             git_url = CreateAppMixin._handle_deploy_keys(task, dokku_adapter, github_adapter, user, app.git, logger)
 
             CreateAppMixin._configure_git(task, dokku_adapter, dokku_app_name, git_url, app.branch, logger)
+
+            # Configura webhook para deploy automático
+            CreateAppMixin._setup_webhook(github_adapter, user, app, logger)
 
             CreateAppMixin._set_letsencrypt(self, dokku_app_name, logger)
 
@@ -263,6 +266,38 @@ class CreateAppMixin:
             category=LogCategory.GIT,
             progress=85,
         )
+
+    @staticmethod
+    def _setup_webhook(gh_adapter: GitHubAdapter, user: User, app: App, logger: AppLogManager):
+        """Configura webhook no GitHub para deploy automático."""
+        logger.info('Configurando webhook para deploy automático...', category=LogCategory.GIT, progress=86)
+
+        # Extrai nome do repositório da URL
+        repo_name = app.git.rsplit('.com/', maxsplit=1)[-1].replace('.git', '')
+
+        try:
+            result = gh_adapter.create_webhook(repo_name=repo_name, app_id=app.id, user_id=user.id)
+
+            if result.get('status') == 'webhook criado':
+                logger.success(
+                    f"Webhook configurado! Deploys automáticos ativados para branch '{app.branch}'",
+                    category=LogCategory.GIT,
+                    progress=87,
+                )
+            elif result.get('status') == 'webhook já existe':
+                logger.info('Webhook já estava configurado', category=LogCategory.GIT, progress=87)
+            else:
+                logger.warning(
+                    f'Webhook: {result.get("status", "status desconhecido")}', category=LogCategory.GIT, progress=87
+                )
+
+        except Exception as e:
+            # Webhook é opcional, não deve falhar a criação do app
+            logger.warning(
+                f'Não foi possível configurar webhook automático: {str(e)}',
+                category=LogCategory.GIT,
+                progress=87,
+            )
 
     def _set_letsencrypt(self, dokku_app_name: str, logger: AppLogManager):
         """Configura Let's Encrypt para a aplicação."""

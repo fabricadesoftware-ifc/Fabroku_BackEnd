@@ -15,6 +15,7 @@ from .serializers import AppSerializer
 class AppViewSet(ModelViewSet):
     queryset = App.objects.all()
     serializer_class = AppSerializer
+    filterset_fields = ['project', 'status', 'name', 'branch']
 
     def destroy(self, request, *args, **kwargs):
         """Override destroy para lançar task de deleção no Dokku."""

@@ -207,6 +207,7 @@ DOKKU_SSH_HOST = os.getenv('DOKKU_SSH_HOST', '127.0.0.1')
 DOKKU_SSH_PORT = int(os.getenv('DOKKU_SSH_PORT', 22))  # noqa: PLW1508
 GITHUB_REDIRECT_URI = os.getenv('GITHUB_REDIRECT_URI', 'http://localhost:8000/api/auth/github/callback')
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')  # noqa: PLW1508
+BACKEND_URL = os.getenv('BACKEND_URL', 'http://localhost:8000')  # URL pública do backend para webhooks
 
 CELERY_TIMEZONE = 'America/Sao_Paulo'
 CELERY_TASK_TRACK_STARTED = True

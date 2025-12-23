@@ -1,3 +1,6 @@
+import io
+import os
+import tempfile
 from collections.abc import Generator
 
 import paramiko
@@ -11,12 +14,43 @@ class SSHAdapter:
         self.username = username
         self.ssh_key_path = ssh_key_path
         self.port = port
+        self._temp_key_file = None
+
+    def _get_pkey(self) -> paramiko.PKey:
+        """
+        Obtém a chave privada SSH.
+        Suporta tanto caminho de arquivo quanto conteúdo da chave diretamente.
+        """
+        key_data = self.ssh_key_path
+
+        # Se é um caminho de arquivo que existe, lê o conteúdo
+        if os.path.isfile(key_data):
+            with open(key_data) as f:
+                key_data = f.read()
+
+        # Se o conteúdo veio inline (variável de ambiente), pode ter \n escapado
+        if '\\n' in key_data:
+            key_data = key_data.replace('\\n', '\n')
+
+        # Carrega a chave do conteúdo
+        key_file = io.StringIO(key_data)
+
+        # Tenta diferentes formatos de chave
+        for key_class in [paramiko.RSAKey, paramiko.Ed25519Key, paramiko.ECDSAKey]:
+            try:
+                key_file.seek(0)
+                return key_class.from_private_key(key_file)
+            except Exception:
+                continue
+
+        raise ValueError('Não foi possível carregar a chave SSH. Formato não suportado.')
 
     def _run_command(self, command: str) -> str:
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
-            client.connect(self.host, port=self.port, username=self.username, key_filename=self.ssh_key_path)
+            pkey = self._get_pkey()
+            client.connect(self.host, port=self.port, username=self.username, pkey=pkey)
             stdin, stdout, stderr = client.exec_command(command)
             exit_status = stdout.channel.recv_exit_status()
             if exit_status != 0:
@@ -43,7 +77,8 @@ class SSHAdapter:
         exit_status = -1
 
         try:
-            client.connect(self.host, port=self.port, username=self.username, key_filename=self.ssh_key_path)
+            pkey = self._get_pkey()
+            client.connect(self.host, port=self.port, username=self.username, pkey=pkey)
             stdin, stdout, stderr = client.exec_command(command, get_pty=True)
 
             # Lê linha por linha conforme chegam
