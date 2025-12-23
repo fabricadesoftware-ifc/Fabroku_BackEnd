@@ -109,20 +109,20 @@ STATIC_URL = 'static/'
 
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
-CSRF_TRUSTED_ORIGINS = [
-    'https://*.fexcompany.me',
-    'https://*.fabricadesoftware.ifc.edu.br',
-    'http://localhost:8000',
-    'http://localhost:5173',
-    'http://localhost:3000',
+CSRF_TRUSTED_ORIGIN_REGEXES = [
+    r'^https://.*\.fabricadesoftware\.ifc\.edu\.br$',
+    r'^https://.*\.fexcompany\.me$',
 ]
 
-CORS_ALLOWED_ORIGINS = [
-    'http://localhost:5173',
-    'http://localhost:3000',
-    'https://*.fexcompany.me',
-    'https://*.fabricadesoftware.ifc.edu.br',
+
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r'^https://.*\.fabricadesoftware\.ifc\.edu\.br$',
+    r'^https://.*\.fexcompany\.me$',
 ]
+
+AUTH_COOKIE_DOMAIN = ".fabricadesoftware.ifc.edu.br"
+AUTH_COOKIE_SAMESITE = "None"
+AUTH_COOKIE_SECURE = True
 
 CORS_ALLOW_CREDENTIALS = True
 
@@ -179,12 +179,10 @@ SIMPLE_JWT = {
 
 # Configurações de Cookies para autenticação
 AUTH_COOKIE_NAME = 'access_token'
-AUTH_COOKIE_REFRESH_NAME = 'refresh_token'
-AUTH_COOKIE_SECURE = not DEBUG  # True em produção (HTTPS)
-AUTH_COOKIE_HTTP_ONLY = True  # Não acessível via JavaScript
-AUTH_COOKIE_SAMESITE = 'Lax'  # 'Lax' para compatibilidade, 'Strict' para mais segurança
+AUTH_COOKIE_HTTP_ONLY = True
 AUTH_COOKIE_PATH = '/'
-AUTH_COOKIE_DOMAIN = os.getenv('COOKIE_DOMAIN', None)  # None = domínio atual
+AUTH_COOKIE_REFRESH_NAME = 'refresh_token'
+
 
 SPECTACULAR_SETTINGS = {
     'TITLE': 'Fabroku API',
