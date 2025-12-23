@@ -1,5 +1,6 @@
-import paramiko
 from collections.abc import Generator
+
+import paramiko
 
 
 class SSHAdapter:

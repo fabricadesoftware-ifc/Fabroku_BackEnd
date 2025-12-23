@@ -4,6 +4,7 @@ from celery import Task, shared_task
 
 from core.adapters import DokkuAdapter
 from core.apps.models import App
+from core.apps.utils import slugify_dokku
 
 
 class UpdateAppMixin:
@@ -22,22 +23,33 @@ class UpdateAppMixin:
 
         dokku_adapter = DokkuAdapter()
 
+        if not app.name_dokku:
+            return {'status': 'error', 'message': 'App without dokku name'}
+
+        app.status = 'deploying'
+        app.task_id = task.request.id
+        app.save(update_fields=['status', 'task_id'])
+
         if name and app.name != name:
             task.update_state(state='PROGRESS', meta={'status': f'Renomeando para {name}...'})
-            dokku_adapter.rename_app(old_name=app.name, new_name=name)
+            dokku_adapter.rename_app(old_name=app.name, new_name=slugify_dokku(f'{name}-{app.project.id}'))
             app.name = name
+            app.name_dokku = slugify_dokku(f'{name}-{app.project.id}')
             app.save()
 
         if git and app.git != git:
             task.update_state(state='PROGRESS', meta={'status': 'Atualizando remote Git...'})
-            dokku_adapter.set_git_remote(app_name=app.name, git_url=git)
+            dokku_adapter.set_git_remote(app_name=app.name_dokku, git_url=git)
             app.git = git
             app.save()
 
         if env_vars is not None:
             task.update_state(state='PROGRESS', meta={'status': 'Atualizando variáveis de ambiente...'})
-            dokku_adapter.set_config(app_name=app.name, env_vars=env_vars)
+            dokku_adapter.set_config(app_name=app.name_dokku, env_vars=env_vars)
             app.variables = env_vars
             app.save()
+
+        app.status = 'running'
+        app.save()
 
         return {'status': 'updated', 'app_id': app.id}  # type: ignore

@@ -38,7 +38,10 @@ class AppSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         AppMixin.update_app.delay(
-            name=validated_data.get('name', instance.name), git=validated_data.get('git', instance.git), id=instance.id
+            name=validated_data.get('name', instance.name),
+            git=validated_data.get('git', instance.git),
+            app_id=instance.id,
+            env_vars=validated_data.get('variables', instance.variables),
         )  # type: ignore  # noqa: E501
 
         return instance

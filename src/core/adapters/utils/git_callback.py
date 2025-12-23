@@ -1,12 +1,14 @@
 # views.py
+from urllib.parse import urlencode
+
 import requests
 from django.conf import settings
-from django.http import JsonResponse
 from django.shortcuts import redirect
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from core.adapters.utils.git_email import verify_git_email
 from core.auth_user.models import User
 
 
@@ -55,9 +57,8 @@ def github_callback(request):
             },
         )
         if token_res.status_code != 200:  # noqa: PLR2004
-            return JsonResponse(
-                {'status': 'error', 'message': 'Failed to obtain access token from GitHub.'}, status=400
-            )  # noqa: E501
+            error_params = urlencode({'error': 'auth_failed', 'message': 'Falha ao obter token de acesso do GitHub.'})
+            return redirect(f'{settings.FRONTEND_URL}/callback?{error_params}')
 
         user_git = requests.get(
             'https://api.github.com/user',
@@ -68,7 +69,11 @@ def github_callback(request):
         )
 
         if user_git.status_code != 200:  # noqa: PLR2004
-            return JsonResponse({'status': 'error', 'message': 'Failed to obtain user info from GitHub.'}, status=400)  # noqa: E501
+            error_params = urlencode({
+                'error': 'user_info_failed',
+                'message': 'Falha ao obter informações do usuário do GitHub.',
+            })
+            return redirect(f'{settings.FRONTEND_URL}/callback?{error_params}')
 
         user_git_json = user_git.json()
         user_git_email = requests.get(
@@ -80,7 +85,13 @@ def github_callback(request):
         )
 
         if user_git_email.status_code != 200:  # noqa: PLR2004
-            return JsonResponse({'status': 'error', 'message': 'Failed to obtain user email from GitHub.'}, status=400)  # noqa: E501
+            error_params = urlencode({'error': 'email_failed', 'message': 'Falha ao obter email do usuário do GitHub.'})
+            return redirect(f'{settings.FRONTEND_URL}/callback?{error_params}')
+
+        print(user_git_email.json())
+        if verify_git_email(user_git_email.json()) is None:
+            error_params = urlencode({'error': 'invalid_email', 'message': 'O email do usuário não é do IFC.'})
+            return redirect(f'{settings.FRONTEND_URL}/callback?{error_params}')
 
         token_json = token_res.json()
         access_token = token_json.get('access_token')
@@ -103,4 +114,5 @@ def github_callback(request):
 
         return response
     except Exception as e:
-        return JsonResponse({'status': 'error', 'message': 'Token invalido ou expirado', 'error': str(e)})
+        error_params = urlencode({'error': 'unexpected_error', 'message': f'Erro inesperado: {str(e)}'})
+        return redirect(f'{settings.FRONTEND_URL}/callback?{error_params}')
