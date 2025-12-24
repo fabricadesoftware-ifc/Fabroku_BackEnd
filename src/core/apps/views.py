@@ -29,7 +29,7 @@ class AppViewSet(ModelViewSet):
         instance = self.get_object()
 
         # Atualiza status para indicar que está deletando
-        instance.status = 'deleting'
+        instance.status = 'DELETING'
         instance.save(update_fields=['status'])
 
         # Lança a task de deleção
@@ -59,7 +59,7 @@ class AppViewSet(ModelViewSet):
             dokku = DokkuAdapter()
             result = dokku.start_app(app.name_dokku)
 
-            app.status = 'running'
+            app.status = 'RUNNING'
             app.save(update_fields=['status'])
 
             return Response({
@@ -88,11 +88,11 @@ class AppViewSet(ModelViewSet):
             dokku = DokkuAdapter()
             result = dokku.stop_app(app.name_dokku)
 
-            app.status = 'stopped'
+            app.status = 'STOPPED'
             app.save(update_fields=['status'])
 
             return Response({
-                'status': 'stopped',
+                'status': 'STOPPED',
                 'message': f'Aplicação {app.name} parada com sucesso',
                 'dokku_output': result,
             })
@@ -117,7 +117,7 @@ class AppViewSet(ModelViewSet):
             dokku = DokkuAdapter()
             result = dokku.restart_app(app.name_dokku)
 
-            app.status = 'running'
+            app.status = 'RUNNING'
             app.save(update_fields=['status'])
 
             return Response({

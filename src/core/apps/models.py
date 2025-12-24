@@ -3,15 +3,16 @@ from django.db import models
 from core.project.models import Project
 
 
+class AppStatus(models.TextChoices):
+    STARTING = 'STARTING', 'Starting'
+    RUNNING = 'RUNNING', 'Running'
+    STOPPED = 'STOPPED', 'Stopped'
+    ERROR = 'ERROR', 'Error'
+    DELETING = 'DELETING', 'Deleting'
+    DEPLOYING = 'DEPLOYING', 'Deploying'
+
+
 class App(models.Model):
-    SATATUS_CHOICES = [
-        ('starting', 'Starting'),
-        ('running', 'Running'),
-        ('stopped', 'Stopped'),
-        ('error', 'Error'),
-        ('deleting', 'Deleting'),
-        ('deploying', 'Deploying'),
-    ]
     name = models.CharField(max_length=255)
     name_dokku = models.CharField(max_length=255, null=True, blank=True)
     git = models.URLField()
@@ -19,7 +20,7 @@ class App(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    status = models.CharField(max_length=50, choices=SATATUS_CHOICES, default='stopped')
+    status = models.CharField(max_length=50, choices=AppStatus.choices, default=AppStatus.STOPPED)
     domain = models.CharField(max_length=255, null=True, blank=True)
     port = models.IntegerField(null=True, blank=True)
     variables = models.JSONField(default=dict)

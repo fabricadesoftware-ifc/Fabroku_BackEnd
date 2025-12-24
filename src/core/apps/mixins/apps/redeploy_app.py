@@ -39,7 +39,7 @@ class RedeployAppMixin:
 
         # Atualiza task_id e status
         app.task_id = task_id
-        app.status = 'deploying'
+        app.status = 'DEPLOYING'
         app.save(update_fields=['task_id', 'status'])
 
         # Inicializa logger
@@ -61,7 +61,7 @@ class RedeployAppMixin:
             # Verifica se o app existe no Dokku
             if not dokku_adapter.exists_app(dokku_app_name):
                 logger.error(f'App {dokku_app_name} não existe no Dokku', category=LogCategory.DEPLOY)
-                app.status = 'error'
+                app.status = 'ERROR'
                 app.save(update_fields=['status'])
                 return {'status': 'error', 'message': 'App não existe no Dokku'}
 
@@ -96,12 +96,12 @@ class RedeployAppMixin:
 
             if 'Failed' in output:
                 logger.error(f'Erro no redeploy: {output}', category=LogCategory.DEPLOY, progress=90)
-                app.status = 'error'
+                app.status = 'ERROR'
                 app.save(update_fields=['status'])
                 return {'status': 'error', 'message': output}
 
             # Sucesso
-            app.status = 'running'
+            app.status = 'RUNNING'
             app.save(update_fields=['status'])
 
             logger.success(
@@ -119,6 +119,6 @@ class RedeployAppMixin:
 
         except Exception as e:
             logger.error(f'Erro no redeploy: {str(e)}', category=LogCategory.DEPLOY)
-            app.status = 'error'
+            app.status = 'ERROR'
             app.save(update_fields=['status'])
             raise

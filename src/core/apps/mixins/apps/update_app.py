@@ -26,7 +26,7 @@ class UpdateAppMixin:
         if not app.name_dokku:
             return {'status': 'error', 'message': 'App without dokku name'}
 
-        app.status = 'deploying'
+        app.status = 'DEPLOYING'
         app.task_id = task.request.id
         app.save(update_fields=['status', 'task_id'])
 
@@ -49,7 +49,7 @@ class UpdateAppMixin:
             app.variables = env_vars
             app.save()
 
-        app.status = 'running'
+        app.status = 'RUNNING'
         app.save()
 
         return {'status': 'updated', 'app_id': app.id}  # type: ignore
