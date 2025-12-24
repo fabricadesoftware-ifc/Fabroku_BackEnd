@@ -5,6 +5,8 @@ from core.apps.models import App
 
 
 class AppSerializer(serializers.ModelSerializer):
+    is_owner = serializers.SerializerMethodField()
+
     class Meta:
         model = App
         fields = [
@@ -13,6 +15,7 @@ class AppSerializer(serializers.ModelSerializer):
             'git',
             'branch',
             'project',
+            'is_owner',
             'created_at',
             'updated_at',
             'status',
@@ -22,7 +25,24 @@ class AppSerializer(serializers.ModelSerializer):
             'task_id',
             'name_dokku',
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at', 'status', 'domain', 'port', 'task_id', 'name_dokku']
+        read_only_fields = [
+            'id',
+            'is_owner',
+            'created_at',
+            'updated_at',
+            'status',
+            'domain',
+            'port',
+            'task_id',
+            'name_dokku',
+        ]
+
+    def get_is_owner(self, obj):
+        """Retorna True se o usuário logado é dono do app (via projeto)."""
+        request = self.context.get('request')
+        if request and request.user:
+            return obj.project.users.filter(id=request.user.id).exists()
+        return False
 
     def create(self, validated_data):
         user = self.context['request'].user

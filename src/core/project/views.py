@@ -13,7 +13,9 @@ class ProjectViewSet(ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        """Retorna apenas os projetos do usuário logado."""
+        """Superusers veem todos os projetos, usuários normais só os seus."""
+        if self.request.user.is_superuser:
+            return Project.objects.all()
         return Project.objects.filter(users=self.request.user)
 
     def perform_create(self, serializer):

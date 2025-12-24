@@ -20,7 +20,9 @@ class AppViewSet(ModelViewSet):
     filterset_fields = ['project', 'status', 'name', 'branch']
 
     def get_queryset(self):
-        """Retorna apenas apps de projetos do usuário logado."""
+        """Superusers veem todos os apps, usuários normais só os seus."""
+        if self.request.user.is_superuser:
+            return App.objects.all()
         return App.objects.filter(project__users=self.request.user)
 
     def destroy(self, request, *args, **kwargs):
