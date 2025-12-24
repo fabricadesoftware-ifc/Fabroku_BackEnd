@@ -45,3 +45,19 @@ class DokkuAppsMixin:
     def rename_app(self, old_name: str, new_name: str) -> str:
         """Renomeia uma aplicação."""
         return self._run_command(f'apps:rename {old_name} {new_name}')
+
+    def start_app(self, app_name: str) -> str:
+        """Inicia uma aplicação."""
+        return self._run_command(f'ps:start {app_name}')
+
+    def stop_app(self, app_name: str) -> str:
+        """Para uma aplicação."""
+        return self._run_command(f'ps:stop {app_name}')
+
+    def restart_app(self, app_name: str) -> str:
+        """Reinicia uma aplicação."""
+        return self._run_command(f'ps:restart {app_name}')
+
+    def get_app_status(self, app_name: str) -> str:
+        """Retorna o status dos processos de uma aplicação."""
+        return self._run_command(f'ps:report {app_name}')
