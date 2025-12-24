@@ -106,6 +106,13 @@ def github_callback(request):
             },
         )
         user = User.objects.get(id=user_git_json.get('id'))
+
+        # Atualiza last_login
+        from django.utils import timezone
+
+        user.last_login = timezone.now()
+        user.save(update_fields=['last_login'])
+
         refresh = RefreshToken.for_user(user)
 
         # Redireciona para o frontend e seta os cookies
