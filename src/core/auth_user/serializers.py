@@ -8,6 +8,9 @@ class UserRetrieveSerializer(serializers.Serializer):
     email = serializers.EmailField(read_only=True)
     name = serializers.CharField(read_only=True)
     avatar_url = serializers.URLField(read_only=True)
+    is_superuser = serializers.BooleanField(read_only=True)
+    date_joined = serializers.DateTimeField(read_only=True)
+    last_login = serializers.DateTimeField(read_only=True)
 
 
 class UserSerializer(serializers.ModelSerializer):
