@@ -2,6 +2,7 @@ from django.conf import settings
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
@@ -20,8 +21,9 @@ from .serializers import UserRetrieveSerializer, UserSerializer
 class UserViewSet(ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
+    filter_backends = [SearchFilter, OrderingFilter]
     filterset_fields = ['id', 'name']
-    search_fields = ['name']
+    search_fields = ['name', 'email']
     ordering_fields = ['id', 'name']
     ordering = ['id']
 
