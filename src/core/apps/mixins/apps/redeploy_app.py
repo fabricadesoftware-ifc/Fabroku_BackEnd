@@ -1,3 +1,4 @@
+import re
 from typing import cast
 
 from celery import Task, shared_task
@@ -5,6 +6,18 @@ from celery import Task, shared_task
 from core.adapters import DokkuAdapter
 from core.apps.models import App
 from core.logs.models import AppLogManager, LogCategory
+
+
+def https_to_ssh_url(url: str) -> str:
+    """
+    Converte URL HTTPS do GitHub para SSH.
+    https://github.com/user/repo.git -> git@github.com:user/repo.git
+    """
+    match = re.match(r'https://github\.com/([^/]+)/([^/]+?)(\.git)?$', url)
+    if match:
+        owner, repo = match.group(1), match.group(2)
+        return f'git@github.com:{owner}/{repo}.git'
+    return url
 
 
 class RedeployAppMixin:
@@ -71,9 +84,12 @@ class RedeployAppMixin:
                 logger.dokku(line, category=LogCategory.GIT, progress=int(progress))
 
             # Usa streaming para mostrar logs em tempo real
+            # Converte URL HTTPS para SSH para usar deploy key
+            git_url = https_to_ssh_url(app.git)
+
             output = dokku_adapter.sync_git_streaming(
                 app_name=dokku_app_name,
-                git_url=app.git,
+                git_url=git_url,
                 branch=app.branch,
                 on_line=on_log_line,
             )
