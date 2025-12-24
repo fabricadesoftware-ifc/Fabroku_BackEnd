@@ -2,6 +2,7 @@ from celery.result import AsyncResult
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
@@ -15,7 +16,12 @@ from .serializers import AppSerializer
 class AppViewSet(ModelViewSet):
     queryset = App.objects.all()
     serializer_class = AppSerializer
+    permission_classes = [IsAuthenticated]
     filterset_fields = ['project', 'status', 'name', 'branch']
+
+    def get_queryset(self):
+        """Retorna apenas apps de projetos do usuário logado."""
+        return App.objects.filter(project__users=self.request.user)
 
     def destroy(self, request, *args, **kwargs):
         """Override destroy para lançar task de deleção no Dokku."""
