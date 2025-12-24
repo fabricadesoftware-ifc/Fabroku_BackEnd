@@ -7,6 +7,8 @@ class AppStatus(models.TextChoices):
     STARTING = 'STARTING', 'Starting'
     RUNNING = 'RUNNING', 'Running'
     STOPPED = 'STOPPED', 'Stopped'
+    STOPPING = 'STOPPING', 'Stopping'
+    RESTARTING = 'RESTARTING', 'Restarting'
     ERROR = 'ERROR', 'Error'
     DELETING = 'DELETING', 'Deleting'
     DEPLOYING = 'DEPLOYING', 'Deploying'

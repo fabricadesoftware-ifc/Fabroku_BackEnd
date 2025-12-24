@@ -4,10 +4,8 @@ from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
-from .managers import CustomUserManager
-
 # Import do modelo AllowedEmail para que seja detectado pelas migrations
-from .allowed_emails.models import AllowedEmail  # noqa: F401
+from .managers import CustomUserManager
 
 
 def remove_accent(text):

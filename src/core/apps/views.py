@@ -6,7 +6,6 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
-from core.adapters import DokkuAdapter
 from core.apps.mixins import AppMixin
 
 from .models import App
@@ -37,7 +36,7 @@ class AppViewSet(ModelViewSet):
 
         return Response(
             {
-                'status': 'deleting',
+                'status': 'DELETING',
                 'message': f'Deletando aplicação {instance.name}...',
                 'task_id': task_result.id,
             },
@@ -55,23 +54,19 @@ class AppViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        try:
-            dokku = DokkuAdapter()
-            result = dokku.start_app(app.name_dokku)
+        app.status = 'STARTING'
+        app.save(update_fields=['status'])
 
-            app.status = 'RUNNING'
-            app.save(update_fields=['status'])
+        task_result = AppMixin.manage_app.delay(app_id=app.id, action='start')  # type: ignore
 
-            return Response({
-                'status': 'started',
-                'message': f'Aplicação {app.name} iniciada com sucesso',
-                'dokku_output': result,
-            })
-        except Exception as e:
-            return Response(
-                {'error': f'Erro ao iniciar aplicação: {str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+        return Response(
+            {
+                'status': 'STARTING',
+                'message': f'Iniciando aplicação {app.name}...',
+                'task_id': task_result.id,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 
     @action(detail=True, methods=['post'])
     def stop(self, request, pk=None):
@@ -84,23 +79,19 @@ class AppViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        try:
-            dokku = DokkuAdapter()
-            result = dokku.stop_app(app.name_dokku)
+        app.status = 'STOPPING'
+        app.save(update_fields=['status'])
 
-            app.status = 'STOPPED'
-            app.save(update_fields=['status'])
+        task_result = AppMixin.manage_app.delay(app_id=app.id, action='stop')  # type: ignore
 
-            return Response({
-                'status': 'STOPPED',
-                'message': f'Aplicação {app.name} parada com sucesso',
-                'dokku_output': result,
-            })
-        except Exception as e:
-            return Response(
-                {'error': f'Erro ao parar aplicação: {str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+        return Response(
+            {
+                'status': 'STOPPING',
+                'message': f'Parando aplicação {app.name}...',
+                'task_id': task_result.id,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 
     @action(detail=True, methods=['post'])
     def restart(self, request, pk=None):
@@ -113,23 +104,19 @@ class AppViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        try:
-            dokku = DokkuAdapter()
-            result = dokku.restart_app(app.name_dokku)
+        app.status = 'RESTARTING'
+        app.save(update_fields=['status'])
 
-            app.status = 'RUNNING'
-            app.save(update_fields=['status'])
+        task_result = AppMixin.manage_app.delay(app_id=app.id, action='restart')  # type: ignore
 
-            return Response({
-                'status': 'restarted',
-                'message': f'Aplicação {app.name} reiniciada com sucesso',
-                'dokku_output': result,
-            })
-        except Exception as e:
-            return Response(
-                {'error': f'Erro ao reiniciar aplicação: {str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+        return Response(
+            {
+                'status': 'RESTARTING',
+                'message': f'Reiniciando aplicação {app.name}...',
+                'task_id': task_result.id,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 
     @action(detail=True, methods=['get'])
     def get_app_status(self, request, pk=None):
