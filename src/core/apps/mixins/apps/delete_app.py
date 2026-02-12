@@ -3,7 +3,7 @@ from typing import cast
 from celery import Task, shared_task
 
 from core.adapters import DokkuAdapter
-from core.apps.models import App
+from core.apps.models import App, Service, ServiceType
 
 
 class DeleteAppMixin:
@@ -22,6 +22,18 @@ class DeleteAppMixin:
         task.update_state(state='PROGRESS', meta={'status': f'Removendo container {dokku_app_name}...'})
 
         dokku_adapter = DokkuAdapter()
+
+        # Primeiro, limpa os serviços vinculados ao app
+        services = Service.objects.filter(app=app)
+        for service in services:
+            dokku_service_name = service.container_name or service.name
+            try:
+                if service.service_type == ServiceType.POSTGRES and dokku_app_name:
+                    dokku_adapter.unlink_database(db_name=dokku_service_name, app_name=dokku_app_name)
+                    dokku_adapter.delete_database(db_name=dokku_service_name)
+            except Exception as e:
+                print(f'Erro ao deletar serviço {dokku_service_name}: {e}')
+            service.delete()
 
         # Só tenta deletar no Dokku se o name_dokku existir
         if dokku_app_name:

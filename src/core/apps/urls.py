@@ -4,10 +4,11 @@ from rest_framework.response import Response
 from rest_framework.reverse import reverse  # noqa: F811
 from rest_framework.routers import DefaultRouter
 
-from .views import AppViewSet
+from .views import AppViewSet, ServiceViewSet
 
 router = DefaultRouter()
 router.register(r'apps', AppViewSet, basename='app')
+router.register(r'services', ServiceViewSet, basename='service')
 
 
 @api_view(['GET'])

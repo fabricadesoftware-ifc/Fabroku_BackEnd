@@ -8,6 +8,7 @@ from core.adapters.dokku_mixins import (
     DokkuLetsencryptMixin,
     DokkuPortsMixin,
     DokkuPostgresMixin,
+    DokkuRunMixin,
 )
 from core.adapters.ssh import SSHAdapter
 
@@ -21,7 +22,8 @@ class DokkuAdapter(
     DokkuPortsMixin,
     DokkuLetsencryptMixin,
     DokkuDomainsMixin,
-    ):
+    DokkuRunMixin,
+):
     def __init__(
         self,
     ):

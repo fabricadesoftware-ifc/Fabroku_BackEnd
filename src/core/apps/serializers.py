@@ -1,11 +1,66 @@
 from rest_framework import serializers
 
 from core.apps.mixins import AppMixin
-from core.apps.models import App
+from core.apps.models import App, Service
+
+
+class ServiceSerializer(serializers.ModelSerializer):
+    """Serializer para serviços (banco de dados, redis, etc.)."""
+
+    class Meta:
+        model = Service
+        fields = [
+            'id',
+            'name',
+            'service_type',
+            'app',
+            'project',
+            'container_name',
+            'host',
+            'port',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = [
+            'id',
+            'name',
+            'host',
+            'port',
+            'container_name',
+            'project',
+            'created_at',
+            'updated_at',
+        ]
+
+    def create(self, validated_data):
+        app = validated_data['app']
+        service_type = validated_data['service_type']
+
+        # Dispara a task Celery para criar o serviço
+        task_result = AppMixin.create_service.delay(
+            app_id=app.id,
+            service_type=service_type,
+        )  # type: ignore
+
+        # Atualiza task_id no app para tracking
+        app.task_id = task_result.id
+        app.save(update_fields=['task_id'])
+
+        # Retorna uma instância temporária para a response
+        # (o serviço real será criado pela task)
+        return Service(
+            name=f'{app.name}-db',
+            service_type=service_type,
+            app=app,
+            project=app.project,
+            host='provisionando...',
+            port=0,
+        )
 
 
 class AppSerializer(serializers.ModelSerializer):
     is_owner = serializers.SerializerMethodField()
+    services = ServiceSerializer(source='service_set', many=True, read_only=True)
 
     class Meta:
         model = App
@@ -24,6 +79,7 @@ class AppSerializer(serializers.ModelSerializer):
             'variables',
             'task_id',
             'name_dokku',
+            'services',
         ]
         read_only_fields = [
             'id',
@@ -35,6 +91,7 @@ class AppSerializer(serializers.ModelSerializer):
             'port',
             'task_id',
             'name_dokku',
+            'services',
         ]
 
     def get_is_owner(self, obj):
