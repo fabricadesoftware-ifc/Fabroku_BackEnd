@@ -9,7 +9,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from core.adapters.utils.git_email import verify_git_email
-from core.auth_user.models import User
+from core.auth_user.models import CLIToken, User
 
 
 def set_auth_cookies(response, access_token: str, refresh_token: str):
@@ -44,6 +44,18 @@ def set_auth_cookies(response, access_token: str, refresh_token: str):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def github_callback(request):
+    """Callback OAuth do GitHub — funciona tanto para Web quanto para CLI."""
+    state = request.GET.get('state', '')
+    is_cli = state.startswith('cli:')
+    cli_port = state.split(':', 1)[1] if is_cli else None
+
+    def _error_redirect(params: dict):
+        """Redireciona erro para CLI (localhost) ou Frontend."""
+        qs = urlencode(params)
+        if is_cli:
+            return redirect(f'http://localhost:{cli_port}/callback?{qs}')
+        return redirect(f'{settings.FRONTEND_URL}/callback?{qs}')
+
     try:
         code = request.GET.get('code')
 
@@ -57,8 +69,7 @@ def github_callback(request):
             },
         )
         if token_res.status_code != 200:  # noqa: PLR2004
-            error_params = urlencode({'error': 'auth_failed', 'message': 'Falha ao obter token de acesso do GitHub.'})
-            return redirect(f'{settings.FRONTEND_URL}/callback?{error_params}')
+            return _error_redirect({'error': 'auth_failed', 'message': 'Falha ao obter token de acesso do GitHub.'})
 
         user_git = requests.get(
             'https://api.github.com/user',
@@ -69,11 +80,10 @@ def github_callback(request):
         )
 
         if user_git.status_code != 200:  # noqa: PLR2004
-            error_params = urlencode({
+            return _error_redirect({
                 'error': 'user_info_failed',
                 'message': 'Falha ao obter informações do usuário do GitHub.',
             })
-            return redirect(f'{settings.FRONTEND_URL}/callback?{error_params}')
 
         user_git_json = user_git.json()
         user_git_email = requests.get(
@@ -85,13 +95,10 @@ def github_callback(request):
         )
 
         if user_git_email.status_code != 200:  # noqa: PLR2004
-            error_params = urlencode({'error': 'email_failed', 'message': 'Falha ao obter email do usuário do GitHub.'})
-            return redirect(f'{settings.FRONTEND_URL}/callback?{error_params}')
+            return _error_redirect({'error': 'email_failed', 'message': 'Falha ao obter email do usuário do GitHub.'})
 
-        print(user_git_email.json())
         if verify_git_email(user_git_email.json()) is None:
-            error_params = urlencode({'error': 'invalid_email', 'message': 'O email do usuário não é do IFC.'})
-            return redirect(f'{settings.FRONTEND_URL}/callback?{error_params}')
+            return _error_redirect({'error': 'invalid_email', 'message': 'O email do usuário não é do IFC.'})
 
         token_json = token_res.json()
         access_token = token_json.get('access_token')
@@ -113,13 +120,16 @@ def github_callback(request):
         user.last_login = timezone.now()
         user.save(update_fields=['last_login'])
 
-        refresh = RefreshToken.for_user(user)
+        if is_cli:
+            # --- Fluxo CLI: gera CLIToken e redireciona para localhost ---
+            cli_token = CLIToken.objects.create(user=user, name='CLI Login')
+            return redirect(f'http://localhost:{cli_port}/callback?token={cli_token.token}&user={user.name}')
 
-        # Redireciona para o frontend e seta os cookies
+        # --- Fluxo Web: JWT em cookies ---
+        refresh = RefreshToken.for_user(user)
         response = redirect(f'{settings.FRONTEND_URL}/callback')
         set_auth_cookies(response, str(refresh.access_token), str(refresh))
 
         return response
     except Exception as e:
-        error_params = urlencode({'error': 'unexpected_error', 'message': f'Erro inesperado: {str(e)}'})
-        return redirect(f'{settings.FRONTEND_URL}/callback?{error_params}')
+        return _error_redirect({'error': 'unexpected_error', 'message': f'Erro inesperado: {str(e)}'})
