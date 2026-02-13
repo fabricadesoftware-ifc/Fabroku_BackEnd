@@ -66,6 +66,8 @@ class CreateAppMixin:
         app.name_dokku = dokku_app_name
         app.save(update_fields=['name_dokku'])
 
+        head_sha = None  # Declarado fora do try para uso no except
+
         try:
             if CreateAppMixin._ensure_dokku_app(task, dokku_adapter, app, dokku_app_name, logger):
                 logger.warning(

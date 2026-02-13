@@ -1,4 +1,7 @@
+import logging
+
 from celery.result import AsyncResult
+from django.conf import settings
 from drf_spectacular.utils import extend_schema
 from rest_framework import serializers as drf_serializers
 from rest_framework import status
@@ -7,11 +10,14 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
+from core.adapters import GitHubAdapter
 from core.apps.mixins import AppMixin
 from core.apps.mixins.apps.run_command import ALLOWED_COMMANDS, ALLOWED_PREFIXES, is_command_allowed
 
 from .models import App, Service
 from .serializers import AppSerializer, ServiceSerializer
+
+logger = logging.getLogger(__name__)
 
 
 @extend_schema(tags=['apps'])
@@ -229,6 +235,50 @@ class AppViewSet(ModelViewSet):
             'commands': sorted(ALLOWED_COMMANDS),
             'prefixes': list(ALLOWED_PREFIXES),
         })
+
+    @action(detail=True, methods=['post'])
+    def setup_webhook(self, request, pk=None):
+        """Verifica e (re)cria o webhook do GitHub para deploy automático."""
+        app = self.get_object()
+        user = request.user
+
+        if not user.git_token:
+            return Response(
+                {'error': 'Você precisa estar autenticado com o GitHub (git_token ausente).'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not app.git:
+            return Response(
+                {'error': 'App não tem URL do repositório Git configurada.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        repo_name = app.git.rsplit('.com/', maxsplit=1)[-1].replace('.git', '')
+        github_adapter = GitHubAdapter()
+
+        try:
+            result = github_adapter.create_webhook(
+                repo_name=repo_name,
+                app_id=app.id,
+                user_id=user.id,
+            )
+            webhook_url = f'{settings.BACKEND_URL}/api/webhooks/github/{app.id}/'
+            logger.info('Webhook setup para app %s: %s (URL: %s)', app.name, result, webhook_url)
+
+            return Response({
+                'status': result.get('status', 'unknown'),
+                'webhook_url': webhook_url,
+                'backend_url': settings.BACKEND_URL,
+                'repo': repo_name,
+                'hook_id': result.get('hook_id'),
+            })
+        except Exception as e:
+            logger.exception('Erro ao configurar webhook para app %s', app.name)
+            return Response(
+                {'error': f'Erro ao configurar webhook: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 @extend_schema(tags=['services'])

@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import logging
 
 from django.conf import settings
 from django.http import JsonResponse
@@ -10,6 +11,8 @@ from rest_framework.permissions import AllowAny
 
 from core.apps.mixins import AppMixin
 from core.apps.models import App
+
+logger = logging.getLogger(__name__)
 
 
 def verify_github_signature(payload_body: bytes, signature: str | None, secret: str) -> bool:
@@ -79,8 +82,18 @@ def github_webhook(request, app_id: int):
     commit = payload.get('after', payload.get('head_commit', {}).get('id'))
     pusher = payload.get('pusher', {}).get('name', 'unknown')
 
+    logger.info(
+        'Webhook recebido: app=%s branch=%s commit=%s pusher=%s',
+        app.name,
+        branch,
+        commit[:7] if commit else 'N/A',
+        pusher,
+    )
+
     # Dispara a task de redeploy
     task_result = AppMixin.redeploy_app.delay(app_id=app.id, commit=commit)  # type: ignore
+
+    logger.info('Task de redeploy disparada: task_id=%s app=%s', task_result.id, app.name)
 
     return JsonResponse({
         'status': 'deploy_started',

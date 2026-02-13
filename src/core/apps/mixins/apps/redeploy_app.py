@@ -1,3 +1,4 @@
+import logging
 import re
 from typing import cast
 
@@ -7,6 +8,8 @@ from core.adapters import DokkuAdapter, GitHubAdapter
 from core.apps.models import App
 from core.auth_user.models import User
 from core.logs.models import AppLogManager, LogCategory
+
+py_logger = logging.getLogger(__name__)
 
 
 def https_to_ssh_url(url: str) -> str:
@@ -54,7 +57,19 @@ class RedeployAppMixin:
         # --- GitHub Commit Status ---
         github_adapter = GitHubAdapter()
         git_token = RedeployAppMixin._get_git_token(app)
+        if not git_token:
+            py_logger.warning(
+                'Commit status ignorado para app %s: nenhum usuário do projeto tem git_token',
+                app.name,
+            )
+            logger.warning(
+                'Commit status indisponível: nenhum usuário do projeto tem token GitHub',
+                category=LogCategory.DEPLOY,
+            )
+        if not commit:
+            py_logger.warning('Commit status ignorado para app %s: SHA do commit não fornecido', app.name)
         if commit and git_token:
+            py_logger.info('Setando commit status pending para %s @ %s', app.name, commit[:7])
             github_adapter.set_deploy_pending(git_token, app.git, commit, app.name)
 
         dokku_adapter = DokkuAdapter()
