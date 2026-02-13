@@ -81,7 +81,12 @@ class RedeployAppMixin:
                     return
                 line_count[0] += 1
                 progress = min(base_progress + (line_count[0] * 0.5), max_progress - 1)
-                logger.dokku(line, category=LogCategory.GIT, progress=int(progress))
+                progress = int(progress)
+                logger.dokku(line, category=LogCategory.GIT, progress=progress)
+                task.update_state(
+                    state='PROGRESS',
+                    meta={'current': progress, 'total': 100, 'status': line.strip()[:120]},
+                )
 
             # Usa streaming para mostrar logs em tempo real
             # Converte URL HTTPS para SSH para usar deploy key
