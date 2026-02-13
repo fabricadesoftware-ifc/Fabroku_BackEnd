@@ -120,8 +120,8 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
     r'^https://.*\.fexcompany\.me$',
 ]
 
-AUTH_COOKIE_DOMAIN = ".fabricadesoftware.ifc.edu.br"
-AUTH_COOKIE_SAMESITE = "None"
+AUTH_COOKIE_DOMAIN = '.fabricadesoftware.ifc.edu.br'
+AUTH_COOKIE_SAMESITE = 'None'
 AUTH_COOKIE_SECURE = True
 
 CORS_ALLOW_CREDENTIALS = True

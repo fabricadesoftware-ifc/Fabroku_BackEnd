@@ -50,7 +50,7 @@ class CLITokenAuthentication(BaseAuthentication):
         if not auth_header.startswith(f'{self.keyword} '):
             return None
 
-        token = auth_header[len(self.keyword) + 1:].strip()
+        token = auth_header[len(self.keyword) + 1 :].strip()
         if not token:
             return None
 

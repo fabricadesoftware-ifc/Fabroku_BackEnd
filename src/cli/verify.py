@@ -5,7 +5,7 @@ Lógica baseada no diagrama:
   - É da fábrica?
     - NÃO → verifica "Tipo aplicação": Frontend ou Backend
     - SIM → "Tipo aplicação" OU "Personalizado" (pula verificação)
-  
+
   Frontend precisa de: .buildpacks, .static, static.json
   Backend precisa de:  Procfile, requirements.txt, runtime.txt
 """
@@ -74,13 +74,17 @@ def _check_files(directory: Path, app_type: str) -> tuple[list[str], list[str]]:
 
 @click.command()
 @click.option(
-    '--type', '-t', 'app_type',
+    '--type',
+    '-t',
+    'app_type',
     type=click.Choice(['frontend', 'backend'], case_sensitive=False),
     default=None,
     help='Tipo da aplicação (frontend ou backend). Auto-detectado se omitido.',
 )
 @click.option(
-    '--dir', '-d', 'directory',
+    '--dir',
+    '-d',
+    'directory',
     type=click.Path(exists=True, file_okay=False, resolve_path=True),
     default='.',
     help='Diretório do projeto (padrão: diretório atual).',
@@ -88,7 +92,7 @@ def _check_files(directory: Path, app_type: str) -> tuple[list[str], list[str]]:
 @click.option('--fix', is_flag=True, help='Gerar automaticamente os arquivos faltantes com conteúdo padrão.')
 def verify(app_type, directory, fix):
     """Verificar se o projeto tem os arquivos necessários para deploy."""
-    dir_path = Path(directory)  
+    dir_path = Path(directory)
 
     click.echo(f'📂 Verificando: {click.style(str(dir_path), bold=True)}')
     click.echo()
@@ -115,6 +119,7 @@ def verify(app_type, directory, fix):
     if is_authenticated():
         try:
             from .api import FabrokuAPI
+
             api = FabrokuAPI()
             user_data = api.get_user_me()
             is_fabric = user_data.get('is_fabric', False) or user_data.get('is_superuser', False)
@@ -141,9 +146,7 @@ def verify(app_type, directory, fix):
         return
 
     # Tem arquivos faltando
-    click.echo(
-        click.style(f'⚠️  {len(missing)} arquivo(s) faltando para deploy.', fg='yellow', bold=True)
-    )
+    click.echo(click.style(f'⚠️  {len(missing)} arquivo(s) faltando para deploy.', fg='yellow', bold=True))
 
     if is_fabric:
         click.echo('   (Membros da Fábrica podem usar configuração personalizada)')

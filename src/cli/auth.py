@@ -37,8 +37,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
                 _CallbackHandler.token = params['token'][0]
                 _CallbackHandler.user = params.get('user', [''])[0]
                 self._send_html(
-                    '<h1>✅ Login realizado com sucesso!</h1>'
-                    '<p>Pode fechar esta janela e voltar para o terminal.</p>',
+                    '<h1>✅ Login realizado com sucesso!</h1><p>Pode fechar esta janela e voltar para o terminal.</p>',
                     title='Fabroku CLI — Autenticado',
                 )
             else:
