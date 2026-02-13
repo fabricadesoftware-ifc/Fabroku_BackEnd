@@ -122,6 +122,38 @@ class AppViewSet(ModelViewSet):
             status=status.HTTP_202_ACCEPTED,
         )
 
+    @action(detail=True, methods=['post'])
+    def redeploy(self, request, pk=None):
+        """Dispara um redeploy manual da aplicação (re-sync com o repositório Git)."""
+        app = self.get_object()
+
+        if not app.name_dokku:
+            return Response(
+                {'error': 'App não tem name_dokku configurado. Aguarde o deploy inicial completar.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if app.status in ('DEPLOYING', 'DELETING', 'STARTING'):
+            return Response(
+                {'error': f'App está em estado {app.status}. Aguarde a operação atual terminar.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        app.status = 'DEPLOYING'
+        app.save(update_fields=['status'])
+
+        commit = request.data.get('commit')
+        task_result = AppMixin.redeploy_app.delay(app_id=app.id, commit=commit)  # type: ignore
+
+        return Response(
+            {
+                'status': 'DEPLOYING',
+                'message': f'Iniciando redeploy de {app.name}...',
+                'task_id': task_result.id,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
     @action(detail=True, methods=['get'])
     def get_app_status(self, request, pk=None):
         app = self.get_object()
