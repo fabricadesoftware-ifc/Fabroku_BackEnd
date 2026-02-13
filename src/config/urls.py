@@ -18,6 +18,7 @@ from core.adapters.utils.git_redirect import github_login
 from core.adapters.utils.git_repos import get_git_repos
 from core.adapters.utils.git_webhook import github_webhook
 from core.auth_user.allowed_emails.views import AllowedEmailViewSet
+from core.auth_user.cli_auth import cli_callback, cli_login
 from core.auth_user.views import CustomTokenRefreshView
 
 # Router para AllowedEmails
@@ -47,6 +48,8 @@ urlpatterns = [
     path('api/admin/', django_admin.site.urls),
     path('api/auth/github/callback/', github_callback),
     path('api/auth/github/login/', github_login),
+    path('api/auth/cli/login/', cli_login, name='cli-login'),
+    path('api/auth/cli/callback/', cli_callback, name='cli-callback'),
     path('api/git/repos', get_git_repos),
     path('api/webhooks/github/<int:app_id>/', github_webhook, name='github-webhook'),
     path('', lambda request: redirect('api/', permanent=True)),

@@ -151,6 +151,7 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'core.auth_user.authentication.CookieJWTAuthentication',  # Cookie auth (prioridade)
         'rest_framework_simplejwt.authentication.JWTAuthentication',  # Header auth (fallback)
+        'core.auth_user.authentication.CLITokenAuthentication',  # CLI token auth
     ),
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',

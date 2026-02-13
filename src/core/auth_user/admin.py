@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
 from core.auth_user.allowed_emails.admin import *  # noqa: F401, F403
-from core.auth_user.models import User
+from core.auth_user.models import CLIToken, User
 
 
 @admin.register(User)
@@ -42,3 +42,16 @@ class UserAdmin(BaseUserAdmin):
             },
         ),
     )
+
+
+@admin.register(CLIToken)
+class CLITokenAdmin(admin.ModelAdmin):
+    list_display = ['id', 'user', 'name', 'token_short', 'created_at', 'last_used_at', 'is_active']
+    list_filter = ['is_active', 'created_at']
+    search_fields = ['user__email', 'user__name', 'name']
+    readonly_fields = ['token', 'created_at', 'last_used_at']
+    raw_id_fields = ['user']
+
+    @admin.display(description='Token')
+    def token_short(self, obj):
+        return f'{obj.token[:8]}...' if obj.token else '-'
