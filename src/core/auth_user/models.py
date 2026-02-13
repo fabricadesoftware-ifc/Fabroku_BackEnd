@@ -22,7 +22,11 @@ class User(AbstractUser):
     password_reset_token = models.CharField(_('Password Reset Token'), max_length=255, blank=True, null=True)
     password_reset_token_created = models.DateTimeField(_('Password Reset Token Created'), blank=True, null=True)
     git_token = models.CharField(max_length=255, null=True, blank=True)
-    is_fabric = models.BooleanField(_('membro da fábrica'), default=False, help_text=_('Indica se o usuário é membro da Fábrica de Software. Membros podem personalizar nomes de apps.'))
+    is_fabric = models.BooleanField(
+        _('membro da fábrica'),
+        default=False,
+        help_text=_('Indica se o usuário é membro da Fábrica de Software. Membros podem personalizar nomes de apps.'),
+    )
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['name']
