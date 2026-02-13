@@ -9,10 +9,17 @@ from django.views.decorators.csrf import csrf_exempt
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 
+from core.adapters import GitHubAdapter
 from core.apps.mixins import AppMixin
 from core.apps.models import App
 
 logger = logging.getLogger(__name__)
+
+
+def _get_git_token_for_app(app: App) -> str | None:
+    """Obtém o git_token de um dos usuários do projeto do app."""
+    user = app.project.users.exclude(git_token__isnull=True).exclude(git_token='').first()
+    return user.git_token if user else None
 
 
 def verify_github_signature(payload_body: bytes, signature: str | None, secret: str) -> bool:
@@ -89,6 +96,19 @@ def github_webhook(request, app_id: int):
         commit[:7] if commit else 'N/A',
         pusher,
     )
+
+    # --- Setar commit status PENDING imediatamente (síncrono, sem depender do Celery) ---
+    if commit:
+        git_token = _get_git_token_for_app(app)
+        if git_token:
+            try:
+                github_adapter = GitHubAdapter()
+                ok = github_adapter.set_deploy_pending(git_token, app.git, commit, app.name)
+                logger.info('Commit status pending setado no webhook: ok=%s commit=%s', ok, commit[:7])
+            except Exception as e:
+                logger.warning('Falha ao setar commit status pending no webhook: %s', e)
+        else:
+            logger.warning('Nenhum git_token disponível para setar commit status no webhook (app=%s)', app.name)
 
     # Dispara a task de redeploy
     task_result = AppMixin.redeploy_app.delay(app_id=app.id, commit=commit)  # type: ignore
