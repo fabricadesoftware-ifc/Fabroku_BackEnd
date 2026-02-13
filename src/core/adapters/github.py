@@ -1,9 +1,9 @@
 from django.conf import settings
 
-from core.adapters.git_mixins import GitRepoMixin
+from core.adapters.git_mixins import CommitStatusMixin, GitRepoMixin
 
 
-class GitHubAdapter(GitRepoMixin):
+class GitHubAdapter(GitRepoMixin, CommitStatusMixin):
     def __init__(self):
         self.client_id = settings.GITHUB_CLIENT_ID
         self.client_secret = settings.GITHUB_CLIENT_SECRET

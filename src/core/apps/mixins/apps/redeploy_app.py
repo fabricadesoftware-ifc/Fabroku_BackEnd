@@ -3,8 +3,9 @@ from typing import cast
 
 from celery import Task, shared_task
 
-from core.adapters import DokkuAdapter
+from core.adapters import DokkuAdapter, GitHubAdapter
 from core.apps.models import App
+from core.auth_user.models import User
 from core.logs.models import AppLogManager, LogCategory
 
 
@@ -49,6 +50,12 @@ class RedeployAppMixin:
             category=LogCategory.DEPLOY,
             progress=5,
         )
+
+        # --- GitHub Commit Status ---
+        github_adapter = GitHubAdapter()
+        git_token = RedeployAppMixin._get_git_token(app)
+        if commit and git_token:
+            github_adapter.set_deploy_pending(git_token, app.git, commit, app.name)
 
         dokku_adapter = DokkuAdapter()
         dokku_app_name = app.name_dokku
@@ -103,11 +110,16 @@ class RedeployAppMixin:
                 logger.error(f'Erro no redeploy: {output}', category=LogCategory.DEPLOY, progress=90)
                 app.status = 'ERROR'
                 app.save(update_fields=['status'])
+                if commit and git_token:
+                    github_adapter.set_deploy_failure(git_token, app.git, commit, app.name, 'Build falhou')
                 return {'status': 'error', 'message': output}
 
             # Sucesso
             app.status = 'RUNNING'
             app.save(update_fields=['status'])
+
+            if commit and git_token:
+                github_adapter.set_deploy_success(git_token, app.git, commit, app.name)
 
             logger.success(
                 f'Redeploy concluído com sucesso! ({line_count[0]} linhas processadas)',
@@ -126,4 +138,12 @@ class RedeployAppMixin:
             logger.error(f'Erro no redeploy: {str(e)}', category=LogCategory.DEPLOY)
             app.status = 'ERROR'
             app.save(update_fields=['status'])
+            if commit and git_token:
+                github_adapter.set_deploy_failure(git_token, app.git, commit, app.name, str(e)[:100])
             raise
+
+    @staticmethod
+    def _get_git_token(app: App) -> str | None:
+        """Obtém o git_token de um dos usuários do projeto."""
+        user = app.project.users.exclude(git_token__isnull=True).exclude(git_token='').first()
+        return user.git_token if user else None

@@ -77,6 +77,11 @@ class CreateAppMixin:
 
             git_url = CreateAppMixin._handle_deploy_keys(task, dokku_adapter, github_adapter, user, app.git, logger)
 
+            # --- GitHub Commit Status: marca pending antes do git:sync ---
+            head_sha = CreateAppMixin._get_head_sha(github_adapter, user, app)
+            if head_sha:
+                github_adapter.set_deploy_pending(user.git_token, app.git, head_sha, app.name)
+
             CreateAppMixin._configure_git(task, dokku_adapter, dokku_app_name, git_url, app.branch, logger)
 
             # Configura webhook para deploy automático
@@ -92,6 +97,10 @@ class CreateAppMixin:
             app.status = 'RUNNING'
             app.save()
 
+            # --- GitHub Commit Status: marca success ---
+            if head_sha:
+                github_adapter.set_deploy_success(user.git_token, app.git, head_sha, app.name)
+
             logger.success(f'Aplicação {app.name} criada com sucesso!', category=LogCategory.CREATE, progress=100)
 
             return {'status': 'created', 'app_id': app.id}  # type: ignore
@@ -104,6 +113,9 @@ class CreateAppMixin:
             )
             app.status = 'FAILED'
             app.save(update_fields=['status'])
+            # --- GitHub Commit Status: marca failure ---
+            if head_sha:
+                github_adapter.set_deploy_failure(user.git_token, app.git, head_sha, app.name, str(e)[:100])
             raise
 
     @staticmethod
@@ -289,6 +301,20 @@ class CreateAppMixin:
             category=LogCategory.GIT,
             progress=85,
         )
+
+    @staticmethod
+    def _get_head_sha(gh_adapter: GitHubAdapter, user: User, app: App) -> str | None:
+        """Obtém o SHA do HEAD da branch no GitHub para marcar commit status."""
+        try:
+            from github import Github  # noqa: PLC0415
+
+            repo_name = app.git.rsplit('.com/', maxsplit=1)[-1].replace('.git', '')
+            gh = Github(user.git_token)
+            repo = gh.get_repo(repo_name)
+            branch = repo.get_branch(app.branch)
+            return branch.commit.sha
+        except Exception:
+            return None
 
     @staticmethod
     def _setup_webhook(gh_adapter: GitHubAdapter, user: User, app: App, logger: AppLogManager):
