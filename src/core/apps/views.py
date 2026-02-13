@@ -391,6 +391,86 @@ class AppViewSet(ModelViewSet):
 
         return Response(diag)
 
+    @action(detail=True, methods=['post'])
+    def test_commit_status(self, request, pk=None):
+        """Testa diretamente a criação de um commit status no GitHub."""
+        app = self.get_object()
+        user = request.user
+
+        if not user.git_token:
+            return Response({'error': 'git_token ausente'}, status=status.HTTP_400_BAD_REQUEST)
+
+        git_url = app.git or ''
+        repo_name = git_url.rsplit('.com/', maxsplit=1)[-1].replace('.git', '') if '.com/' in git_url else None
+
+        if not repo_name:
+            return Response(
+                {'error': f'Não foi possível extrair repo de: {git_url}'}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        result = {
+            'git_url': git_url,
+            'repo_name': repo_name,
+            'branch': app.branch,
+            'token_preview': f'{user.git_token[:4]}...{user.git_token[-4:]}' if len(user.git_token) > 8 else '***',
+        }
+
+        try:
+            from github import Github, GithubException
+
+            gh = Github(user.git_token)
+
+            # Teste 1: acessar o repo
+            try:
+                repo = gh.get_repo(repo_name)
+                result['repo_access'] = {'ok': True, 'full_name': repo.full_name, 'private': repo.private}
+            except GithubException as e:
+                result['repo_access'] = {'ok': False, 'error': f'[{e.status}] {e.data}'}
+                return Response(result)
+
+            # Teste 2: obter branch/commit
+            try:
+                branch = repo.get_branch(app.branch)
+                sha = branch.commit.sha
+                result['branch_access'] = {'ok': True, 'sha': sha}
+            except GithubException as e:
+                result['branch_access'] = {'ok': False, 'error': f'[{e.status}] {e.data}'}
+                return Response(result)
+
+            # Teste 3: criar commit status
+            try:
+                commit = repo.get_commit(sha)
+                commit.create_status(
+                    state='pending',
+                    target_url=f'{settings.FRONTEND_URL}/dashboard',
+                    description=f'Teste de commit status — {app.name}',
+                    context='fabroku/deploy',
+                )
+                result['create_status'] = {'ok': True, 'sha': sha[:7], 'state': 'pending'}
+
+                # Limpar: setar success para tirar o pending
+                commit.create_status(
+                    state='success',
+                    target_url=f'{settings.FRONTEND_URL}/dashboard',
+                    description=f'Teste OK — {app.name}',
+                    context='fabroku/deploy',
+                )
+                result['create_status']['cleaned'] = True
+                result['create_status']['message'] = f'Status criado e limpo com sucesso no commit {sha[:7]}!'
+
+            except GithubException as e:
+                result['create_status'] = {
+                    'ok': False,
+                    'error': f'[{e.status}] {e.data}',
+                    'message': 'Token pode não ter permissão repo:status. Revogue e refaça o login.',
+                }
+                return Response(result)
+
+        except Exception as e:
+            result['unexpected_error'] = str(e)
+
+        return Response(result)
+
 
 @extend_schema(tags=['services'])
 class ServiceViewSet(ModelViewSet):
