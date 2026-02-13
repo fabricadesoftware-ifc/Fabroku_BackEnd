@@ -159,6 +159,28 @@ class RedeployAppMixin:
 
     @staticmethod
     def _get_git_token(app: App) -> str | None:
-        """Obtém o git_token de um dos usuários do projeto."""
-        user = app.project.users.exclude(git_token__isnull=True).exclude(git_token='').first()
-        return user.git_token if user else None
+        """Obtém o git_token de um usuário do projeto que tenha acesso ao repo."""
+        from github import Github, GithubException  # noqa: PLC0415
+
+        users_with_token = app.project.users.exclude(git_token__isnull=True).exclude(git_token='')
+        repo_name = (
+            app.git.rsplit('.com/', maxsplit=1)[-1].replace('.git', '') if app.git and '.com/' in app.git else None
+        )
+
+        for user in users_with_token:
+            if not repo_name:
+                # Sem repo pra testar, retorna o primeiro token disponível
+                return user.git_token
+            try:
+                gh = Github(user.git_token)
+                gh.get_repo(repo_name)
+                py_logger.info('Token válido para repo %s via usuário %s', repo_name, user.username or user.id)
+                return user.git_token
+            except GithubException:
+                py_logger.warning('Token do usuário %s não tem acesso ao repo %s', user.username or user.id, repo_name)
+                continue
+            except Exception:
+                continue
+
+        py_logger.warning('Nenhum token com acesso ao repo %s', repo_name)
+        return None

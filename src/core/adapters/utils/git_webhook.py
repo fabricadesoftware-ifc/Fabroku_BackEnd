@@ -17,9 +17,28 @@ logger = logging.getLogger(__name__)
 
 
 def _get_git_token_for_app(app: App) -> str | None:
-    """Obtém o git_token de um dos usuários do projeto do app."""
-    user = app.project.users.exclude(git_token__isnull=True).exclude(git_token='').first()
-    return user.git_token if user else None
+    """Obtém o git_token de um usuário do projeto que tenha acesso ao repo."""
+    from github import Github, GithubException  # noqa: PLC0415
+
+    users_with_token = app.project.users.exclude(git_token__isnull=True).exclude(git_token='')
+    repo_name = app.git.rsplit('.com/', maxsplit=1)[-1].replace('.git', '') if app.git and '.com/' in app.git else None
+
+    for user in users_with_token:
+        if not repo_name:
+            return user.git_token
+        try:
+            gh = Github(user.git_token)
+            gh.get_repo(repo_name)
+            logger.info('Token válido para repo %s via usuário %s', repo_name, user.username or user.id)
+            return user.git_token
+        except GithubException:
+            logger.warning('Token do usuário %s não tem acesso ao repo %s', user.username or user.id, repo_name)
+            continue
+        except Exception:
+            continue
+
+    logger.warning('Nenhum token com acesso ao repo %s', repo_name)
+    return None
 
 
 def verify_github_signature(payload_body: bytes, signature: str | None, secret: str) -> bool:
