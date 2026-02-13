@@ -9,8 +9,8 @@ from core.auth_user.models import User
 class UserAdmin(BaseUserAdmin):
     """Admin customizado para o modelo User sem senha obrigatória."""
 
-    list_display = ['id', 'email', 'name', 'is_active', 'is_staff', 'is_superuser', 'date_joined']
-    list_filter = ['is_active', 'is_staff', 'is_superuser', 'date_joined']
+    list_display = ['id', 'email', 'name', 'is_active', 'is_staff', 'is_superuser', 'is_fabric', 'date_joined']
+    list_filter = ['is_active', 'is_staff', 'is_superuser', 'is_fabric', 'date_joined']
     search_fields = ['email', 'name']
     ordering = ['id']
     readonly_fields = ['date_joined', 'last_login']
@@ -26,7 +26,7 @@ class UserAdmin(BaseUserAdmin):
         (
             'Permissões',
             {
-                'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions'),
+                'fields': ('is_active', 'is_staff', 'is_superuser', 'is_fabric', 'groups', 'user_permissions'),
             },
         ),
         ('Datas', {'fields': ('last_login', 'date_joined')}),
@@ -38,7 +38,7 @@ class UserAdmin(BaseUserAdmin):
             None,
             {
                 'classes': ('wide',),
-                'fields': ('email', 'name', 'is_active', 'is_staff', 'is_superuser'),
+                'fields': ('email', 'name', 'is_active', 'is_staff', 'is_superuser', 'is_fabric'),
             },
         ),
     )

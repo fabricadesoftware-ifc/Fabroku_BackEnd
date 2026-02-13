@@ -90,9 +90,19 @@ class AppSerializer(serializers.ModelSerializer):
             'domain',
             'port',
             'task_id',
-            'name_dokku',
             'services',
         ]
+
+    def validate_name_dokku(self, value):
+        """Apenas membros da fábrica ou admins podem definir nome personalizado."""
+        request = self.context.get('request')
+        if request and request.user:
+            is_fabric = getattr(request.user, 'is_fabric', False)
+            if not is_fabric and not request.user.is_superuser:
+                raise serializers.ValidationError(
+                    'Apenas membros da Fábrica ou administradores podem personalizar o nome do app.'
+                )
+        return value
 
     def get_is_owner(self, obj):
         """Retorna True se o usuário logado é dono do app (via projeto)."""

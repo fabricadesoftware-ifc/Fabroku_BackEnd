@@ -60,7 +60,7 @@ class CreateAppMixin:
         logger = AppLogManager(app, task_id)
         logger.info('Iniciando criação da aplicação...', category=LogCategory.CREATE, progress=2)
 
-        dokku_app_name = slugify_dokku(f'{app.name}-{app.project.id}')
+        dokku_app_name = CreateAppMixin._resolve_dokku_name(app, user)
         dokku_adapter = DokkuAdapter()
         github_adapter = GitHubAdapter()
         app.name_dokku = dokku_app_name
@@ -117,6 +117,29 @@ class CreateAppMixin:
             raise App.DoesNotExist(f'App with id {app_id} not found')
         except User.DoesNotExist:
             raise User.DoesNotExist(f'User with id {user_id} not found')
+
+    @staticmethod
+    def _resolve_dokku_name(app: App, user: User) -> str:
+        """
+        Resolve o nome do app no Dokku.
+
+        - Membros da Fábrica (is_fabric) e admins (is_superuser) podem ter nomes
+          personalizados: se app.name_dokku já estiver preenchido, usa ele.
+          Caso contrário, usa o nome do app diretamente (sem sufixo de projeto).
+        - Usuários normais: nome-{project_id} (padrão).
+        """
+        can_customize = getattr(user, 'is_fabric', False) or user.is_superuser
+
+        if can_customize and app.name_dokku:
+            # Nome personalizado já definido (vindo do frontend)
+            return slugify_dokku(app.name_dokku)
+
+        if can_customize:
+            # Membro da fábrica/admin sem nome custom: usa nome limpo
+            return slugify_dokku(app.name)
+
+        # Usuário normal: sufixo com ID do projeto para evitar colisão
+        return slugify_dokku(f'{app.name}-{app.project.id}')
 
     @staticmethod
     def _ensure_dokku_app(

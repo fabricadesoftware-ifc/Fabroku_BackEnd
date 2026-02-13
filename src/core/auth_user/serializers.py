@@ -9,6 +9,7 @@ class UserRetrieveSerializer(serializers.Serializer):
     name = serializers.CharField(read_only=True)
     avatar_url = serializers.URLField(read_only=True)
     is_superuser = serializers.BooleanField(read_only=True)
+    is_fabric = serializers.BooleanField(read_only=True)
     date_joined = serializers.DateTimeField(read_only=True)
     last_login = serializers.DateTimeField(read_only=True)
 
