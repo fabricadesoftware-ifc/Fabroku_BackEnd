@@ -29,13 +29,8 @@ def cli_login(request):
     """
     port = request.GET.get('port', '9876')
     client_id = settings.GITHUB_CLIENT_ID
-    redirect_uri = settings.GITHUB_REDIRECT_URI  # Mesmo URI do login web
 
-    url = (
-        'https://github.com/login/oauth/authorize'
-        f'?client_id={client_id}'
-        f'&redirect_uri={redirect_uri}'
-        '&scope=repo%20user:email'
-        f'&state=cli:{port}'
-    )
+    # NÃO envia redirect_uri — GitHub usa a URL padrão cadastrada na OAuth App.
+    # O state=cli:<port> é preservado e permite diferenciar CLI vs Web no callback.
+    url = f'https://github.com/login/oauth/authorize?client_id={client_id}&scope=repo%20user:email&state=cli:{port}'
     return redirect(url)
