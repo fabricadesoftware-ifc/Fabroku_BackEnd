@@ -235,7 +235,22 @@ class CreateAppMixin:
                 f'Chave gerada: {deploy_key[:50]}...', command='ssh-keygen', category=LogCategory.GIT, progress=35
             )
 
-            gh_adapter.add_deploy_key(dokku_key=deploy_key, repo_name=repo_name, user_id=user.id)  # type: ignore
+            deploy_key_result = gh_adapter.add_deploy_key(dokku_key=deploy_key, repo_name=repo_name, user_id=user.id)  # type: ignore
+            if isinstance(deploy_key_result, dict) and deploy_key_result.get('status') == 'deploy keys disabled':
+                # Lança exceção amigável para o frontend exibir tela de ajuda
+                logger.error(
+                    f'Deploy keys desabilitadas no repositório {repo_name}. Usuário deve ativar nas configurações do GitHub.',
+                    category=LogCategory.GIT,
+                    metadata={
+                        'error_type': 'DeployKeysDisabled',
+                        'error_details': deploy_key_result.get('error'),
+                        'help_url': deploy_key_result.get('help_url'),
+                    },
+                    progress=40,
+                )
+                raise Exception(
+                    f'As deploy keys estão desabilitadas para este repositório. Ative nas configurações do GitHub. Mais informações: {deploy_key_result.get("help_url")}'
+                )
             logger.success(
                 f'Chave de deploy adicionada ao repositório {repo_name}', category=LogCategory.GIT, progress=40
             )

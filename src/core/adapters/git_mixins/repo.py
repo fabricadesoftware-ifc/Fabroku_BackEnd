@@ -33,8 +33,20 @@ class GitRepoMixin:
             repo.create_key(title='dokku-deploy', key=dokku_key, read_only=False)
             return {'status': 'deploy key cadastrada'}
         except GithubException as e:
+            # Erro: deploy key já existe em outro repositório
             if e.status == 422 and 'already in use' in str(e.data):
                 return {'status': 'deploy key já existe em outro repositório'}
+            # Erro: deploy keys desabilitadas no repositório
+            if e.status == 422 and (
+                ('Deploy keys are disabled' in str(e.data))
+                or ('deploy keys are disabled' in str(e.data))
+                or ('deploy keys are not enabled' in str(e.data))
+            ):
+                return {
+                    'status': 'deploy keys disabled',
+                    'error': 'As deploy keys estão desabilitadas para este repositório. Ative nas configurações do GitHub.',
+                    'help_url': 'https://docs.github.com/en/developers/overview/managing-deploy-keys#enabling-deploy-keys-for-your-repository',
+                }
             raise
 
     def create_webhook(self, repo_name: str, app_id: int, user_id: int) -> dict:
