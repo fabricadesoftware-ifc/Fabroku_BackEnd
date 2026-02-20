@@ -133,13 +133,8 @@ class CreateAppMixin:
             # --- GitHub Commit Status: marca failure ---
             if head_sha:
                 github_adapter.set_deploy_failure(user.git_token, app.git, head_sha, app.name, error_details[:100])
-            return {
-                'status': 'failed',
-                'app_id': app.id,
-                'error_type': error_type,
-                'error_details': error_details,
-                'help_url': help_url,
-            }
+            # Relança a exceção para que o Celery marque a task como FAILURE
+            raise
 
     @staticmethod
     def _get_instances(app_id: int, user_id: int) -> tuple[App, User]:
