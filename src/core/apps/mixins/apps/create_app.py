@@ -108,17 +108,35 @@ class CreateAppMixin:
             return {'status': 'created', 'app_id': app.id}  # type: ignore
 
         except Exception as e:
+            error_type = getattr(e, 'error_type', type(e).__name__)
+            error_details = str(e)
+            help_url = None
+            # Detecta erro de deploy keys desabilitadas
+            if 'deploy keys' in error_details and 'desabilitadas' in error_details:
+                error_type = 'DeployKeysDisabled'
+                # Extrai help_url se presente
+                import re
+
+                m = re.search(r'(https?://[\w\./\-]+)', error_details)
+                if m:
+                    help_url = m.group(1)
             logger.error(
-                f'Erro ao criar aplicação: {str(e)}',
+                f'Erro ao criar aplicação: {error_details}',
                 category=LogCategory.CREATE,
-                metadata={'error_type': type(e).__name__, 'error_details': str(e)},
+                metadata={'error_type': error_type, 'error_details': error_details, 'help_url': help_url},
             )
             app.status = 'FAILED'
             app.save(update_fields=['status'])
             # --- GitHub Commit Status: marca failure ---
             if head_sha:
-                github_adapter.set_deploy_failure(user.git_token, app.git, head_sha, app.name, str(e)[:100])
-            raise
+                github_adapter.set_deploy_failure(user.git_token, app.git, head_sha, app.name, error_details[:100])
+            return {
+                'status': 'failed',
+                'app_id': app.id,
+                'error_type': error_type,
+                'error_details': error_details,
+                'help_url': help_url,
+            }
 
     @staticmethod
     def _get_instances(app_id: int, user_id: int) -> tuple[App, User]:
