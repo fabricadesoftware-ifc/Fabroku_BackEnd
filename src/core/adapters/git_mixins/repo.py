@@ -8,9 +8,19 @@ class GitRepoMixin:
 
         user = User.objects.get(id=user_id)
         gh = Github(user.git_token)
-        repos = gh.get_user().get_repos()
-
-        return repos
+        try:
+            repos = gh.get_user().get_repos()
+            return repos
+        except GithubException as e:
+            # Detecta erro de permissão ao acessar org
+            if e.status in (401, 403):
+                return {
+                    'status': 'org_permission_denied',
+                    'error': 'Permissão insuficiente para acessar organização. Reautorize seu token no GitHub.',
+                    'error_type': 'OrgPermissionDenied',
+                    'help_url': 'https://github.com/settings/tokens',
+                }
+            raise
 
     def add_deploy_key(self, repo_name: str, dokku_key: str, user_id: int):
         from core.auth_user.models import User  # noqa: PLC0415

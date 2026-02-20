@@ -236,6 +236,21 @@ class CreateAppMixin:
         repo_name = git_url.rsplit('.com/', maxsplit=1)[-1].replace('.git', '')  # type: ignore
 
         user_git_repos_list = gh_adapter.list_user_repos(user_id=user.id)  # type: ignore
+        # Detecta erro de permissão ao acessar org
+        if isinstance(user_git_repos_list, dict) and user_git_repos_list.get('error_type') == 'OrgPermissionDenied':
+            logger.error(
+                user_git_repos_list.get('error'),
+                category=LogCategory.GIT,
+                metadata={
+                    'error_type': 'OrgPermissionDenied',
+                    'error_details': user_git_repos_list.get('error'),
+                    'help_url': user_git_repos_list.get('help_url'),
+                },
+                progress=28,
+            )
+            raise Exception(
+                f'Permissão insuficiente para acessar organização. Reautorize seu token no GitHub. Mais informações: {user_git_repos_list.get("help_url")}'
+            )
         user_git_repos = {repo.full_name: {'private': repo.private} for repo in user_git_repos_list}
 
         is_private = repo_name in user_git_repos and user_git_repos[repo_name].get('private', False)
