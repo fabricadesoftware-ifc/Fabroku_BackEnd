@@ -27,6 +27,10 @@ class App(models.Model):
     port = models.IntegerField(null=True, blank=True)
     variables = models.JSONField(default=dict)
     task_id = models.CharField(max_length=255, null=True, blank=True)
+    # Campos para persistir erro crítico
+    error_type = models.CharField(max_length=100, null=True, blank=True)
+    error_details = models.TextField(null=True, blank=True)
+    help_url = models.URLField(null=True, blank=True)
 
     def __str__(self):
         return self.name

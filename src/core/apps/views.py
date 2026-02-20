@@ -182,17 +182,16 @@ class AppViewSet(ModelViewSet):
             response_data['current'] = 100
 
         elif task_result.state == 'FAILURE':
-            # Tenta extrair mensagem e link de ajuda se for erro de deploy key
-            error_str = str(task_result.result)
-            response_data['status'] = error_str
-            # Se for erro de deploy key desabilitada, adiciona campo especial
-            if 'deploy key' in error_str.lower() and 'github' in error_str.lower():
-                # Tenta extrair URL de ajuda
-                import re
-
-                url_match = re.search(r'(https://[\w\./\-#?=&%]+)', error_str)
-                if url_match:
-                    response_data['help_url'] = url_match.group(1)
+            # Retorna erro persistido no App
+            response_data['status'] = app.error_details or str(task_result.result)
+            if app.error_type:
+                response_data['error_type'] = app.error_type
+            if app.error_details:
+                response_data['error_details'] = app.error_details
+            if app.help_url:
+                response_data['help_url'] = app.help_url
+            # Compatibilidade: deploy_keys_disabled legacy
+            if app.error_type == 'DeployKeysDisabled':
                 response_data['deploy_keys_disabled'] = True
 
         return Response(response_data)

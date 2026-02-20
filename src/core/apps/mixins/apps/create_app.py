@@ -126,7 +126,10 @@ class CreateAppMixin:
                 metadata={'error_type': error_type, 'error_details': error_details, 'help_url': help_url},
             )
             app.status = 'FAILED'
-            app.save(update_fields=['status'])
+            app.error_type = error_type
+            app.error_details = error_details
+            app.help_url = help_url
+            app.save(update_fields=['status', 'error_type', 'error_details', 'help_url'])
             # --- GitHub Commit Status: marca failure ---
             if head_sha:
                 github_adapter.set_deploy_failure(user.git_token, app.git, head_sha, app.name, error_details[:100])
