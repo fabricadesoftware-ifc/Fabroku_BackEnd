@@ -1,3 +1,4 @@
+import time
 from typing import cast
 
 from celery import Task, shared_task
@@ -106,10 +107,14 @@ class RunCommandMixin:
             linked_services = Service.objects.filter(app=app)
             for svc in linked_services:
                 if svc.container_name and svc.service_type == 'postgres':
-                    try:
-                        dokku_adapter.start_database(svc.container_name)
-                    except Exception:
-                        pass
+                    out = dokku_adapter.start_database(svc.container_name)
+                    if 'failed' in out.lower():
+                        logger.warning(
+                            f'postgres:start {svc.container_name} retornou erro: {out}',
+                            category=LogCategory.SYSTEM,
+                            progress=5,
+                        )
+                    time.sleep(3)
 
             task.update_state(
                 state='PROGRESS',
@@ -124,6 +129,7 @@ class RunCommandMixin:
             # Executa com streaming para acompanhar output em tempo real
             line_count = [0]
             all_output = []
+            max_attempts = 2
 
             def on_log_line(line: str):
                 if not line.strip():
@@ -133,18 +139,45 @@ class RunCommandMixin:
                 progress = min(10 + (line_count[0] * 2), 90)
                 logger.dokku(line, category=LogCategory.SYSTEM, progress=int(progress))
 
-            output = dokku_adapter.run_in_app_streaming(
-                app_name=app.name_dokku,
-                command=command,
-            )
+            for attempt in range(max_attempts):
+                line_count[0] = 0
+                all_output.clear()
 
-            for line in output:
-                on_log_line(line)
+                output = dokku_adapter.run_in_app_streaming(
+                    app_name=app.name_dokku,
+                    command=command,
+                )
 
-            full_output = '\n'.join(all_output)
+                for line in output:
+                    on_log_line(line)
+
+                full_output = '\n'.join(all_output)
+
+                # Se falhou com "container não rodando", tenta iniciar de novo e espera mais
+                if (
+                    attempt < max_attempts - 1
+                    and 'cannot link to a non running container' in full_output.lower()
+                ):
+                    logger.warning(
+                        'Container do banco pode não estar pronto. Reiniciando e tentando novamente...',
+                        category=LogCategory.SYSTEM,
+                        progress=10,
+                    )
+                    for svc in linked_services:
+                        if svc.container_name and svc.service_type == 'postgres':
+                            dokku_adapter.start_database(svc.container_name)
+                    time.sleep(5)
+                    continue
+
+                break
 
             # Verifica se houve erro
-            if 'Failed' in full_output or 'Error' in full_output.split('\n')[-1:][0] if all_output else '':
+            has_error = (
+                'Failed' in full_output
+                or 'Error' in full_output
+                or 'cannot link to a non running container' in full_output.lower()
+            )
+            if has_error:
                 logger.warning(
                     f'Comando finalizado com possíveis erros ({line_count[0]} linhas)',
                     category=LogCategory.SYSTEM,

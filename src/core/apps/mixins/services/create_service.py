@@ -1,3 +1,4 @@
+import time
 import uuid
 from typing import cast
 
@@ -116,14 +117,24 @@ class CreateServiceMixin:
             # === 3. Garantir que o serviço está rodando após o link ===
             task.update_state(
                 state='PROGRESS',
-                meta={'current': 80, 'total': 100, 'status': 'Verificando serviço...'},
+                meta={'current': 80, 'total': 100, 'status': 'Iniciando serviço...'},
             )
 
             if service_type == ServiceType.POSTGRES:
-                try:
-                    dokku_adapter.start_database(dokku_service_name)
-                except Exception:
-                    pass
+                start_output = dokku_adapter.start_database(dokku_service_name)
+                if 'failed' in start_output.lower():
+                    logger.warning(
+                        f'postgres:start retornou: {start_output}',
+                        category=LogCategory.DATABASE,
+                        progress=82,
+                    )
+                else:
+                    logger.info(
+                        f'Serviço Postgres {dokku_service_name} iniciado',
+                        category=LogCategory.DATABASE,
+                        progress=82,
+                    )
+                time.sleep(3)
 
             # === 4. Salvar no banco de dados local ===
             task.update_state(
