@@ -74,7 +74,14 @@ class CreateServiceMixin:
                     category=LogCategory.DATABASE,
                     progress=40,
                 )
-                _check_dokku_output(output, 'postgres:create')
+                if 'already exists' in output.lower():
+                    logger.info(
+                        f'Banco {dokku_service_name} já existe, reutilizando...',
+                        category=LogCategory.DATABASE,
+                        progress=40,
+                    )
+                else:
+                    _check_dokku_output(output, 'postgres:create')
 
             # === 2. Vincular ao app (injeta DATABASE_URL, mas usa --no-restart para evitar rebuild) ===
             task.update_state(
@@ -97,7 +104,14 @@ class CreateServiceMixin:
                     category=LogCategory.DATABASE,
                     progress=70,
                 )
-                _check_dokku_output(link_output, 'postgres:link')
+                if 'already linked' in link_output.lower():
+                    logger.info(
+                        f'Banco já está vinculado ao app, continuando...',
+                        category=LogCategory.DATABASE,
+                        progress=70,
+                    )
+                else:
+                    _check_dokku_output(link_output, 'postgres:link')
 
             # === 3. Garantir que o serviço está rodando após o link ===
             task.update_state(

@@ -52,13 +52,14 @@ class SSHAdapter:
             pkey = self._get_pkey()
             client.connect(self.host, port=self.port, username=self.username, pkey=pkey)
             stdin, stdout, stderr = client.exec_command(command)
+            output = stdout.read().decode('utf-8')
+            error_output = stderr.read().decode('utf-8')
             exit_status = stdout.channel.recv_exit_status()
             if exit_status != 0:
-                print(f"Error executing '{command}': {stderr.read().decode()}")
-                return f'Failed to execute command: {command}'
-            return stdout.read().decode('utf-8')
+                detail = error_output.strip() or output.strip() or '(sem detalhes)'
+                return f'Failed to execute command: {command}\n{detail}'
+            return output
         except Exception as e:
-            print(f'SSH Connection Error: {e}, paramters: host={self.host}, username={self.username}, port={self.port}')  # noqa: E501
             return f'SSH Connection Error: {e}'
         finally:
             client.close()
