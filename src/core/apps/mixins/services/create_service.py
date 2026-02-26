@@ -123,11 +123,27 @@ class CreateServiceMixin:
             if service_type == ServiceType.POSTGRES:
                 start_output = dokku_adapter.start_database(dokku_service_name)
                 if 'failed' in start_output.lower():
-                    logger.warning(
-                        f'postgres:start retornou: {start_output}',
-                        category=LogCategory.DATABASE,
-                        progress=82,
-                    )
+                    if 'already in use' in start_output.lower() or 'conflict' in start_output.lower():
+                        logger.info(
+                            'Container em conflito, tentando postgres:stop antes de start...',
+                            category=LogCategory.DATABASE,
+                            progress=82,
+                        )
+                        dokku_adapter.stop_database(dokku_service_name)
+                        time.sleep(2)
+                        start_output = dokku_adapter.start_database(dokku_service_name)
+                    if 'failed' in start_output.lower():
+                        logger.warning(
+                            f'postgres:start retornou: {start_output}',
+                            category=LogCategory.DATABASE,
+                            progress=82,
+                        )
+                    else:
+                        logger.info(
+                            f'Serviço Postgres {dokku_service_name} iniciado',
+                            category=LogCategory.DATABASE,
+                            progress=82,
+                        )
                 else:
                     logger.info(
                         f'Serviço Postgres {dokku_service_name} iniciado',

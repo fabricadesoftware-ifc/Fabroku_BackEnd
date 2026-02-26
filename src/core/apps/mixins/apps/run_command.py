@@ -109,11 +109,21 @@ class RunCommandMixin:
                 if svc.container_name and svc.service_type == 'postgres':
                     out = dokku_adapter.start_database(svc.container_name)
                     if 'failed' in out.lower():
-                        logger.warning(
-                            f'postgres:start {svc.container_name} retornou erro: {out}',
-                            category=LogCategory.SYSTEM,
-                            progress=5,
-                        )
+                        if 'already in use' in out.lower() or 'conflict' in out.lower():
+                            logger.info(
+                                f'Container em conflito, tentando postgres:stop antes de start...',
+                                category=LogCategory.SYSTEM,
+                                progress=5,
+                            )
+                            dokku_adapter.stop_database(svc.container_name)
+                            time.sleep(2)
+                            out = dokku_adapter.start_database(svc.container_name)
+                        if 'failed' in out.lower():
+                            logger.warning(
+                                f'postgres:start {svc.container_name} retornou erro: {out}',
+                                category=LogCategory.SYSTEM,
+                                progress=5,
+                            )
                     time.sleep(3)
 
             task.update_state(
@@ -159,12 +169,14 @@ class RunCommandMixin:
                     and 'cannot link to a non running container' in full_output.lower()
                 ):
                     logger.warning(
-                        'Container do banco pode não estar pronto. Reiniciando e tentando novamente...',
+                        'Container do banco pode não estar pronto. Tentando stop+start e tentando novamente...',
                         category=LogCategory.SYSTEM,
                         progress=10,
                     )
                     for svc in linked_services:
                         if svc.container_name and svc.service_type == 'postgres':
+                            dokku_adapter.stop_database(svc.container_name)
+                            time.sleep(2)
                             dokku_adapter.start_database(svc.container_name)
                     time.sleep(5)
                     continue

@@ -46,6 +46,10 @@ class DokkuPostgresMixin:
         """Pausa um banco de dados PostgreSQL no Dokku."""
         return self._run_command(f'postgres:pause {db_name}')
 
+    def stop_database(self, db_name: str) -> str:
+        """Para um banco de dados PostgreSQL no Dokku."""
+        return self._run_command(f'postgres:stop {db_name}')
+
     def start_database(self, db_name: str) -> str:
         """Inicia um banco de dados PostgreSQL no Dokku."""
         return self._run_command(f'postgres:start {db_name}')
