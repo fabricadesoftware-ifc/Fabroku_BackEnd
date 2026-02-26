@@ -48,7 +48,7 @@ class CreateServiceMixin:
         dokku_adapter = DokkuAdapter()
 
         service_name = f'{app.name}-db'
-        dokku_service_name = slugify_dokku(f'{service_name}-{app.project.id}')
+        dokku_service_name = slugify_dokku(f'{service_name}-{app.id}')
         dokku_service_password = uuid.uuid4().hex
 
         if not app.name_dokku:
@@ -123,7 +123,16 @@ class CreateServiceMixin:
             if service_type == ServiceType.POSTGRES:
                 start_output = dokku_adapter.start_database(dokku_service_name)
                 if 'failed' in start_output.lower():
-                    if 'already in use' in start_output.lower() or 'conflict' in start_output.lower():
+                    if 'sethostname' in start_output.lower() or 'invalid argument' in start_output.lower():
+                        logger.info(
+                            'Container travado por hostname inválido (runc), removendo...',
+                            category=LogCategory.DATABASE,
+                            progress=82,
+                        )
+                        dokku_adapter.remove_postgres_container(dokku_service_name)
+                        time.sleep(2)
+                        start_output = dokku_adapter.start_database(dokku_service_name)
+                    elif 'already in use' in start_output.lower() or 'conflict' in start_output.lower():
                         logger.info(
                             'Container em conflito, tentando postgres:stop antes de start...',
                             category=LogCategory.DATABASE,

@@ -71,8 +71,9 @@ class DeleteAppMixin:
                         progress=progress,
                     )
 
-                # Delete
+                # Delete (remove container travado antes, se houver)
                 try:
+                    dokku_adapter.remove_postgres_container(dokku_service_name)
                     delete_output = dokku_adapter.delete_database(db_name=dokku_service_name)
                     if 'failed' in delete_output.lower():
                         logger.warning(

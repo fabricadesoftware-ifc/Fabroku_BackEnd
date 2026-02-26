@@ -109,9 +109,18 @@ class RunCommandMixin:
                 if svc.container_name and svc.service_type == 'postgres':
                     out = dokku_adapter.start_database(svc.container_name)
                     if 'failed' in out.lower():
-                        if 'already in use' in out.lower() or 'conflict' in out.lower():
+                        if 'sethostname' in out.lower() or 'invalid argument' in out.lower():
                             logger.info(
-                                f'Container em conflito, tentando postgres:stop antes de start...',
+                                'Container travado por hostname inválido (runc), removendo...',
+                                category=LogCategory.SYSTEM,
+                                progress=5,
+                            )
+                            dokku_adapter.remove_postgres_container(svc.container_name)
+                            time.sleep(2)
+                            out = dokku_adapter.start_database(svc.container_name)
+                        elif 'already in use' in out.lower() or 'conflict' in out.lower():
+                            logger.info(
+                                'Container em conflito, tentando postgres:stop antes de start...',
                                 category=LogCategory.SYSTEM,
                                 progress=5,
                             )
@@ -119,11 +128,10 @@ class RunCommandMixin:
                             time.sleep(2)
                             out = dokku_adapter.start_database(svc.container_name)
                         if 'failed' in out.lower():
-                            logger.warning(
-                                f'postgres:start {svc.container_name} retornou erro: {out}',
-                                category=LogCategory.SYSTEM,
-                                progress=5,
-                            )
+                            msg = f'postgres:start {svc.container_name} retornou erro: {out}'
+                            if 'sethostname' in out.lower():
+                                msg += ' Remova o banco e crie um novo (nome curto compatível com runc).'
+                            logger.warning(msg, category=LogCategory.SYSTEM, progress=5)
                     time.sleep(3)
 
             task.update_state(

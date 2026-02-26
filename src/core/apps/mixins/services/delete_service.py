@@ -79,6 +79,7 @@ class DeleteServiceMixin:
 
             try:
                 if service.service_type == ServiceType.POSTGRES:
+                    dokku_adapter.remove_postgres_container(dokku_service_name)
                     output = dokku_adapter.delete_database(db_name=dokku_service_name)
                     logger.dokku(
                         output,

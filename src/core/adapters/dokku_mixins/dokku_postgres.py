@@ -50,6 +50,15 @@ class DokkuPostgresMixin:
         """Para um banco de dados PostgreSQL no Dokku."""
         return self._run_command(f'postgres:stop {db_name}')
 
+    def remove_postgres_container(self, db_name: str) -> str:
+        """
+        Remove um container Postgres travado (ex: por hostname inválido/sethostname).
+        Usado quando o container está em estado Created e não inicia.
+        O volume de dados permanece; postgres:start recria o container.
+        """
+        container_name = f'dokku.postgres.{db_name}'
+        return self._run_command(f'docker rm -f {container_name}')
+
     def start_database(self, db_name: str) -> str:
         """Inicia um banco de dados PostgreSQL no Dokku."""
         return self._run_command(f'postgres:start {db_name}')
