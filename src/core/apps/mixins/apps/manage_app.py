@@ -49,6 +49,17 @@ class ManageAppMixin:
             return {'status': 'error', 'message': 'App não tem name_dokku'}
 
         try:
+            # Garante que serviços linkados estejam rodando antes de start/restart
+            if action in ('start', 'restart'):
+                from core.apps.models import Service  # noqa: PLC0415
+
+                for svc in Service.objects.filter(app=app):
+                    if svc.container_name and svc.service_type == 'postgres':
+                        try:
+                            dokku_adapter.start_database(svc.container_name)
+                        except Exception:
+                            pass
+
             task.update_state(
                 state='PROGRESS',
                 meta={'current': 30, 'total': 100, 'status': f'{msg_progress} aplicação...'},

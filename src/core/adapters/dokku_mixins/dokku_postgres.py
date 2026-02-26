@@ -17,9 +17,10 @@ class DokkuPostgresMixin:
         """Deleta um banco de dados PostgreSQL do Dokku."""
         return self._run_command(f'postgres:destroy {db_name} --force')
 
-    def link_database(self, db_name: str, app_name: str) -> str:
+    def link_database(self, db_name: str, app_name: str, no_restart: bool = False) -> str:
         """Vincula um banco de dados PostgreSQL a uma aplicação Dokku."""
-        return self._run_command(f'postgres:link {db_name} {app_name}')
+        flags = ' --no-restart' if no_restart else ''
+        return self._run_command(f'postgres:link {db_name} {app_name}{flags}')
 
     def unlink_database(self, db_name: str, app_name: str) -> str:
         """Desvincula um banco de dados PostgreSQL de uma aplicação Dokku."""

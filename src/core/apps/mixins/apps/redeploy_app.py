@@ -80,6 +80,16 @@ class RedeployAppMixin:
             return {'status': 'error', 'message': 'App não tem name_dokku'}
 
         try:
+            # Garante que serviços linkados estejam rodando antes do redeploy
+            from core.apps.models import Service  # noqa: PLC0415
+
+            for svc in Service.objects.filter(app=app):
+                if svc.container_name and svc.service_type == 'postgres':
+                    try:
+                        dokku_adapter.start_database(svc.container_name)
+                    except Exception:
+                        pass
+
             # Verifica se o app existe no Dokku
             if not dokku_adapter.exists_app(dokku_app_name):
                 logger.error(f'App {dokku_app_name} não existe no Dokku', category=LogCategory.DEPLOY)

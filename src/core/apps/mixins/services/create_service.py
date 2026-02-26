@@ -9,6 +9,15 @@ from core.apps.utils import slugify_dokku
 from core.logs.models import AppLogManager, LogCategory
 
 
+def _check_dokku_output(output: str, operation: str):
+    """Verifica se o output do Dokku indica erro e levanta exceção se necessário."""
+    if not output:
+        raise RuntimeError(f'{operation}: nenhuma resposta do servidor')
+    output_lower = output.lower()
+    if 'failed to execute command' in output_lower or 'ssh connection error' in output_lower:
+        raise RuntimeError(f'{operation} falhou: {output}')
+
+
 class CreateServiceMixin:
     """Mixin para criação de serviços (banco de dados, redis, etc.) via Celery."""
 
@@ -41,6 +50,10 @@ class CreateServiceMixin:
         dokku_service_name = slugify_dokku(f'{service_name}-{app.project.id}')
         dokku_service_password = uuid.uuid4().hex
 
+        if not app.name_dokku:
+            logger.error('App não tem name_dokku configurado', category=LogCategory.DATABASE)
+            return {'status': 'error', 'message': 'App sem name_dokku'}
+
         try:
             # === 1. Criar o serviço no Dokku ===
             task.update_state(
@@ -61,12 +74,9 @@ class CreateServiceMixin:
                     category=LogCategory.DATABASE,
                     progress=40,
                 )
+                _check_dokku_output(output, 'postgres:create')
 
-            # === 2. Vincular ao app (isso injeta DATABASE_URL automaticamente) ===
-            if not app.name_dokku:
-                logger.error('App não tem name_dokku configurado', category=LogCategory.DATABASE)
-                return {'status': 'error', 'message': 'App sem name_dokku'}
-
+            # === 2. Vincular ao app (injeta DATABASE_URL, mas usa --no-restart para evitar rebuild) ===
             task.update_state(
                 state='PROGRESS',
                 meta={'current': 50, 'total': 100, 'status': 'Vinculando banco ao app...'},
@@ -78,18 +88,33 @@ class CreateServiceMixin:
             )
 
             if service_type == ServiceType.POSTGRES:
-                link_output = dokku_adapter.link_database(db_name=dokku_service_name, app_name=app.name_dokku)
+                link_output = dokku_adapter.link_database(
+                    db_name=dokku_service_name, app_name=app.name_dokku, no_restart=True,
+                )
                 logger.dokku(
                     link_output,
-                    command=f'postgres:link {dokku_service_name} {app.name_dokku}',
+                    command=f'postgres:link --no-restart {dokku_service_name} {app.name_dokku}',
                     category=LogCategory.DATABASE,
-                    progress=80,
+                    progress=70,
                 )
+                _check_dokku_output(link_output, 'postgres:link')
 
-            # === 3. Salvar no banco de dados local ===
+            # === 3. Garantir que o serviço está rodando após o link ===
             task.update_state(
                 state='PROGRESS',
-                meta={'current': 85, 'total': 100, 'status': 'Salvando informações do serviço...'},
+                meta={'current': 80, 'total': 100, 'status': 'Verificando serviço...'},
+            )
+
+            if service_type == ServiceType.POSTGRES:
+                try:
+                    dokku_adapter.start_database(dokku_service_name)
+                except Exception:
+                    pass
+
+            # === 4. Salvar no banco de dados local ===
+            task.update_state(
+                state='PROGRESS',
+                meta={'current': 90, 'total': 100, 'status': 'Salvando informações do serviço...'},
             )
 
             service = Service.objects.create(

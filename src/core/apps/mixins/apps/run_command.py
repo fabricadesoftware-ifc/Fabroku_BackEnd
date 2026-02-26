@@ -100,6 +100,17 @@ class RunCommandMixin:
         dokku_adapter = DokkuAdapter()
 
         try:
+            # Garante que serviços linkados (Postgres, Redis, etc.) estejam rodando
+            from core.apps.models import Service  # noqa: PLC0415
+
+            linked_services = Service.objects.filter(app=app)
+            for svc in linked_services:
+                if svc.container_name and svc.service_type == 'postgres':
+                    try:
+                        dokku_adapter.start_database(svc.container_name)
+                    except Exception:
+                        pass
+
             task.update_state(
                 state='PROGRESS',
                 meta={'current': 10, 'total': 100, 'status': f'Executando: {command}'},
