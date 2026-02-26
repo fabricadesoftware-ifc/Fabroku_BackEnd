@@ -1,7 +1,11 @@
 from drf_spectacular.utils import extend_schema
 from rest_framework import viewsets
 from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+
+from core.apps.models import App
+from core.adapters import DokkuAdapter
 
 from .models import AppLog
 from .serializers import AppLogSerializer
@@ -45,3 +49,34 @@ class AppLogViewSet(viewsets.ReadOnlyModelViewSet):
             'last_id': logs[-1]['id'] if logs else after_id,
             'count': len(logs),
         })
+
+    @action(detail=False, methods=['get'], url_path='app-runtime')
+    def app_runtime(self, request):
+        """
+        Logs em tempo real do container (stdout/stderr do app).
+        Query params: ?app={app_id}&num={number}.
+        """
+        app_id = request.query_params.get('app')
+        if not app_id:
+            return Response({'error': 'Parâmetro app é obrigatório'}, status=400)
+
+        try:
+            app = App.objects.select_related('project').get(id=app_id)
+        except App.DoesNotExist:
+            return Response({'error': 'App não encontrado'}, status=404)
+
+        if not request.user.is_superuser and not app.project.users.filter(id=request.user.id).exists():
+            return Response({'error': 'Sem permissão'}, status=403)
+
+        if not app.name_dokku:
+            return Response({'lines': [], 'message': 'App sem name_dokku'})
+
+        num = min(int(request.query_params.get('num', 200)), 500)
+        try:
+            dokku = DokkuAdapter()
+            output = dokku.logs_app(app.name_dokku, num_lines=num)
+            lines = [ln.strip() for ln in (output or '').split('\n') if ln.strip()]
+        except Exception as e:
+            return Response({'lines': [], 'error': str(e)}, status=500)
+
+        return Response({'lines': lines})

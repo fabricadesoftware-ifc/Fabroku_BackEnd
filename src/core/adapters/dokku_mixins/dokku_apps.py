@@ -61,3 +61,7 @@ class DokkuAppsMixin:
     def get_app_status(self, app_name: str) -> str:
         """Retorna o status dos processos de uma aplicação."""
         return self._run_command(f'ps:report {app_name}')
+
+    def logs_app(self, app_name: str, num_lines: int = 200) -> str:
+        """Retorna os logs recentes da aplicação em execução (stdout/stderr do container)."""
+        return self._run_command(f'logs {app_name} -n {num_lines}')
