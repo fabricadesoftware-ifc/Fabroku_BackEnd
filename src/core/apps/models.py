@@ -53,12 +53,13 @@ class Service(models.Model):
     password = models.CharField(max_length=255)
     host = models.CharField(max_length=255)
     port = models.IntegerField()
-    app = models.ForeignKey(App, on_delete=models.CASCADE)
+    app = models.ForeignKey(App, on_delete=models.SET_NULL, null=True, blank=True, related_name='services')
     project = models.ForeignKey(Project, on_delete=models.CASCADE)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     service_type = models.CharField(max_length=50, choices=ServiceType.choices)
     container_name = models.CharField(max_length=255, null=True, blank=True)
+    task_id = models.CharField(max_length=255, null=True, blank=True)
 
     def __str__(self):
         return self.name

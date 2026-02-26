@@ -27,3 +27,7 @@ class DokkuConfigMixin:
     def show_config(self, app_name: str) -> str:
         """Exibe todas as configurações de uma aplicação."""
         return self._run_command(f'config:show {app_name}')
+
+    def get_config(self, app_name: str, key: str) -> str:
+        """Obtém o valor de uma variável de ambiente específica."""
+        return self._run_command(f'config:get {app_name} {key}').strip()

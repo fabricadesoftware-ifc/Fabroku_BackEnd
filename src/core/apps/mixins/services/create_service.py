@@ -114,6 +114,17 @@ class CreateServiceMixin:
                 else:
                     _check_dokku_output(link_output, 'postgres:link')
 
+                database_url = dokku_adapter.get_config(app.name_dokku, 'DATABASE_URL')
+                if database_url and 'failed' not in database_url.lower():
+                    app.variables = dict(app.variables or {})
+                    app.variables['DATABASE_URL'] = database_url
+                    app.save(update_fields=['variables'])
+                    logger.info(
+                        'DATABASE_URL adicionada às variáveis do app',
+                        category=LogCategory.CONFIG,
+                        progress=72,
+                    )
+
             # === 3. Garantir que o serviço está rodando após o link ===
             task.update_state(
                 state='PROGRESS',

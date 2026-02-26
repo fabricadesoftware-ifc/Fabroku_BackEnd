@@ -512,3 +512,86 @@ class ServiceViewSet(ModelViewSet):
             },
             status=status.HTTP_202_ACCEPTED,
         )
+
+    @action(detail=True, methods=['post'])
+    def link(self, request, pk=None):
+        """Vincula o serviço a um app. Requer app_id no body."""
+        service = self.get_object()
+        app_id = request.data.get('app_id')
+        if not app_id:
+            return Response(
+                {'error': 'O campo app_id é obrigatório'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if service.app_id:
+            return Response(
+                {'error': f'Serviço já vinculado ao app {service.app_id}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        task_result = AppMixin.link_service.delay(service_id=service.id, app_id=int(app_id))  # type: ignore
+
+        app = App.objects.filter(id=app_id).first()
+        if app:
+            app.task_id = task_result.id
+            app.save(update_fields=['task_id'])
+
+        return Response(
+            {
+                'status': 'LINKING',
+                'message': f'Vinculando serviço ao app...',
+                'task_id': task_result.id,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+    @action(detail=True, methods=['post'])
+    def unlink(self, request, pk=None):
+        """Desvincula o serviço do app."""
+        service = self.get_object()
+
+        if not service.app_id:
+            return Response(
+                {'error': 'Serviço não está vinculado a nenhum app'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        task_result = AppMixin.unlink_service.delay(service_id=service.id)  # type: ignore
+
+        app = service.app
+        app.task_id = task_result.id
+        app.save(update_fields=['task_id'])
+
+        return Response(
+            {
+                'status': 'UNLINKING',
+                'message': 'Desvinculando serviço do app...',
+                'task_id': task_result.id,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+    @action(detail=True, methods=['get'])
+    def get_service_status(self, request, pk=None):
+        """Retorna o status da task em execução (criação, link, unlink, delete)."""
+        service = self.get_object()
+
+        task_id = service.task_id or (service.app.task_id if service.app else None)
+        if not task_id:
+            return Response({'state': 'UNKNOWN', 'status': 'Nenhuma task vinculada.'})
+
+        task_result = AsyncResult(task_id)
+        response_data = {
+            'task_id': task_id,
+            'state': task_result.state,
+        }
+        if task_result.state == 'PROGRESS':
+            response_data.update(task_result.info)
+        elif task_result.state == 'SUCCESS':
+            response_data['status'] = 'Operação concluída com sucesso!'
+            response_data['current'] = 100
+        elif task_result.state == 'FAILURE':
+            response_data['status'] = str(task_result.result)
+
+        return Response(response_data)

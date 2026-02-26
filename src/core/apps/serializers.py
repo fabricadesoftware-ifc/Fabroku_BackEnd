@@ -1,7 +1,9 @@
+import uuid
+
 from rest_framework import serializers
 
 from core.apps.mixins import AppMixin
-from core.apps.models import App, Service
+from core.apps.models import App, Service, ServiceType
 
 
 class ServiceSerializer(serializers.ModelSerializer):
@@ -18,49 +20,95 @@ class ServiceSerializer(serializers.ModelSerializer):
             'container_name',
             'host',
             'port',
+            'task_id',
             'created_at',
             'updated_at',
         ]
         read_only_fields = [
             'id',
-            'name',
             'host',
             'port',
             'container_name',
-            'project',
+            'task_id',
             'created_at',
             'updated_at',
         ]
 
+    def validate(self, attrs):
+        """Valida criação: app OU (project + service_type) para standalone."""
+        if self.instance:
+            return attrs
+        app = attrs.get('app')
+        project = attrs.get('project')
+        service_type = attrs.get('service_type')
+
+        if app:
+            if not project:
+                attrs['project'] = app.project
+            return attrs
+
+        if not project or not service_type:
+            raise serializers.ValidationError(
+                'Para criar serviço standalone, informe project e service_type. '
+                'Para vincular a um app, informe app e service_type.'
+            )
+        if service_type != ServiceType.POSTGRES:
+            raise serializers.ValidationError('Apenas Postgres está habilitado no momento.')
+        return attrs
+
     def create(self, validated_data):
-        app = validated_data['app']
+        app = validated_data.get('app')
+        project = validated_data.get('project')
         service_type = validated_data['service_type']
+        name = validated_data.get('name')
 
-        # Dispara a task Celery para criar o serviço
-        task_result = AppMixin.create_service.delay(
-            app_id=app.id,
+        if app:
+            # Fluxo vinculado: cria serviço no app (task cria no Dokku)
+            task_result = AppMixin.create_service.delay(
+                app_id=app.id,
+                service_type=service_type,
+            )  # type: ignore
+            app.task_id = task_result.id
+            app.save(update_fields=['task_id'])
+            return Service(
+                name=f'{app.name}-db',
+                service_type=service_type,
+                app=app,
+                project=app.project,
+                host='provisionando...',
+                port=0,
+            )
+
+        # Fluxo standalone: cria placeholder e dispara task
+        password = uuid.uuid4().hex
+        service_name = name or 'provisionando...'
+        placeholder = Service.objects.create(
+            name=service_name,
             service_type=service_type,
-        )  # type: ignore
-
-        # Atualiza task_id no app para tracking
-        app.task_id = task_result.id
-        app.save(update_fields=['task_id'])
-
-        # Retorna uma instância temporária para a response
-        # (o serviço real será criado pela task)
-        return Service(
-            name=f'{app.name}-db',
-            service_type=service_type,
-            app=app,
-            project=app.project,
+            user='postgres',
+            password=password,
             host='provisionando...',
-            port=0,
+            port=5432,
+            app=None,
+            project=project,
+            container_name=None,
+            task_id=None,
         )
+        task_result = AppMixin.create_service_standalone.delay(
+            project_id=project.id,
+            service_type=service_type,
+            name=name,
+            service_id=placeholder.id,
+            password=password,
+        )  # type: ignore
+        placeholder.task_id = task_result.id
+        placeholder.save(update_fields=['task_id'])
+        return placeholder
 
 
 class AppSerializer(serializers.ModelSerializer):
     is_owner = serializers.SerializerMethodField()
-    services = ServiceSerializer(source='service_set', many=True, read_only=True)
+    services = ServiceSerializer(many=True, read_only=True)
 
     class Meta:
         model = App

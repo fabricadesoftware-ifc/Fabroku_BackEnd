@@ -5,7 +5,10 @@ from .apps.redeploy_app import RedeployAppMixin
 from .apps.run_command import RunCommandMixin
 from .apps.update_app import UpdateAppMixin
 from .services.create_service import CreateServiceMixin
+from .services.create_service_standalone import CreateServiceStandaloneMixin
 from .services.delete_service import DeleteServiceMixin
+from .services.link_service import LinkServiceMixin
+from .services.unlink_service import UnlinkServiceMixin
 
 
 class AppMixin(
@@ -15,7 +18,10 @@ class AppMixin(
     UpdateAppMixin,
     ManageAppMixin,
     CreateServiceMixin,
+    CreateServiceStandaloneMixin,
     DeleteServiceMixin,
+    LinkServiceMixin,
+    UnlinkServiceMixin,
     RunCommandMixin,
 ):
     """Mixin agregador para operações de aplicações e serviços."""
