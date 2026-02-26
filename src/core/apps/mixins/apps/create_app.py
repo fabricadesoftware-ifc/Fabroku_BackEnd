@@ -337,8 +337,7 @@ class CreateAppMixin:
             on_line=on_log_line,
         )
 
-        # Verifica se houve erro
-        if 'Failed' in output:
+        if 'Failed' in output or 'failed' in output.lower():
             logger.error(f'Erro no git:sync: {output}', category=LogCategory.GIT, progress=85)
             raise RuntimeError(f'Falha ao sincronizar repositório: {output}')
 

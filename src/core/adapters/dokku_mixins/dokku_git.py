@@ -63,7 +63,14 @@ class DokkuGitMixin:
 
         output = '\n'.join(lines)
 
-        if '[ERROR]' in output or '[SSH ERROR]' in output:
+        output_lower = output.lower()
+        if (
+            '[error]' in output_lower
+            or '[ssh error]' in output_lower
+            or 'app build failed' in output_lower
+            or 'could not read from remote repository' in output_lower
+            or 'permission denied' in output_lower
+        ):
             return 'Failed to sync Git repository and deploy.'
 
         return output

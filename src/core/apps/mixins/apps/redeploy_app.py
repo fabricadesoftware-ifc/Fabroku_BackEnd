@@ -110,9 +110,22 @@ class RedeployAppMixin:
                     meta={'current': progress, 'total': 100, 'status': line.strip()[:120]},
                 )
 
-            # Usa streaming para mostrar logs em tempo real
-            # Converte URL HTTPS para SSH para usar deploy key
-            git_url = https_to_ssh_url(app.git)
+            # Usa SSH apenas se existe deploy key configurada no Dokku,
+            # caso contrário mantém a URL original (HTTPS para repos públicos).
+            git_url = app.git
+            try:
+                deploy_key = dokku_adapter.get_git_deploy_key()
+                if deploy_key and deploy_key.startswith('ssh-'):
+                    git_url = https_to_ssh_url(app.git)
+            except Exception:
+                pass
+
+            if git_url == app.git:
+                logger.info(
+                    'Sem deploy key configurada, usando URL HTTPS (repo público)',
+                    category=LogCategory.GIT,
+                    progress=10,
+                )
 
             output = dokku_adapter.sync_git_streaming(
                 app_name=dokku_app_name,
@@ -121,7 +134,7 @@ class RedeployAppMixin:
                 on_line=on_log_line,
             )
 
-            if 'Failed' in output:
+            if 'Failed' in output or 'failed' in output.lower():
                 logger.error(f'Erro no redeploy: {output}', category=LogCategory.DEPLOY, progress=90)
                 app.status = 'ERROR'
                 app.save(update_fields=['status'])
