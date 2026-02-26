@@ -67,11 +67,11 @@ class LinkServiceMixin:
             )
 
             link_output = dokku_adapter.link_database(
-                db_name=dokku_service_name, app_name=app.name_dokku, no_restart=True,
+                db_name=dokku_service_name, app_name=app.name_dokku, no_restart=False,
             )
             logger.dokku(
                 link_output,
-                command=f'postgres:link --no-restart {dokku_service_name} {app.name_dokku}',
+                command=f'postgres:link {dokku_service_name} {app.name_dokku}',
                 category=LogCategory.DATABASE,
                 progress=50,
             )
