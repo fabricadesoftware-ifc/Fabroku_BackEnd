@@ -67,6 +67,25 @@ class DokkuPostgresMixin:
         """Exibe os logs de um banco de dados PostgreSQL no Dokku."""
         return self._run_command(f'postgres:logs {db_name}')
 
+    def get_database_size(self, db_name: str) -> int | None:
+        """
+        Retorna o tamanho do banco em bytes.
+        Usa pg_database_size() dentro do container Postgres.
+        Retorna None se falhar ou container não existir.
+        """
+        container = f'dokku.postgres.{db_name}'
+        cmd = (
+            f'docker exec {container} psql -U postgres -t -A '
+            '-c "SELECT pg_database_size(current_database())"'
+        )
+        out = self._run_command(cmd)
+        if not out or 'Failed to execute' in out or 'SSH Connection Error' in out:
+            return None
+        out = out.strip()
+        if out.isdigit():
+            return int(out)
+        return None
+
     def expose_database(self, db_name: str, port: int) -> str:
         """Expõe um banco de dados PostgreSQL em uma porta específica."""
         return self._run_command(f'postgres:expose {db_name} {port}')

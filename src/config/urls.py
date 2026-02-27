@@ -14,6 +14,7 @@ from rest_framework.reverse import reverse
 from rest_framework.routers import DefaultRouter
 
 from core.adapters.utils.git_callback import github_callback
+from core.apps.admin_views import storage_usage
 from core.adapters.utils.git_redirect import github_login
 from core.adapters.utils.git_repos import get_git_repos
 from core.adapters.utils.git_webhook import github_webhook
@@ -46,6 +47,7 @@ urlpatterns = [
     path('api/logs/', include('core.logs.urls')),
     path('api/token/refresh/', CustomTokenRefreshView.as_view(), name='token_refresh'),
     path('api/admin/', django_admin.site.urls),
+    path('api/admin-api/storage-usage/', storage_usage, name='admin-storage-usage'),
     path('api/auth/github/callback/', github_callback),
     path('api/auth/github/login/', github_login),
     path('api/auth/cli/login/', cli_login, name='cli-login'),
