@@ -6,7 +6,9 @@ from celery import Task, shared_task
 from core.adapters import DokkuAdapter
 from core.apps.models import App, Service, ServiceType
 from core.logs.models import AppLogManager, LogCategory
+from core.apps.mixins.apps.manage_app import ManageAppMixin
 
+manage_app = ManageAppMixin()
 
 def _check_dokku_output(output: str, operation: str):
     if not output:
@@ -67,14 +69,18 @@ class LinkServiceMixin:
             )
 
             link_output = dokku_adapter.link_database(
-                db_name=dokku_service_name, app_name=app.name_dokku, no_restart=False,
+                db_name=dokku_service_name, app_name=app.name_dokku, no_restart=True,
             )
+            
             logger.dokku(
                 link_output,
                 command=f'postgres:link {dokku_service_name} {app.name_dokku}',
                 category=LogCategory.DATABASE,
                 progress=50,
             )
+            
+            restart_output = manage_app.manage_app.delay(app_id=app.id, action='restart').get()
+            logger.dokku(restart_output, category=LogCategory.DEPLOY, progress=60)
 
             if 'already linked' not in link_output.lower():
                 _check_dokku_output(link_output, 'postgres:link')
