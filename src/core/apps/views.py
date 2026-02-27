@@ -579,6 +579,13 @@ class ServiceViewSet(ModelViewSet):
 
         task_id = service.task_id or (service.app.task_id if service.app else None)
         if not task_id:
+            # Task já concluiu e limpou task_id; se tem container_name, foi provisionado
+            if service.container_name:
+                return Response({
+                    'state': 'SUCCESS',
+                    'status': 'Serviço provisionado com sucesso!',
+                    'current': 100,
+                })
             return Response({'state': 'UNKNOWN', 'status': 'Nenhuma task vinculada.'})
 
         task_result = AsyncResult(task_id)
