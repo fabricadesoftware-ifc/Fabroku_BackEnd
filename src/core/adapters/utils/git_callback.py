@@ -1,4 +1,3 @@
-# views.py
 from urllib.parse import urlencode
 
 import requests
@@ -14,7 +13,6 @@ from core.auth_user.models import CLIToken, User
 
 def set_auth_cookies(response, access_token: str, refresh_token: str):
     """Define os cookies de autenticação na resposta."""
-    # Cookie do access token
     response.set_cookie(
         key=settings.AUTH_COOKIE_NAME,
         value=access_token,
@@ -26,7 +24,6 @@ def set_auth_cookies(response, access_token: str, refresh_token: str):
         domain=settings.AUTH_COOKIE_DOMAIN,
     )
 
-    # Cookie do refresh token (duração maior)
     response.set_cookie(
         key=settings.AUTH_COOKIE_REFRESH_NAME,
         value=refresh_token,
@@ -114,25 +111,21 @@ def github_callback(request):
         )
         user = User.objects.get(id=user_git_json.get('id'))
 
-        # Bloquear login se usuário está desabilitado
         if not user.is_active:
             return _error_redirect({
                 'error': 'user_disabled',
                 'message': 'Sua conta foi desabilitada pelo administrador. Entre em contato com o suporte.',
             })
 
-        # Atualiza last_login
         from django.utils import timezone
 
         user.last_login = timezone.now()
         user.save(update_fields=['last_login'])
 
         if is_cli:
-            # --- Fluxo CLI: gera CLIToken e redireciona para localhost ---
             cli_token = CLIToken.objects.create(user=user, name='CLI Login')
             return redirect(f'http://localhost:{cli_port}/callback?token={cli_token.token}&user={user.name}')
 
-        # --- Fluxo Web: JWT em cookies ---
         refresh = RefreshToken.for_user(user)
         response = redirect(f'{settings.FRONTEND_URL}/callback')
         set_auth_cookies(response, str(refresh.access_token), str(refresh))

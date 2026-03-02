@@ -23,19 +23,15 @@ class SSHAdapter:
         """
         key_data = self.ssh_key_path
 
-        # Se é um caminho de arquivo que existe, lê o conteúdo
         if os.path.isfile(key_data):
             with open(key_data) as f:
                 key_data = f.read()
 
-        # Se o conteúdo veio inline (variável de ambiente), pode ter \n escapado
         if '\\n' in key_data:
             key_data = key_data.replace('\\n', '\n')
 
-        # Carrega a chave do conteúdo
         key_file = io.StringIO(key_data)
 
-        # Tenta diferentes formatos de chave
         for key_class in [paramiko.RSAKey, paramiko.Ed25519Key, paramiko.ECDSAKey]:
             try:
                 key_file.seek(0)
@@ -104,13 +100,11 @@ class SSHAdapter:
             client.connect(self.host, port=self.port, username=self.username, pkey=pkey)
             stdin, stdout, stderr = client.exec_command(command, get_pty=True)
 
-            # Lê linha por linha conforme chegam
             for line in iter(stdout.readline, ''):
                 yield line.rstrip('\n\r')
 
             exit_status = stdout.channel.recv_exit_status()
 
-            # Se houve erro, yield as linhas de erro também
             if exit_status != 0:
                 for line in stderr:
                     yield f'[ERROR] {line.rstrip()}'

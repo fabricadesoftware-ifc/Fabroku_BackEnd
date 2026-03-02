@@ -98,20 +98,16 @@ def cookie_token_refresh(request):
     try:
         refresh = RefreshToken(refresh_token)
 
-        # Se ROTATE_REFRESH_TOKENS está ativo, gera novo refresh token
         if settings.SIMPLE_JWT.get('ROTATE_REFRESH_TOKENS', False):
-            # Busca o usuário pelo ID no payload
             user_id = refresh.access_token.payload.get('user_id')
             user = User.objects.get(id=user_id)
 
-            # Blacklist o token antigo se disponível
             if hasattr(refresh, 'blacklist'):
                 try:
                     refresh.blacklist()
                 except Exception:
                     pass
 
-            # Gera novos tokens
             new_refresh = RefreshToken.for_user(user)
             access_token = str(new_refresh.access_token)
             refresh_token = str(new_refresh)
@@ -150,7 +146,6 @@ def logout(request):
 
     response = Response({'message': 'Logout realizado com sucesso'})
 
-    # Remove os cookies
     response.delete_cookie(
         settings.AUTH_COOKIE_NAME,
         path=settings.AUTH_COOKIE_PATH,
