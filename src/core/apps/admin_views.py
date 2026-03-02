@@ -31,14 +31,23 @@ def storage_usage(request):
     if not request.user.is_superuser:
         return Response({'error': 'Sem permissão'}, status=403)
 
-    services = Service.objects.filter(
-        service_type='postgres',
-        container_name__isnull=False,
-    ).exclude(container_name='').select_related('project', 'app')
+    services = (
+        Service.objects.filter(
+            service_type='postgres',
+            container_name__isnull=False,
+        )
+        .exclude(container_name='')
+        .select_related('project', 'app')
+    )
 
     dokku = DokkuAdapter()
     results = []
     total_bytes = 0
+
+    # Pré-carregar apps do banco para resolver nomes via Dokku links
+    from core.apps.models import App
+
+    app_name_cache: dict[str, str] = {}
 
     for svc in services:
         size_bytes = dokku.get_database_size(svc.container_name)
@@ -46,7 +55,38 @@ def storage_usage(request):
             total_bytes += size_bytes
 
         project_name = svc.project.name if svc.project else '-'
-        app_name = svc.app.name if svc.app else '-'
+
+        # Resolver nome do app: primeiro tenta o FK, senão consulta Dokku
+        app_id = svc.app_id
+        app_name = None
+        if svc.app:
+            app_name = svc.app.name
+        elif svc.container_name:
+            # Consulta links do Dokku para descobrir o app vinculado
+            cache_key = svc.container_name
+            if cache_key not in app_name_cache:
+                try:
+                    links_output = dokku.app_links_for_service(svc.container_name)
+                    linked_app = links_output.strip().split('\n')[0].strip() if links_output else ''
+                    if (
+                        linked_app
+                        and 'Failed to execute' not in linked_app
+                        and 'SSH Connection Error' not in linked_app
+                    ):
+                        app_name_cache[cache_key] = linked_app
+                    else:
+                        app_name_cache[cache_key] = ''
+                except Exception:
+                    app_name_cache[cache_key] = ''
+            resolved = app_name_cache.get(cache_key, '')
+            if resolved:
+                app_name = resolved
+                # Tentar encontrar o app no banco para obter o ID
+                matching_app = (
+                    App.objects.filter(name_dokku=resolved).first() or App.objects.filter(name=resolved).first()
+                )
+                if matching_app:
+                    app_id = matching_app.id
 
         results.append({
             'service_id': svc.id,
@@ -54,8 +94,8 @@ def storage_usage(request):
             'container_name': svc.container_name,
             'project_id': str(svc.project_id) if svc.project_id else None,
             'project_name': project_name,
-            'app_id': svc.app_id,
-            'app_name': app_name if svc.app_id else None,
+            'app_id': app_id,
+            'app_name': app_name,
             'size_bytes': size_bytes,
             'size_formatted': _format_size(size_bytes) if size_bytes is not None else '-',
         })

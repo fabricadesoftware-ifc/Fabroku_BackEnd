@@ -47,6 +47,10 @@ class DokkuPostgresMixin:
         """Lista os bancos de dados vinculados a uma aplicação Dokku."""
         return self._run_command(f'postgres:app-links {app_name}')
 
+    def app_links_for_service(self, db_name: str) -> str:
+        """Lista os apps vinculados a um serviço Postgres (postgres:links)."""
+        return self._run_command(f'postgres:links {db_name}')
+
     def pause_database(self, db_name: str) -> str:
         """Pausa um banco de dados PostgreSQL no Dokku."""
         return self._run_command(f'postgres:pause {db_name}')
