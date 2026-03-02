@@ -114,6 +114,13 @@ def github_callback(request):
         )
         user = User.objects.get(id=user_git_json.get('id'))
 
+        # Bloquear login se usuário está desabilitado
+        if not user.is_active:
+            return _error_redirect({
+                'error': 'user_disabled',
+                'message': 'Sua conta foi desabilitada pelo administrador. Entre em contato com o suporte.',
+            })
+
         # Atualiza last_login
         from django.utils import timezone
 

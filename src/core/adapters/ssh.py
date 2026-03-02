@@ -64,6 +64,28 @@ class SSHAdapter:
         finally:
             client.close()
 
+    def _run_command_with_stdin(self, command: str, stdin_data: str) -> str:
+        """Executa um comando via SSH enviando dados no stdin."""
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            pkey = self._get_pkey()
+            client.connect(self.host, port=self.port, username=self.username, pkey=pkey)
+            stdin, stdout, stderr = client.exec_command(command)
+            stdin.write(stdin_data)
+            stdin.channel.shutdown_write()
+            output = stdout.read().decode('utf-8')
+            error_output = stderr.read().decode('utf-8')
+            exit_status = stdout.channel.recv_exit_status()
+            if exit_status != 0:
+                detail = error_output.strip() or output.strip() or '(sem detalhes)'
+                return f'Failed to execute command: {command}\n{detail}'
+            return output
+        except Exception as e:
+            return f'SSH Connection Error: {e}'
+        finally:
+            client.close()
+
     def _run_command_streaming(self, command: str) -> Generator[str, None, int]:
         """
         Executa um comando SSH e faz yield de cada linha conforme ela chega.

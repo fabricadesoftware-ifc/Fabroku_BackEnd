@@ -10,6 +10,7 @@ class UserRetrieveSerializer(serializers.Serializer):
     avatar_url = serializers.URLField(read_only=True)
     is_superuser = serializers.BooleanField(read_only=True)
     is_fabric = serializers.BooleanField(read_only=True)
+    is_active = serializers.BooleanField(read_only=True)
     date_joined = serializers.DateTimeField(read_only=True)
     last_login = serializers.DateTimeField(read_only=True)
 
@@ -22,4 +23,24 @@ class UserSerializer(serializers.ModelSerializer):
             'email',
             'name',
             'avatar_url',
+            'is_active',
         ]
+
+
+class UserAdminSerializer(serializers.ModelSerializer):
+    """Serializer completo para listagem administrativa de usuários."""
+
+    class Meta:
+        model = User
+        fields = [
+            'id',
+            'email',
+            'name',
+            'avatar_url',
+            'is_active',
+            'is_superuser',
+            'is_fabric',
+            'date_joined',
+            'last_login',
+        ]
+        read_only_fields = ['id', 'email', 'name', 'avatar_url', 'date_joined', 'last_login']

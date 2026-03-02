@@ -9,6 +9,11 @@ class DokkuPostgresMixin:
         """Executa um comando no servidor Dokku."""
         ...
 
+    @abstractmethod
+    def _run_command_with_stdin(self, command: str, stdin_data: str) -> str:
+        """Executa um comando no servidor Dokku enviando dados via stdin."""
+        ...
+
     def create_database(self, db_name: str, password: str) -> str:
         """Cria um novo banco de dados PostgreSQL no Dokku."""
         return self._run_command(f'postgres:create {db_name} -p {password}')
@@ -70,20 +75,19 @@ class DokkuPostgresMixin:
     def get_database_size(self, db_name: str) -> int | None:
         """
         Retorna o tamanho do banco em bytes.
-        Usa pg_database_size() dentro do container Postgres.
-        Retorna None se falhar ou container não existir.
+        Usa postgres:connect enviando a query SQL via stdin.
+        Retorna None se falhar ou serviço não existir.
         """
-        container = f'dokku.postgres.{db_name}'
-        cmd = (
-            f'docker exec {container} psql -U postgres -t -A '
-            '-c "SELECT pg_database_size(current_database())"'
-        )
-        out = self._run_command(cmd)
+        sql = 'SELECT pg_database_size(current_database());'
+        out = self._run_command_with_stdin(f'postgres:connect {db_name}', sql)
         if not out or 'Failed to execute' in out or 'SSH Connection Error' in out:
             return None
-        out = out.strip()
-        if out.isdigit():
-            return int(out)
+        # A saída do psql contém header, separador, valor e rodapé.
+        # Ex: " pg_database_size\n-----------------\n    8765432\n(1 row)"
+        for line in out.strip().splitlines():
+            cleaned = line.strip()
+            if cleaned.isdigit():
+                return int(cleaned)
         return None
 
     def expose_database(self, db_name: str, port: int) -> str:

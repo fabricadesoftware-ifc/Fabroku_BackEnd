@@ -12,9 +12,8 @@ from rest_framework_simplejwt.views import TokenRefreshView
 
 from core.adapters.utils.git_callback import set_auth_cookies
 
-# from config.permission import CustomUserPermission
 from .models import User
-from .serializers import UserRetrieveSerializer, UserSerializer
+from .serializers import UserAdminSerializer, UserRetrieveSerializer, UserSerializer
 
 
 @extend_schema(tags=['users'])
@@ -24,14 +23,14 @@ class UserViewSet(ModelViewSet):
     filter_backends = [SearchFilter, OrderingFilter]
     filterset_fields = ['id', 'name']
     search_fields = ['name', 'email']
-    ordering_fields = ['id', 'name']
+    ordering_fields = ['id', 'name', 'date_joined', 'last_login']
     ordering = ['id']
-
-    # permission_classes = [CustomUserPermission]
 
     def get_serializer_class(self):  # type: ignore
         if self.action == 'retrieve':
             return UserRetrieveSerializer
+        if self.action == 'admin_list':
+            return UserAdminSerializer
         return UserSerializer
 
     @action(detail=False, methods=['get'])
@@ -39,6 +38,36 @@ class UserViewSet(ModelViewSet):
         user = request.user
         serializer = UserRetrieveSerializer(user)
         return Response(serializer.data)
+
+    @action(detail=False, methods=['get'], url_path='admin_list')
+    def admin_list(self, request):
+        """Lista todos os usuários (somente admin)."""
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Permissão negada'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        queryset = self.filter_queryset(User.objects.all())
+        serializer = UserAdminSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='toggle_active')
+    def toggle_active(self, request, pk=None):
+        """Ativa/desativa um usuário (somente admin)."""
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Permissão negada'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        user = self.get_object()
+        if user.id == request.user.id:
+            return Response(
+                {'error': 'Você não pode desabilitar sua própria conta'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        user.is_active = not user.is_active
+        user.save(update_fields=['is_active'])
+        return Response(UserAdminSerializer(user).data)
 
 
 @extend_schema(tags=['auth'])

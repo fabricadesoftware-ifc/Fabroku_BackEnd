@@ -1,5 +1,7 @@
 from drf_spectacular.utils import extend_schema
+from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
 from .models import Project
@@ -22,3 +24,14 @@ class ProjectViewSet(ModelViewSet):
         """Ao criar um projeto, adiciona o usuário atual automaticamente."""
         project = serializer.save()
         project.users.add(self.request.user)
+
+    def destroy(self, request, *args, **kwargs):
+        """Apenas superusers ou donos do projeto podem deletar."""
+        project = self.get_object()
+        is_member = project.users.filter(id=request.user.id).exists()
+        if not request.user.is_superuser and not is_member:
+            return Response(
+                {'error': 'Você não tem permissão para deletar este projeto'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return super().destroy(request, *args, **kwargs)
