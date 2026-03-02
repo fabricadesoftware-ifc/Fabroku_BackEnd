@@ -10,6 +10,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
+from django.db.models import Q
+
 from core.adapters import GitHubAdapter
 from core.apps.mixins import AppMixin
 from core.apps.mixins.apps.run_command import ALLOWED_COMMANDS, ALLOWED_PREFIXES, is_command_allowed
@@ -52,6 +54,27 @@ class AppViewSet(ModelViewSet):
             },
             status=status.HTTP_202_ACCEPTED,
         )
+
+    @action(detail=False, methods=['get'], url_path='check_name')
+    def check_name(self, request):
+        """Verifica se um nome de app já está em uso. Retorna available: true/false."""
+        name = request.query_params.get('name', '').strip().lower()
+        if not name:
+            return Response(
+                {'available': False, 'reason': 'Nome é obrigatório.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # Valida formato: apenas letras minúsculas, números e hífens
+        import re
+
+        if not re.match(r'^[a-z0-9][a-z0-9\-]*[a-z0-9]$', name) and len(name) > 1:
+            return Response({'available': False, 'reason': 'Use apenas letras minúsculas, números e hífens.'})
+        if len(name) < 2:
+            return Response({'available': False, 'reason': 'Nome deve ter pelo menos 2 caracteres.'})
+        if len(name) > 60:
+            return Response({'available': False, 'reason': 'Nome deve ter no máximo 60 caracteres.'})
+        exists = App.objects.filter(name__iexact=name).exists()
+        return Response({'available': not exists, 'name': name})
 
     @action(detail=True, methods=['post'])
     def start(self, request, pk=None):

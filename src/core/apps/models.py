@@ -39,6 +39,12 @@ class App(models.Model):
         db_table = 'apps'
         verbose_name = 'App'
         verbose_name_plural = 'Apps'
+        indexes = [
+            models.Index(fields=['name'], name='idx_app_name'),
+        ]
+        constraints = [
+            models.UniqueConstraint(fields=['name'], name='unique_app_name'),
+        ]
 
 
 class ServiceType(models.TextChoices):
