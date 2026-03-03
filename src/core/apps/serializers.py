@@ -64,14 +64,12 @@ class ServiceSerializer(serializers.ModelSerializer):
             if not user.can_create_service():
                 max_services = user.max_services
                 current = user.services_count
-                raise serializers.ValidationError(
-                    {
-                        'quota': f'Limite de serviços atingido ({current}/{max_services}). '
-                        'Entre em contato com um administrador para aumentar seu limite.',
-                        'limit': max_services,
-                        'current': current,
-                    }
-                )
+                raise serializers.ValidationError({
+                    'quota': f'Limite de serviços atingido ({current}/{max_services}). '
+                    'Entre em contato com um administrador para aumentar seu limite.',
+                    'limit': max_services,
+                    'current': current,
+                })
 
         app = validated_data.get('app')
         project = validated_data.get('project')
@@ -182,14 +180,12 @@ class AppSerializer(serializers.ModelSerializer):
         if not user.can_create_app():
             max_apps = user.max_apps
             current = user.apps_count
-            raise serializers.ValidationError(
-                {
-                    'quota': f'Limite de apps atingido ({current}/{max_apps}). '
-                    'Entre em contato com um administrador para aumentar seu limite.',
-                    'limit': max_apps,
-                    'current': current,
-                }
-            )
+            raise serializers.ValidationError({
+                'quota': f'Limite de apps atingido ({current}/{max_apps}). '
+                'Entre em contato com um administrador para aumentar seu limite.',
+                'limit': max_apps,
+                'current': current,
+            })
 
         instance = super().create(validated_data)
 

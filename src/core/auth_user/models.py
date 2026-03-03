@@ -42,7 +42,9 @@ class User(AbstractUser):
         _('limite personalizado de serviços'),
         null=True,
         blank=True,
-        help_text=_('Sobrescreve o limite padrão de serviços para este usuário. Deixe vazio para usar o padrão do perfil.'),
+        help_text=_(
+            'Sobrescreve o limite padrão de serviços para este usuário. Deixe vazio para usar o padrão do perfil.'
+        ),
     )
 
     # Limites padrão por perfil
@@ -83,12 +85,14 @@ class User(AbstractUser):
     def apps_count(self) -> int:
         """Conta o total de apps em projetos do usuário."""
         from core.apps.models import App  # noqa: PLC0415
+
         return App.objects.filter(project__users=self).count()
 
     @property
     def services_count(self) -> int:
         """Conta o total de serviços em projetos do usuário."""
         from core.apps.models import Service  # noqa: PLC0415
+
         return Service.objects.filter(project__users=self).count()
 
     def can_create_app(self) -> bool:
