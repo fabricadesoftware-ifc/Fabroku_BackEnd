@@ -29,6 +29,13 @@ class UserAdmin(BaseUserAdmin):
                 'fields': ('is_active', 'is_staff', 'is_superuser', 'is_fabric', 'groups', 'user_permissions'),
             },
         ),
+        (
+            'Limites de Recursos',
+            {
+                'fields': ('custom_max_apps', 'custom_max_services'),
+                'description': 'Deixe vazio para usar o padrão do perfil (aluno: 3 apps/2 serv, fábrica: 5 apps/3 serv, admin: ilimitado).',
+            },
+        ),
         ('Datas', {'fields': ('last_login', 'date_joined')}),
     )
 

@@ -31,11 +31,79 @@ class User(AbstractUser):
         help_text=_('Indica se o usuário é membro da Fábrica de Software. Membros podem personalizar nomes de apps.'),
     )
 
+    # Limites personalizados (None = usar padrão do role)
+    custom_max_apps = models.PositiveIntegerField(
+        _('limite personalizado de apps'),
+        null=True,
+        blank=True,
+        help_text=_('Sobrescreve o limite padrão de apps para este usuário. Deixe vazio para usar o padrão do perfil.'),
+    )
+    custom_max_services = models.PositiveIntegerField(
+        _('limite personalizado de serviços'),
+        null=True,
+        blank=True,
+        help_text=_('Sobrescreve o limite padrão de serviços para este usuário. Deixe vazio para usar o padrão do perfil.'),
+    )
+
+    # Limites padrão por perfil
+    DEFAULT_MAX_APPS = 3
+    DEFAULT_MAX_SERVICES = 2
+    FABRIC_MAX_APPS = 5
+    FABRIC_MAX_SERVICES = 3
+
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['name']
     EMAIL_FIELD = 'email'
 
     objects = CustomUserManager()  # type: ignore
+
+    @property
+    def max_apps(self) -> int | None:
+        """Retorna o limite máximo de apps do usuário. None = sem limite (admin)."""
+        if self.is_superuser:
+            return None  # Sem limite
+        if self.custom_max_apps is not None:
+            return self.custom_max_apps
+        if self.is_fabric:
+            return self.FABRIC_MAX_APPS
+        return self.DEFAULT_MAX_APPS
+
+    @property
+    def max_services(self) -> int | None:
+        """Retorna o limite máximo de serviços do usuário. None = sem limite (admin)."""
+        if self.is_superuser:
+            return None  # Sem limite
+        if self.custom_max_services is not None:
+            return self.custom_max_services
+        if self.is_fabric:
+            return self.FABRIC_MAX_SERVICES
+        return self.DEFAULT_MAX_SERVICES
+
+    @property
+    def apps_count(self) -> int:
+        """Conta o total de apps em projetos do usuário."""
+        from core.apps.models import App  # noqa: PLC0415
+        return App.objects.filter(project__users=self).count()
+
+    @property
+    def services_count(self) -> int:
+        """Conta o total de serviços em projetos do usuário."""
+        from core.apps.models import Service  # noqa: PLC0415
+        return Service.objects.filter(project__users=self).count()
+
+    def can_create_app(self) -> bool:
+        """Verifica se o usuário pode criar mais apps."""
+        limit = self.max_apps
+        if limit is None:
+            return True
+        return self.apps_count < limit
+
+    def can_create_service(self) -> bool:
+        """Verifica se o usuário pode criar mais serviços."""
+        limit = self.max_services
+        if limit is None:
+            return True
+        return self.services_count < limit
 
     def __str__(self):
         return self.email + ' - ' + (self.name or 'No Name')

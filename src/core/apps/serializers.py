@@ -57,6 +57,22 @@ class ServiceSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
+        # Validação de quota
+        request = self.context.get('request')
+        if request and request.user:
+            user = request.user
+            if not user.can_create_service():
+                max_services = user.max_services
+                current = user.services_count
+                raise serializers.ValidationError(
+                    {
+                        'quota': f'Limite de serviços atingido ({current}/{max_services}). '
+                        'Entre em contato com um administrador para aumentar seu limite.',
+                        'limit': max_services,
+                        'current': current,
+                    }
+                )
+
         app = validated_data.get('app')
         project = validated_data.get('project')
         service_type = validated_data['service_type']
@@ -161,6 +177,20 @@ class AppSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         user = self.context['request'].user
+
+        # Validação de quota
+        if not user.can_create_app():
+            max_apps = user.max_apps
+            current = user.apps_count
+            raise serializers.ValidationError(
+                {
+                    'quota': f'Limite de apps atingido ({current}/{max_apps}). '
+                    'Entre em contato com um administrador para aumentar seu limite.',
+                    'limit': max_apps,
+                    'current': current,
+                }
+            )
+
         instance = super().create(validated_data)
 
         task_result = AppMixin.create_app.delay(app_id=instance.id, user_id=user.id)  # type: ignore

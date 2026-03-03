@@ -69,6 +69,44 @@ class UserViewSet(ModelViewSet):
         user.save(update_fields=['is_active'])
         return Response(UserAdminSerializer(user).data)
 
+    @action(detail=True, methods=['post'], url_path='set_quota')
+    def set_quota(self, request, pk=None):
+        """Define limites personalizados de apps/serviços para um usuário (somente admin)."""
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Permissão negada'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        user = self.get_object()
+        max_apps = request.data.get('max_apps')
+        max_services = request.data.get('max_services')
+
+        update_fields = []
+        if 'max_apps' in request.data:
+            user.custom_max_apps = int(max_apps) if max_apps is not None else None
+            update_fields.append('custom_max_apps')
+        if 'max_services' in request.data:
+            user.custom_max_services = int(max_services) if max_services is not None else None
+            update_fields.append('custom_max_services')
+
+        if update_fields:
+            user.save(update_fields=update_fields)
+
+        return Response(UserAdminSerializer(user).data)
+
+    @action(detail=False, methods=['get'], url_path='my_quota')
+    def my_quota(self, request):
+        """Retorna as informações de quota do usuário autenticado."""
+        user = request.user
+        return Response({
+            'max_apps': user.max_apps,
+            'max_services': user.max_services,
+            'apps_count': user.apps_count,
+            'services_count': user.services_count,
+            'can_create_app': user.can_create_app(),
+            'can_create_service': user.can_create_service(),
+        })
+
 
 @extend_schema(tags=['auth'])
 class CustomTokenRefreshView(TokenRefreshView):
