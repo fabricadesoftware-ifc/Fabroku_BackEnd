@@ -120,22 +120,52 @@ class RedeployAppMixin:
                     meta={'current': progress, 'total': 100, 'status': line.strip()[:120]},
                 )
 
-            # Usa SSH apenas se existe deploy key configurada no Dokku,
-            # caso contrário mantém a URL original (HTTPS para repos públicos).
+            # Decide a URL para git:sync.
+            # Se o repo é privado, o create_app já salvou a URL SSH no app.git.
+            # Se é público, a URL é HTTPS. Respeita o que foi definido na criação.
+            # Também verifica via GitHub API se temos token disponível.
             git_url = app.git
-            try:
-                deploy_key = dokku_adapter.get_git_deploy_key()
-                if deploy_key and deploy_key.startswith('ssh-'):
-                    git_url = https_to_ssh_url(app.git)
-            except Exception:
-                pass
 
-            if git_url == app.git:
+            if git_url.startswith('git@'):
+                # Já é SSH (repo privado configurado na criação)
                 logger.info(
-                    'Sem deploy key configurada, usando URL HTTPS (repo público)',
+                    'Usando URL SSH (repositório privado)',
                     category=LogCategory.GIT,
                     progress=10,
                 )
+            else:
+                # Verifica se o repo é privado e se temos deploy key configurada
+                is_private = False
+                if git_token:
+                    try:
+                        from github import Github  # noqa: PLC0415
+
+                        repo_name = git_url.rsplit('.com/', maxsplit=1)[-1].replace('.git', '')
+                        gh = Github(git_token)
+                        repo = gh.get_repo(repo_name)
+                        is_private = repo.private
+                    except Exception:
+                        pass
+
+                if is_private:
+                    try:
+                        deploy_key = dokku_adapter.get_git_deploy_key()
+                        if deploy_key and deploy_key.startswith('ssh-'):
+                            git_url = https_to_ssh_url(app.git)
+                            logger.info(
+                                'Repositório privado detectado, usando URL SSH',
+                                category=LogCategory.GIT,
+                                progress=10,
+                            )
+                    except Exception:
+                        pass
+
+                if git_url == app.git:
+                    logger.info(
+                        'Usando URL HTTPS (repositório público)',
+                        category=LogCategory.GIT,
+                        progress=10,
+                    )
 
             output = dokku_adapter.sync_git_streaming(
                 app_name=dokku_app_name,
