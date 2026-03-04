@@ -1,6 +1,11 @@
 from github import Github, GithubException
 from django.conf import settings
 
+import logging
+import requests
+
+logger = logging.getLogger(__name__)
+
 
 class GitRepoMixin:
     def list_user_repos(self, user_id: int):
@@ -23,41 +28,101 @@ class GitRepoMixin:
             raise
 
     def add_deploy_key(self, repo_name: str, dokku_key: str, user_id: int):
+        """
+        Adiciona uma deploy key ao repositório via API REST do GitHub.
+        Usa requests diretamente para ter controle total sobre a resposta.
+        Retorna dict com 'status' indicando resultado.
+        Lança exceção em caso de falha irrecuperável.
+        """
         from core.auth_user.models import User  # noqa: PLC0415
 
         user = User.objects.get(id=user_id)
-        gh = Github(user.git_token)
-        repo = gh.get_repo(repo_name)
+        token = user.git_token
 
-        # Verifica se a chave já existe no repositório
-        existing_keys = repo.get_keys()
-        for key in existing_keys:
-            # Compara apenas a parte da chave (sem o comentário no final)
-            existing_key_part = key.key.split()[1] if len(key.key.split()) > 1 else key.key
+        # ---- Verificar se a chave já existe (via PyGithub, OK para leitura) ----
+        try:
+            gh = Github(token)
+            repo_obj = gh.get_repo(repo_name)
+            existing_keys = repo_obj.get_keys()
             new_key_part = dokku_key.split()[1] if len(dokku_key.split()) > 1 else dokku_key
+            for key in existing_keys:
+                existing_key_part = key.key.split()[1] if len(key.key.split()) > 1 else key.key
+                if existing_key_part == new_key_part:
+                    logger.info(f'Deploy key já existe no repositório {repo_name} (key_id={key.id})')
+                    return {'status': 'success', 'key_id': key.id, 'already_existed': True}
+        except GithubException as e:
+            logger.warning(f'Erro ao listar deploy keys existentes para {repo_name}: status={e.status} data={e.data}')
+            # Continua tentando criar mesmo assim
 
-            if existing_key_part == new_key_part:
-                return {'status': 'deploy key já existe', 'key_id': key.id}
+        # ---- Criar deploy key via API REST para controle total ----
+        url = f'https://api.github.com/repos/{repo_name}/keys'
+        headers = {
+            'Authorization': f'Bearer {token}',
+            'Accept': 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28',
+        }
+        payload = {
+            'title': f'dokku-deploy-{repo_name.split("/")[-1]}',
+            'key': dokku_key,
+            'read_only': True,
+        }
+
+        logger.info(f'Criando deploy key para {repo_name} via POST {url}')
 
         try:
-            repo.create_key(title='dokku-deploy', key=dokku_key, read_only=False)
-            return {'status': 'deploy key cadastrada'}
-        except GithubException as e:
-            # Erro: deploy key já existe em outro repositório
-            if e.status == 422 and 'already in use' in str(e.data):
-                return {'status': 'deploy key já existe em outro repositório'}
-            # Erro: deploy keys desabilitadas no repositório
-            if e.status == 422 and (
-                ('Deploy keys are disabled' in str(e.data))
-                or ('deploy keys are disabled' in str(e.data))
-                or ('deploy keys are not enabled' in str(e.data))
-            ):
+            response = requests.post(url, json=payload, headers=headers, timeout=30)
+        except requests.RequestException as e:
+            logger.error(f'Erro de rede ao criar deploy key para {repo_name}: {e}')
+            raise Exception(f'Erro de rede ao criar deploy key: {e}') from e
+
+        status_code = response.status_code
+        response_body = response.text
+
+        logger.info(f'Resposta da API GitHub para deploy key: status_code={status_code}')
+
+        if status_code == 201:
+            logger.info(f'Deploy key criada com sucesso no repositório {repo_name}')
+            return {'status': 'success', 'key_id': response.json().get('id')}
+
+        # ---- Tratar erros específicos ----
+        logger.error(f'Falha ao criar deploy key para {repo_name}: status_code={status_code} body={response_body}')
+
+        if status_code == 401:
+            raise Exception(
+                f'Token inválido ou expirado ao criar deploy key para {repo_name}. '
+                f'Reautorize seu token no GitHub. (HTTP 401)'
+            )
+
+        if status_code == 403:
+            raise Exception(
+                f'Sem permissão para criar deploy key no repositório {repo_name}. '
+                f'Verifique se o token tem escopo "repo" (classic) ou permissão '
+                f'"Administration: Read and write" (fine-grained). (HTTP 403)'
+            )
+
+        if status_code == 404:
+            raise Exception(
+                f'Repositório {repo_name} não encontrado ou token sem acesso. '
+                f'Verifique se o repositório existe e se o token tem acesso. (HTTP 404)'
+            )
+
+        if status_code == 422:
+            body_str = response_body.lower()
+            if 'already in use' in body_str or 'key is already in use' in body_str:
+                raise Exception(
+                    f'A chave SSH já está em uso em outro repositório GitHub. '
+                    f'O Dokku usa uma única chave global — cada chave só pode ser usada em um repositório privado. '
+                    f'Remova a chave duplicada ou use repositórios públicos. (HTTP 422)'
+                )
+            if 'deploy keys' in body_str and ('disabled' in body_str or 'not enabled' in body_str):
                 return {
                     'status': 'deploy keys disabled',
                     'error': 'As deploy keys estão desabilitadas para este repositório. Ative nas configurações do GitHub.',
-                    'help_url': 'https://docs.github.com/en/developers/overview/managing-deploy-keys#enabling-deploy-keys-for-your-repository',
+                    'help_url': 'https://docs.github.com/en/developers/overview/managing-deploy-keys',
                 }
-            raise
+
+        # Erro genérico
+        raise Exception(f'Falha ao criar deploy key para {repo_name}: HTTP {status_code} — {response_body}')
 
     def create_webhook(self, repo_name: str, app_id: int, user_id: int) -> dict:
         """

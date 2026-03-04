@@ -267,6 +267,10 @@ class CreateAppMixin:
             )
 
             deploy_key_result = gh_adapter.add_deploy_key(dokku_key=deploy_key, repo_name=repo_name, user_id=user.id)  # type: ignore
+
+            # add_deploy_key agora lança exceção em caso de erro (401, 403, 404, 422 key in use, etc.)
+            # Só chega aqui se retornou um dict com status 'success' ou 'deploy keys disabled'
+
             if isinstance(deploy_key_result, dict) and deploy_key_result.get('status') == 'deploy keys disabled':
                 # Lança exceção amigável para o frontend exibir tela de ajuda
                 logger.error(
@@ -282,9 +286,32 @@ class CreateAppMixin:
                 raise Exception(
                     f'As deploy keys estão desabilitadas para este repositório. Ative nas configurações do GitHub. Mais informações: {deploy_key_result.get("help_url")}'
                 )
-            logger.success(
-                f'Chave de deploy adicionada ao repositório {repo_name}', category=LogCategory.GIT, progress=40
-            )
+
+            # Verifica se foi realmente sucesso
+            if not isinstance(deploy_key_result, dict) or deploy_key_result.get('status') != 'success':
+                logger.error(
+                    f'Resultado inesperado ao criar deploy key para {repo_name}: {deploy_key_result}',
+                    category=LogCategory.GIT,
+                    progress=40,
+                )
+                raise Exception(
+                    f'Falha ao criar deploy key para {repo_name}: resultado inesperado — {deploy_key_result}'
+                )
+
+            already_existed = deploy_key_result.get('already_existed', False)
+            key_id = deploy_key_result.get('key_id')
+            if already_existed:
+                logger.info(
+                    f'Deploy key já existia no repositório {repo_name} (key_id={key_id})',
+                    category=LogCategory.GIT,
+                    progress=40,
+                )
+            else:
+                logger.success(
+                    f'✓ Deploy key criada com sucesso no repositório {repo_name} (key_id={key_id})',
+                    category=LogCategory.GIT,
+                    progress=40,
+                )
 
             # Para repos privados, usar URL SSH
             ssh_url = https_to_ssh_url(git_url)
