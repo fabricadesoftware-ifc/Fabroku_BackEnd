@@ -168,8 +168,8 @@ class CreateAppMixin:
             # Membro da fábrica/admin sem nome custom: usa nome limpo
             return slugify_dokku(app.name)
 
-        # Usuário normal: sufixo com ID do projeto para evitar colisão
-        return slugify_dokku(f'{app.name}-{app.project.id}')
+        # Usuário normal: nome limpo (unicidade garantida pela constraint no banco)
+        return slugify_dokku(app.name)
 
     @staticmethod
     def _ensure_dokku_app(

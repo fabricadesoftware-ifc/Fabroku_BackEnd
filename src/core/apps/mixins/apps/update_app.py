@@ -32,9 +32,10 @@ class UpdateAppMixin:
 
         if name and app.name != name:
             task.update_state(state='PROGRESS', meta={'status': f'Renomeando para {name}...'})
-            dokku_adapter.rename_app(old_name=app.name, new_name=slugify_dokku(f'{name}-{app.project.id}'))
+            new_dokku_name = slugify_dokku(name)
+            dokku_adapter.rename_app(old_name=app.name_dokku, new_name=new_dokku_name)
             app.name = name
-            app.name_dokku = slugify_dokku(f'{name}-{app.project.id}')
+            app.name_dokku = new_dokku_name
             app.save()
 
         if git and app.git != git:
