@@ -21,6 +21,15 @@ def https_to_ssh_url(url: str) -> str:
         return f'git@github.com:{owner}/{repo}.git'
     return url
 
+def https_to_auth_url(url: str, token: str) -> str:
+    """
+    Adiciona token de autenticação na URL HTTPS do GitHub.
+    https://github.com/user/repo.git -> https://x-access-token:{token}@github.com/user/repo.git
+    """
+    match = re.match(r'https://github\.com/(.+)', url)
+    if match:
+        return f'https://x-access-token:{token}@github.com/{match.group(1)}'
+    return url
 
 class CreateAppMixin:
     """
@@ -78,7 +87,7 @@ class CreateAppMixin:
             CreateAppMixin._apply_env_vars(task, dokku_adapter, dokku_app_name, env_vars, logger)
 
             git_url = CreateAppMixin._handle_deploy_keys(
-                task, dokku_adapter, github_adapter, user, app.git, dokku_app_name, logger
+                task, github_adapter, user, app.git, logger
             )
 
             # --- GitHub Commit Status: marca pending antes do git:sync ---
@@ -223,16 +232,16 @@ class CreateAppMixin:
     @staticmethod
     def _handle_deploy_keys(
         task: Task,
-        d_adapter: DokkuAdapter,
         gh_adapter: GitHubAdapter,
         user: User,
         git_url: str,
-        dokku_app_name: str,
         logger: AppLogManager,
     ) -> str:
         """
-        Verifica permissões e gera chaves SSH se necessário.
-        Retorna a URL correta para usar (SSH para privado, original para público).
+        Verifica permissões e configura autenticação para repos privados.
+        Para repos privados, usa HTTPS com token (x-access-token) para
+        evitar problemas de chave SSH duplicada no GitHub.
+        Retorna a URL correta para usar.
         """
         task.update_state(
             state='PROGRESS', meta={'current': 28, 'total': 100, 'status': 'Verificando permissões do GitHub...'}
@@ -263,76 +272,25 @@ class CreateAppMixin:
 
         if is_private:
             task.update_state(
-                state='PROGRESS', meta={'current': 32, 'total': 100, 'status': 'Gerando chaves de acesso seguro...'}
+                state='PROGRESS',
+                meta={'current': 32, 'total': 100, 'status': 'Configurando acesso ao repositório privado...'},
             )
             logger.info(
-                f'Repositório {repo_name} é privado. Gerando chave de deploy per-app...',
+                f'Repositório {repo_name} é privado. Usando autenticação HTTPS com token...',
                 category=LogCategory.GIT,
                 progress=32,
             )
 
-            deploy_key = d_adapter.generate_app_deploy_key(dokku_app_name)
-            logger.dokku(
-                f'Chave per-app gerada: {deploy_key[:50]}...',
-                command=f'dokku git:set {dokku_app_name} deploy-key',
+            auth_url = https_to_auth_url(git_url, user.git_token)
+            logger.success(
+                f'✓ Autenticação configurada para repositório privado {repo_name}',
                 category=LogCategory.GIT,
-                progress=35,
+                progress=40,
             )
-
-            deploy_key_result = gh_adapter.add_deploy_key(dokku_key=deploy_key, repo_name=repo_name, user_id=user.id)  # type: ignore
-
-            # add_deploy_key agora lança exceção em caso de erro (401, 403, 404, 422 key in use, etc.)
-            # Só chega aqui se retornou um dict com status 'success' ou 'deploy keys disabled'
-
-            if isinstance(deploy_key_result, dict) and deploy_key_result.get('status') == 'deploy keys disabled':
-                # Lança exceção amigável para o frontend exibir tela de ajuda
-                logger.error(
-                    f'Deploy keys desabilitadas no repositório {repo_name}. Usuário deve ativar nas configurações do GitHub.',
-                    category=LogCategory.GIT,
-                    metadata={
-                        'error_type': 'DeployKeysDisabled',
-                        'error_details': deploy_key_result.get('error'),
-                        'help_url': deploy_key_result.get('help_url'),
-                    },
-                    progress=40,
-                )
-                raise Exception(
-                    f'As deploy keys estão desabilitadas para este repositório. Ative nas configurações do GitHub. Mais informações: {deploy_key_result.get("help_url")}'
-                )
-
-            # Verifica se foi realmente sucesso
-            if not isinstance(deploy_key_result, dict) or deploy_key_result.get('status') != 'success':
-                logger.error(
-                    f'Resultado inesperado ao criar deploy key para {repo_name}: {deploy_key_result}',
-                    category=LogCategory.GIT,
-                    progress=40,
-                )
-                raise Exception(
-                    f'Falha ao criar deploy key para {repo_name}: resultado inesperado — {deploy_key_result}'
-                )
-
-            already_existed = deploy_key_result.get('already_existed', False)
-            key_id = deploy_key_result.get('key_id')
-            if already_existed:
-                logger.info(
-                    f'Deploy key já existia no repositório {repo_name} (key_id={key_id})',
-                    category=LogCategory.GIT,
-                    progress=40,
-                )
-            else:
-                logger.success(
-                    f'✓ Deploy key criada com sucesso no repositório {repo_name} (key_id={key_id})',
-                    category=LogCategory.GIT,
-                    progress=40,
-                )
-
-            # Para repos privados, usar URL SSH
-            ssh_url = https_to_ssh_url(git_url)
-            logger.info(f'Usando URL SSH: {ssh_url}', category=LogCategory.GIT, progress=42)
-            return ssh_url
+            return auth_url
         else:
             logger.info(
-                f'Repositório {repo_name} é público. Chave de deploy não necessária.',
+                f'Repositório {repo_name} é público. Autenticação não necessária.',
                 category=LogCategory.GIT,
                 progress=40,
             )

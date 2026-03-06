@@ -23,6 +23,15 @@ def https_to_ssh_url(url: str) -> str:
         return f'git@github.com:{owner}/{repo}.git'
     return url
 
+def https_to_auth_url(url: str, token: str) -> str:
+    """
+    Adiciona token de autenticação na URL HTTPS do GitHub.
+    https://github.com/user/repo.git -> https://x-access-token:{token}@github.com/user/repo.git
+    """
+    match = re.match(r'https://github\.com/(.+)', url)
+    if match:
+        return f'https://x-access-token:{token}@github.com/{match.group(1)}'
+    return url
 
 class RedeployAppMixin:
     """Mixin para redeploy de aplicações via webhook."""
@@ -127,14 +136,14 @@ class RedeployAppMixin:
             git_url = app.git
 
             if git_url.startswith('git@'):
-                # Já é SSH (repo privado configurado na criação)
+                # Já é SSH (repo privado legado)
                 logger.info(
                     'Usando URL SSH (repositório privado)',
                     category=LogCategory.GIT,
                     progress=10,
                 )
             else:
-                # Verifica se o repo é privado e se temos deploy key configurada
+                # Verifica se o repo é privado para usar HTTPS com token
                 is_private = False
                 if git_token:
                     try:
@@ -147,17 +156,14 @@ class RedeployAppMixin:
                     except Exception:
                         pass
 
-                if is_private:
-                    # A deploy key per-app já foi configurada no create_app,
-                    # basta converter para SSH URL
-                    git_url = https_to_ssh_url(app.git)
+                if is_private and git_token:
+                    git_url = https_to_auth_url(app.git, git_token)
                     logger.info(
-                        'Repositório privado detectado, usando URL SSH',
+                        'Repositório privado detectado, usando HTTPS com token',
                         category=LogCategory.GIT,
                         progress=10,
                     )
-
-                if git_url == app.git:
+                else:
                     logger.info(
                         'Usando URL HTTPS (repositório público)',
                         category=LogCategory.GIT,

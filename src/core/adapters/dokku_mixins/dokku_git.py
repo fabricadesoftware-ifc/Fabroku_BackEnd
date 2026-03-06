@@ -1,11 +1,5 @@
-import io
-import logging
 from abc import abstractmethod
 from collections.abc import Callable, Generator
-
-import paramiko
-
-logger = logging.getLogger(__name__)
 
 
 class DokkuGitMixin:
@@ -99,9 +93,6 @@ class DokkuGitMixin:
         """
         Obtém a chave de deploy Git existente ou gera uma nova se não existir.
         Retorna a chave pública no formato OpenSSH.
-
-        NOTA: Método legado — usa chave global do Dokku.
-        Para novos deploys, preferir generate_app_deploy_key().
         """
         # Primeiro tenta obter a chave existente
         existing_key = self._run_command('git:public-key')
@@ -114,35 +105,6 @@ class DokkuGitMixin:
         self._run_command('git:generate-deploy-key')
         return self._run_command('git:public-key').strip()
 
-    def generate_app_deploy_key(self, app_name: str) -> str:
-        """
-        Gera um par de chaves SSH exclusivo para o app e configura no Dokku.
-        Usa dokku git:set <app> deploy-key para que cada app tenha sua
-        própria chave, evitando o erro "key is already in use" do GitHub.
-
-        Retorna a chave pública no formato OpenSSH para registrar no GitHub.
-        """
-        key = paramiko.RSAKey.generate(4096)
-
-        # Chave privada em formato PEM
-        private_io = io.StringIO()
-        key.write_private_key(private_io)
-        private_key = private_io.getvalue()
-
-        # Chave pública em formato OpenSSH
-        public_key = f'ssh-rsa {key.get_base64()}'
-
-        # Configurar a chave privada no Dokku para este app
-        # PEM keys são ASCII puro (sem aspas simples), seguro para shell quoting
-        result = self._run_command(f"git:set {app_name} deploy-key '{private_key}'")
-
-        if 'Failed to execute command' in result or 'SSH Connection Error' in result:
-            logger.error(f'Falha ao configurar deploy key para {app_name}: {result}')
-            raise Exception(f'Falha ao configurar deploy key para {app_name}: {result}')
-
-        logger.info(f'Deploy key per-app configurada com sucesso para {app_name}')
-        return public_key
-
     def get_git_deploy_key(self) -> str:
-        """Obtém a chave de deploy Git pública existente (global)."""
+        """Obtém a chave de deploy Git pública existente."""
         return self._run_command('git:public-key').strip()
