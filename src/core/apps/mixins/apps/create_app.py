@@ -77,7 +77,9 @@ class CreateAppMixin:
 
             CreateAppMixin._apply_env_vars(task, dokku_adapter, dokku_app_name, env_vars, logger)
 
-            git_url = CreateAppMixin._handle_deploy_keys(task, dokku_adapter, github_adapter, user, app.git, logger)
+            git_url = CreateAppMixin._handle_deploy_keys(
+                task, dokku_adapter, github_adapter, user, app.git, dokku_app_name, logger
+            )
 
             # --- GitHub Commit Status: marca pending antes do git:sync ---
             head_sha = CreateAppMixin._get_head_sha(github_adapter, user, app)
@@ -220,7 +222,13 @@ class CreateAppMixin:
 
     @staticmethod
     def _handle_deploy_keys(
-        task: Task, d_adapter: DokkuAdapter, gh_adapter: GitHubAdapter, user: User, git_url: str, logger: AppLogManager
+        task: Task,
+        d_adapter: DokkuAdapter,
+        gh_adapter: GitHubAdapter,
+        user: User,
+        git_url: str,
+        dokku_app_name: str,
+        logger: AppLogManager,
     ) -> str:
         """
         Verifica permissões e gera chaves SSH se necessário.
@@ -258,12 +266,17 @@ class CreateAppMixin:
                 state='PROGRESS', meta={'current': 32, 'total': 100, 'status': 'Gerando chaves de acesso seguro...'}
             )
             logger.info(
-                f'Repositório {repo_name} é privado. Gerando chave de deploy...', category=LogCategory.GIT, progress=32
+                f'Repositório {repo_name} é privado. Gerando chave de deploy per-app...',
+                category=LogCategory.GIT,
+                progress=32,
             )
 
-            deploy_key = d_adapter.generate_git_deploy_key()
+            deploy_key = d_adapter.generate_app_deploy_key(dokku_app_name)
             logger.dokku(
-                f'Chave gerada: {deploy_key[:50]}...', command='ssh-keygen', category=LogCategory.GIT, progress=35
+                f'Chave per-app gerada: {deploy_key[:50]}...',
+                command=f'dokku git:set {dokku_app_name} deploy-key',
+                category=LogCategory.GIT,
+                progress=35,
             )
 
             deploy_key_result = gh_adapter.add_deploy_key(dokku_key=deploy_key, repo_name=repo_name, user_id=user.id)  # type: ignore

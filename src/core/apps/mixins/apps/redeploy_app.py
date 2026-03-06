@@ -148,17 +148,14 @@ class RedeployAppMixin:
                         pass
 
                 if is_private:
-                    try:
-                        deploy_key = dokku_adapter.get_git_deploy_key()
-                        if deploy_key and deploy_key.startswith('ssh-'):
-                            git_url = https_to_ssh_url(app.git)
-                            logger.info(
-                                'Repositório privado detectado, usando URL SSH',
-                                category=LogCategory.GIT,
-                                progress=10,
-                            )
-                    except Exception:
-                        pass
+                    # A deploy key per-app já foi configurada no create_app,
+                    # basta converter para SSH URL
+                    git_url = https_to_ssh_url(app.git)
+                    logger.info(
+                        'Repositório privado detectado, usando URL SSH',
+                        category=LogCategory.GIT,
+                        progress=10,
+                    )
 
                 if git_url == app.git:
                     logger.info(
