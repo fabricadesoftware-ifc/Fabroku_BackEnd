@@ -133,10 +133,26 @@ class GitRepoMixin:
 
         user = User.objects.get(id=user_id)
         gh = Github(user.git_token)
-        repo = gh.get_repo(repo_name)
 
         # URL do webhook - usa a configuração do backend
         webhook_url = f'{settings.BACKEND_URL}/api/webhooks/github/{app_id}/'
+
+        try:
+            repo = gh.get_repo(repo_name)
+        except GithubException as e:
+            if e.status == 404:
+                return {
+                    'status': 'repositório não encontrado ou sem acesso',
+                    'error': (
+                        f'Não foi possível acessar o repositório "{repo_name}". '
+                        'Verifique se a URL do repositório está correta e se você tem '
+                        'permissão de administrador (para criar webhooks) no repositório. '
+                        'Se o repositório pertence a uma organização, a organização pode '
+                        'restringir o acesso de apps de terceiros. '
+                        f'Detalhes: {e.data}'
+                    ),
+                }
+            raise
 
         # Verifica se já existe um webhook para este app
         existing_hooks = repo.get_hooks()
