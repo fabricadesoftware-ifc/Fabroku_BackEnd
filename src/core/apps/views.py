@@ -504,6 +504,47 @@ class AppViewSet(ModelViewSet):
 
         return Response(result)
 
+    @action(detail=True, methods=['get'], url_path='last_commit')
+    def last_commit(self, request, pk=None):
+        """Retorna informações do último commit deployado (via GitHub API)."""
+        app = self.get_object()
+
+        if not app.last_commit_sha:
+            return Response({'error': 'Nenhum commit deployado ainda.'}, status=status.HTTP_404_NOT_FOUND)
+
+        user = app.project.users.exclude(git_token__isnull=True).exclude(git_token='').first()
+        if not user:
+            return Response(
+                {'sha': app.last_commit_sha[:7], 'message': 'Sem token GitHub disponível para detalhes.'},
+                status=status.HTTP_200_OK,
+            )
+
+        try:
+            from github import Github  # noqa: PLC0415
+
+            repo_name = app.git.rsplit('.com/', maxsplit=1)[-1].replace('.git', '') if '.com/' in app.git else None
+            if not repo_name:
+                return Response({'sha': app.last_commit_sha[:7], 'error': 'Não foi possível extrair repo da URL.'})
+
+            gh = Github(user.git_token)
+            repo = gh.get_repo(repo_name)
+            commit = repo.get_commit(app.last_commit_sha)
+
+            return Response({
+                'sha': app.last_commit_sha,
+                'sha_short': app.last_commit_sha[:7],
+                'message': commit.commit.message,
+                'author': commit.commit.author.name or 'Unknown',
+                'date': commit.commit.author.date.isoformat() if commit.commit.author.date else None,
+                'url': commit.html_url,
+            })
+        except Exception as e:
+            return Response({
+                'sha': app.last_commit_sha,
+                'sha_short': app.last_commit_sha[:7],
+                'error': str(e),
+            })
+
 
 @extend_schema(tags=['services'])
 class ServiceViewSet(ModelViewSet):

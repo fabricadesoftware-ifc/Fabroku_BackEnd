@@ -31,6 +31,7 @@ class App(models.Model):
     error_type = models.CharField(max_length=100, null=True, blank=True)
     error_details = models.TextField(null=True, blank=True)
     help_url = models.URLField(null=True, blank=True)
+    last_commit_sha = models.CharField(max_length=40, blank=True, default='')
 
     def __str__(self):
         return self.name

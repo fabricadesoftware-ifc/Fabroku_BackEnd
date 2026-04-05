@@ -53,7 +53,12 @@ class RedeployAppMixin:
         # Atualiza task_id e status
         app.task_id = task_id
         app.status = 'DEPLOYING'
-        app.save(update_fields=['task_id', 'status'])
+        if commit:
+            app.last_commit_sha = commit
+        save_fields = ['task_id', 'status']
+        if commit:
+            save_fields.append('last_commit_sha')
+        app.save(update_fields=save_fields)
 
         # Inicializa logger
         logger = AppLogManager(app, task_id)

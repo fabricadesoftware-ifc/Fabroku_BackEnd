@@ -142,6 +142,7 @@ class AppSerializer(serializers.ModelSerializer):
             'task_id',
             'name_dokku',
             'services',
+            'last_commit_sha',
         ]
         read_only_fields = [
             'id',
@@ -153,6 +154,7 @@ class AppSerializer(serializers.ModelSerializer):
             'port',
             'task_id',
             'services',
+            'last_commit_sha',
         ]
 
     def validate_name_dokku(self, value):
