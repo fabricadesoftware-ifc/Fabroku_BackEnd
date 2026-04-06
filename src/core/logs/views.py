@@ -48,6 +48,7 @@ class AppLogViewSet(viewsets.ReadOnlyModelViewSet):
             'logs': logs,
             'last_id': logs[-1]['id'] if logs else after_id,
             'count': len(logs),
+            'total_in_db': self.get_queryset().filter(task_id=task_id).count(),
         })
 
     @action(detail=False, methods=['get'], url_path='app-runtime')
@@ -80,3 +81,22 @@ class AppLogViewSet(viewsets.ReadOnlyModelViewSet):
             return Response({'lines': [], 'error': str(e)}, status=500)
 
         return Response({'lines': lines})
+
+    @action(detail=False, methods=['get'], url_path='debug')
+    def debug(self, request):
+        """Endpoint temporário para diagnóstico de logs ausentes."""
+        task_id = request.query_params.get('task_id', '')
+        all_count = AppLog.objects.filter(task_id=task_id).count()
+        filtered_count = self.get_queryset().filter(task_id=task_id).count()
+        sample = AppLog.objects.filter(task_id=task_id).select_related('app__project').order_by('id').first()
+        return Response({
+            'task_id': task_id,
+            'total_in_db': all_count,
+            'after_user_filter': filtered_count,
+            'user': str(request.user),
+            'sample': {
+                'id': sample.id if sample else None,
+                'app_id': sample.app_id if sample else None,
+                'project_users': list(sample.app.project.users.values_list('id', flat=True)) if sample else None,
+            },
+        })
