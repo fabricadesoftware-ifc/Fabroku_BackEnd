@@ -26,12 +26,9 @@ class AppLogViewSet(viewsets.ReadOnlyModelViewSet):
         """Retorna logs apenas das apps do usuário."""
         if self.request.user.is_anonymous:
             return AppLog.objects.none()
-        return (
-            AppLog.objects
-            .filter(app__project__users=self.request.user)
-            .distinct()
-            .select_related('app')
-        )
+        if self.request.user.is_superuser:
+            return AppLog.objects.all().select_related('app')
+        return AppLog.objects.filter(app__project__users=self.request.user).distinct().select_related('app')
 
     @action(detail=False, methods=['get'], url_path='stream/(?P<task_id>[^/.]+)')
     def stream(self, request, task_id=None):
@@ -40,13 +37,12 @@ class AppLogViewSet(viewsets.ReadOnlyModelViewSet):
         Query params: ?after={last_id} para pegar logs novos.
         """
         base_queryset = self.get_queryset().filter(task_id=task_id)
-        queryset = self.filter_queryset(base_queryset)
 
         after_id = request.query_params.get('after')
         if after_id:
-            queryset = queryset.filter(id__gt=int(after_id))
+            base_queryset = base_queryset.filter(id__gt=int(after_id))
 
-        queryset = queryset.order_by('created_at')
+        queryset = base_queryset.order_by('created_at')
         serializer = self.get_serializer(queryset, many=True)
         logs = serializer.data
 
@@ -54,6 +50,10 @@ class AppLogViewSet(viewsets.ReadOnlyModelViewSet):
             'logs': logs,
             'last_id': logs[-1]['id'] if logs else after_id,
             'count': len(logs),
+            'user_id': getattr(request.user, 'id', None),
+            'user_email': getattr(request.user, 'email', None),
+            'is_superuser': getattr(request.user, 'is_superuser', False),
+            'is_anonymous': getattr(request.user, 'is_anonymous', True),
         })
 
     @action(detail=False, methods=['get'], url_path='app-runtime')
@@ -86,37 +86,3 @@ class AppLogViewSet(viewsets.ReadOnlyModelViewSet):
             return Response({'lines': [], 'error': str(e)}, status=500)
 
         return Response({'lines': lines})
-
-    @action(detail=False, methods=['get'], url_path='debug')
-    def debug(self, request):
-        """Endpoint temporário para diagnóstico de logs ausentes."""
-        task_id = request.query_params.get('task_id', '')
-
-        # 1. Logs com esse task_id (sem filtro)
-        all_count = AppLog.objects.filter(task_id=task_id).count()
-
-        # 2. Logs com esse task_id (com filtro de permissão)
-        filtered_count = self.get_queryset().filter(task_id=task_id).count()
-
-        # 3. Sample do log mais recente (sem filtro de task)
-        recent = AppLog.objects.select_related('app__project').order_by('-id').first()
-        recent_sample = None
-        if recent:
-            recent_sample = {
-                'id': recent.id,
-                'task_id': recent.task_id,
-                'app_id': recent.app_id,
-                'app': str(recent.app) if recent.app_id else None,
-                'message_preview': recent.message[:100] if recent.message else '',
-            }
-
-        # 4. Total de logs no banco
-        total_all = AppLog.objects.count()
-
-        return Response({
-            'task_id_queried': task_id,
-            'total_in_db_for_task': all_count,
-            'after_user_filter': filtered_count,
-            'total_logs_in_db': total_all,
-            'most_recent_log': recent_sample,
-        })
