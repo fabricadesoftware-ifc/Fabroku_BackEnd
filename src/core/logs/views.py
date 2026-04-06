@@ -26,7 +26,12 @@ class AppLogViewSet(viewsets.ReadOnlyModelViewSet):
         """Retorna logs apenas das apps do usuário."""
         if self.request.user.is_anonymous:
             return AppLog.objects.none()
-        return AppLog.objects.filter(app__project__users=self.request.user).select_related('app')
+        return (
+            AppLog.objects
+            .filter(app__project__users=self.request.user)
+            .distinct()
+            .select_related('app')
+        )
 
     @action(detail=False, methods=['get'], url_path='stream/(?P<task_id>[^/.]+)')
     def stream(self, request, task_id=None):
@@ -34,7 +39,8 @@ class AppLogViewSet(viewsets.ReadOnlyModelViewSet):
         Polling de logs em tempo real.
         Query params: ?after={last_id} para pegar logs novos.
         """
-        queryset = self.filter_queryset(self.get_queryset().filter(task_id=task_id))
+        base_queryset = self.get_queryset().filter(task_id=task_id)
+        queryset = self.filter_queryset(base_queryset)
 
         after_id = request.query_params.get('after')
         if after_id:
@@ -48,7 +54,6 @@ class AppLogViewSet(viewsets.ReadOnlyModelViewSet):
             'logs': logs,
             'last_id': logs[-1]['id'] if logs else after_id,
             'count': len(logs),
-            'total_in_db': self.get_queryset().filter(task_id=task_id).count(),
         })
 
     @action(detail=False, methods=['get'], url_path='app-runtime')
@@ -86,17 +91,32 @@ class AppLogViewSet(viewsets.ReadOnlyModelViewSet):
     def debug(self, request):
         """Endpoint temporário para diagnóstico de logs ausentes."""
         task_id = request.query_params.get('task_id', '')
+
+        # 1. Logs com esse task_id (sem filtro)
         all_count = AppLog.objects.filter(task_id=task_id).count()
+
+        # 2. Logs com esse task_id (com filtro de permissão)
         filtered_count = self.get_queryset().filter(task_id=task_id).count()
-        sample = AppLog.objects.filter(task_id=task_id).select_related('app__project').order_by('id').first()
+
+        # 3. Sample do log mais recente (sem filtro de task)
+        recent = AppLog.objects.select_related('app__project').order_by('-id').first()
+        recent_sample = None
+        if recent:
+            recent_sample = {
+                'id': recent.id,
+                'task_id': recent.task_id,
+                'app_id': recent.app_id,
+                'app': str(recent.app) if recent.app_id else None,
+                'message_preview': recent.message[:100] if recent.message else '',
+            }
+
+        # 4. Total de logs no banco
+        total_all = AppLog.objects.count()
+
         return Response({
-            'task_id': task_id,
-            'total_in_db': all_count,
+            'task_id_queried': task_id,
+            'total_in_db_for_task': all_count,
             'after_user_filter': filtered_count,
-            'user': str(request.user),
-            'sample': {
-                'id': sample.id if sample else None,
-                'app_id': sample.app_id if sample else None,
-                'project_users': list(sample.app.project.users.values_list('id', flat=True)) if sample else None,
-            },
+            'total_logs_in_db': total_all,
+            'most_recent_log': recent_sample,
         })
