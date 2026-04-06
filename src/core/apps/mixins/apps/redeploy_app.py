@@ -111,6 +111,15 @@ class RedeployAppMixin:
                 app.save(update_fields=['status'])
                 return {'status': 'error', 'message': 'App não existe no Dokku'}
 
+            # Aplica env vars atualizadas (caso tenham mudado desde a criação)
+            if app.variables:
+                task.update_state(
+                    state='PROGRESS',
+                    meta={'current': 5, 'total': 100, 'status': 'Sincronizando variáveis de ambiente...'},
+                )
+                logger.info('Aplicando variáveis de ambiente atualizadas...', category=LogCategory.CONFIG, progress=5)
+                dokku_adapter.set_config(app_name=dokku_app_name, env_vars=app.variables)
+
             task.update_state(
                 state='PROGRESS',
                 meta={'current': 10, 'total': 100, 'status': 'Sincronizando repositório...'},

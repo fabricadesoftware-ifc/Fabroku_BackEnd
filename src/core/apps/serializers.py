@@ -191,7 +191,9 @@ class AppSerializer(serializers.ModelSerializer):
 
         instance = super().create(validated_data)
 
-        task_result = AppMixin.create_app.delay(app_id=instance.id, user_id=user.id)  # type: ignore
+        task_result = AppMixin.create_app.delay(
+            app_id=instance.id, user_id=user.id, env_vars=instance.variables
+        )  # type: ignore
 
         instance.task_id = task_result.id
         instance.status = 'STARTING'

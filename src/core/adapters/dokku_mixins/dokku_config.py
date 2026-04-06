@@ -9,12 +9,9 @@ class DokkuConfigMixin:
         ...
 
     def set_config(self, app_name: str, env_vars: Dict[str, str]) -> str:
-        """Configura variáveis de ambiente para uma aplicação."""
-        outputs = []
-        for key, value in env_vars.items():
-            output = self._run_command(f'config:set {app_name} {key}="{value}"')
-            outputs.append(f'{key}: {output}')
-        return '\n'.join(outputs)
+        """Configura variáveis de ambiente para uma aplicação (todas de uma vez)."""
+        env_pairs = ' '.join(f'{key}="{value}"' for key, value in env_vars.items())
+        return self._run_command(f'config:set {app_name} {env_pairs}')
 
     def unset_config(self, app_name: str, keys: list[str]) -> str:
         """Remove variáveis de ambiente de uma aplicação."""
