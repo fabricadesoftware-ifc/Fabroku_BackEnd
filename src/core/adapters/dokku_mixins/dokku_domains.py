@@ -24,25 +24,25 @@ class DokkuDomainsMixin:
         """
         report = self._run_command(f'domains:report {app_name}')
 
-        # Parseia o relatório linha por linha
+        # Parseia o relatório linha por linha — suporta tabs e espaços extras
         app_vhosts = None
         global_vhosts = None
 
-        for raw_line in report.split('\n'):
+        for raw_line in report.splitlines():
             line = raw_line.strip()
 
-            # Procura por "Domains app vhosts:" e extrai o valor após
-            if line.startswith('Domains app vhosts:'):
-                # Remove o prefixo e pega o valor
-                value = line.replace('Domains app vhosts:', '').strip()
+            # Suporta formato com tab: "Domains app vhosts:\t..."
+            # e formato com espaço: "Domains app vhosts: ..."
+            if 'app vhosts' in line and ':' in line:
+                # Pega tudo após os dois pontos
+                value = line.split(':', 1)[1].strip()
                 if value:
-                    app_vhosts = value.split()[0]  # Pega o primeiro domínio
+                    app_vhosts = value.split()[0]
 
-            # Procura por "Domains global vhosts:" e extrai o valor após
-            elif line.startswith('Domains global vhosts:'):
-                value = line.replace('Domains global vhosts:', '').strip()
+            elif 'global vhosts' in line and ':' in line:
+                value = line.split(':', 1)[1].strip()
                 if value:
-                    global_vhosts = value.split()[0]  # Pega o primeiro domínio
+                    global_vhosts = value.split()[0]
 
         # Prioriza app vhosts, depois global vhosts
         return app_vhosts or global_vhosts

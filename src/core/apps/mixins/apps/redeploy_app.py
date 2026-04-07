@@ -203,6 +203,20 @@ class RedeployAppMixin:
             app.status = 'RUNNING'
             app.save(update_fields=['status'])
 
+            # Garante Let's Encrypt e domínio (caso tenha falhado na criação)
+            if not app.domain or not dokku_adapter.get_app_domain(dokku_app_name):
+                logger.info('Verificando/reativando Let\'s Encrypt...', category=LogCategory.SSL, progress=90)
+                try:
+                    dokku_adapter.enable_letsencrypt(app_name=dokku_app_name)
+                except Exception:
+                    logger.warning('Let\'s Encrypt falhou, tentando obter domínio mesmo assim', category=LogCategory.SSL)
+
+                domain = dokku_adapter.get_app_domain(dokku_app_name)
+                if domain:
+                    app.domain = domain
+                    app.save(update_fields=['domain'])
+                    logger.success(f'Domínio configurado: {domain}', category=LogCategory.SSL, progress=95)
+
             if commit and git_token:
                 github_adapter.set_deploy_success(git_token, app.git, commit, app.name)
 
