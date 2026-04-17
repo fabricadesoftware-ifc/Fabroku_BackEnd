@@ -10,7 +10,7 @@ from .serializers import ProjectSerializer
 
 def _has_global_access(user) -> bool:
     """Retorna True para perfis com visibilidade administrativa global."""
-    return bool(getattr(user, 'is_superuser', False) or getattr(user, 'is_fabric', False))
+    return bool(getattr(user, 'is_superuser', False))
 
 
 @extend_schema(tags=['projects'])

@@ -480,6 +480,56 @@ class RunCommandStatusEndpointTests(APITestCase):
         self.assertEqual(response.data['current'], 100)
 
 
+class AppVisibilityTests(APITestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.owner = User.objects.create_user(
+            email='owner-apps@example.com',
+            password='senha123',
+            name='Owner Apps',
+        )
+        self.fabric_user = User.objects.create_user(
+            email='fabric-apps@example.com',
+            password='senha123',
+            name='Fabric Apps',
+            is_fabric=True,
+        )
+        self.superuser = User.objects.create_user(
+            email='superuser-apps@example.com',
+            password='senha123',
+            name='Superuser Apps',
+            is_superuser=True,
+            is_staff=True,
+        )
+        self.project = Project.objects.create(name='Projeto Apps')
+        self.project.users.add(self.owner)
+        self.app = App.objects.create(
+            name='app-visibilidade-teste',
+            name_dokku='app-visibilidade-teste',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=self.project,
+            status='RUNNING',
+        )
+
+    def test_is_fabric_user_cannot_list_apps_from_other_people_projects(self):
+        self.client.force_authenticate(user=self.fabric_user)
+
+        response = self.client.get(f'/api/apps/apps/?project={self.project.id}')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['count'], 0)
+
+    def test_superuser_can_list_apps_from_other_people_projects(self):
+        self.client.force_authenticate(user=self.superuser)
+
+        response = self.client.get(f'/api/apps/apps/?project={self.project.id}')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['results'][0]['id'], self.app.id)
+
+
 class ServiceVisibilityTests(APITestCase):
     def setUp(self):
         self.client = APIClient()
@@ -488,11 +538,18 @@ class ServiceVisibilityTests(APITestCase):
             password='senha123',
             name='Owner Services',
         )
-        self.admin_user = User.objects.create_user(
-            email='admin-services@example.com',
+        self.fabric_user = User.objects.create_user(
+            email='fabric-services@example.com',
             password='senha123',
-            name='Admin Services',
+            name='Fabric Services',
             is_fabric=True,
+        )
+        self.superuser = User.objects.create_user(
+            email='superuser-services@example.com',
+            password='senha123',
+            name='Superuser Services',
+            is_superuser=True,
+            is_staff=True,
         )
         self.project = Project.objects.create(name='Projeto Servicos')
         self.project.users.add(self.owner)
@@ -516,8 +573,16 @@ class ServiceVisibilityTests(APITestCase):
             container_name='db-servicos-teste',
         )
 
-    def test_is_fabric_user_can_list_services_from_other_people_projects(self):
-        self.client.force_authenticate(user=self.admin_user)
+    def test_is_fabric_user_cannot_list_services_from_other_people_projects(self):
+        self.client.force_authenticate(user=self.fabric_user)
+
+        response = self.client.get(f'/api/apps/services/?project={self.project.id}')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['count'], 0)
+
+    def test_superuser_can_list_services_from_other_people_projects(self):
+        self.client.force_authenticate(user=self.superuser)
 
         response = self.client.get(f'/api/apps/services/?project={self.project.id}')
 
