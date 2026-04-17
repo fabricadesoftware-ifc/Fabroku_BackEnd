@@ -7,8 +7,7 @@ from core.adapters import DokkuAdapter
 from core.apps.models import App
 from core.logs.models import AppLogManager, LogCategory
 
-
-# Comandos permitidos para segurança (whitelist)
+# Comandos permitidos para seguranca (whitelist)
 ALLOWED_COMMANDS = {
     'python manage.py migrate',
     'python manage.py collectstatic --noinput',
@@ -24,7 +23,7 @@ ALLOWED_COMMANDS = {
     'bundle exec rails db:migrate',
 }
 
-# Prefixos permitidos (para comandos com argumentos variáveis)
+# Prefixos permitidos (para comandos com argumentos variaveis)
 ALLOWED_PREFIXES = (
     'python manage.py ',
     'npm run ',
@@ -37,17 +36,14 @@ ALLOWED_PREFIXES = (
 
 
 def is_command_allowed(command: str) -> bool:
-    """Verifica se o comando é permitido (whitelist + prefixos)."""
+    """Verifica se o comando e permitido (whitelist + prefixos)."""
     command = command.strip()
 
-    # Comando exato na whitelist
     if command in ALLOWED_COMMANDS:
         return True
 
-    # Prefixo permitido
     for prefix in ALLOWED_PREFIXES:
         if command.startswith(prefix):
-            # Bloqueia comandos perigosos mesmo com prefixo válido
             dangerous = [
                 'rm ',
                 'del ',
@@ -63,11 +59,25 @@ def is_command_allowed(command: str) -> bool:
             if not any(d in command for d in dangerous):
                 return True
 
-    return True # trocar para False deixei true apenas para validar
+    return False
+
+
+def _command_output_has_error(output: str) -> bool:
+    normalized = (output or '').lower()
+    error_markers = [
+        '[error]',
+        '[ssh error]',
+        'failed to execute command',
+        'traceback (most recent call last):',
+        'commanderror',
+        ' error:',
+        'cannot link to a non running container',
+    ]
+    return any(marker in normalized for marker in error_markers)
 
 
 class RunCommandMixin:
-    """Mixin para execução de comandos dentro do container de um app via Celery."""
+    """Mixin para execucao de comandos dentro do container de um app via Celery."""
 
     @shared_task(bind=True)
     def run_command(self, app_id: int, command: str) -> dict:
@@ -86,14 +96,12 @@ class RunCommandMixin:
         if not app.name_dokku:
             return {'status': 'error', 'message': 'App sem name_dokku configurado'}
 
-        # Validação de segurança
         if not is_command_allowed(command):
             return {
                 'status': 'error',
-                'message': f'Comando não permitido: {command}',
+                'message': f'Comando nao permitido: {command}',
             }
 
-        # Salva task_id
         app.task_id = task_id
         app.save(update_fields=['task_id'])
 
@@ -101,7 +109,6 @@ class RunCommandMixin:
         dokku_adapter = DokkuAdapter()
 
         try:
-            # Garante que serviços linkados (Postgres, Redis, etc.) estejam rodando
             from core.apps.models import Service  # noqa: PLC0415
 
             linked_services = Service.objects.filter(app=app)
@@ -111,7 +118,7 @@ class RunCommandMixin:
                     if 'failed' in out.lower():
                         if 'sethostname' in out.lower() or 'invalid argument' in out.lower():
                             logger.info(
-                                'Container travado por hostname inválido (runc), removendo...',
+                                'Container travado por hostname invalido (runc), removendo...',
                                 category=LogCategory.SYSTEM,
                                 progress=5,
                             )
@@ -130,7 +137,7 @@ class RunCommandMixin:
                         if 'failed' in out.lower():
                             msg = f'postgres:start {svc.container_name} retornou erro: {out}'
                             if 'sethostname' in out.lower():
-                                msg += ' Remova o banco e crie um novo (nome curto compatível com runc).'
+                                msg += ' Remova o banco e crie um novo (nome curto compativel com runc).'
                             logger.warning(msg, category=LogCategory.SYSTEM, progress=5)
                     time.sleep(3)
 
@@ -144,10 +151,10 @@ class RunCommandMixin:
                 progress=10,
             )
 
-            # Executa com streaming para acompanhar output em tempo real
             line_count = [0]
             all_output = []
             max_attempts = 2
+            full_output = ''
 
             def on_log_line(line: str):
                 if not line.strip():
@@ -171,13 +178,12 @@ class RunCommandMixin:
 
                 full_output = '\n'.join(all_output)
 
-                # Se falhou com "container não rodando", tenta iniciar de novo e espera mais
                 if (
                     attempt < max_attempts - 1
                     and 'cannot link to a non running container' in full_output.lower()
                 ):
                     logger.warning(
-                        'Container do banco pode não estar pronto. Tentando stop+start e tentando novamente...',
+                        'Container do banco pode nao estar pronto. Tentando stop+start e tentando novamente...',
                         category=LogCategory.SYSTEM,
                         progress=10,
                     )
@@ -191,27 +197,32 @@ class RunCommandMixin:
 
                 break
 
-            # Verifica se houve erro
-            has_error = (
-                'Failed' in full_output
-                or 'Error' in full_output
-                or 'cannot link to a non running container' in full_output.lower()
+            if _command_output_has_error(full_output):
+                error_output = full_output.strip() or f'Falha ao executar comando: {command}'
+                app.error_type = 'CommandExecutionError'
+                app.error_details = error_output
+                app.save(update_fields=['error_type', 'error_details'])
+                logger.error(
+                    f'Comando finalizado com erro: {command}',
+                    category=LogCategory.SYSTEM,
+                    progress=100,
+                    metadata={'command': command, 'output': error_output[:2000]},
+                )
+                raise RuntimeError(error_output)
+
+            app.error_type = None
+            app.error_details = None
+            app.save(update_fields=['error_type', 'error_details'])
+
+            logger.success(
+                f'Comando executado com sucesso! ({line_count[0]} linhas de output)',
+                category=LogCategory.SYSTEM,
+                progress=100,
             )
-            if has_error:
-                logger.warning(
-                    f'Comando finalizado com possíveis erros ({line_count[0]} linhas)',
-                    category=LogCategory.SYSTEM,
-                    progress=100,
-                )
-            else:
-                logger.success(
-                    f'Comando executado com sucesso! ({line_count[0]} linhas de output)',
-                    category=LogCategory.SYSTEM,
-                    progress=100,
-                )
 
             return {
                 'status': 'success',
+                'message': f'Comando executado com sucesso: {command}',
                 'app_id': app.id,  # type: ignore
                 'command': command,
                 'output': full_output,
@@ -219,6 +230,10 @@ class RunCommandMixin:
             }
 
         except Exception as e:
+            if not app.error_details:
+                app.error_type = type(e).__name__
+                app.error_details = str(e)
+                app.save(update_fields=['error_type', 'error_details'])
             logger.error(
                 f'Erro ao executar comando: {str(e)}',
                 category=LogCategory.SYSTEM,

@@ -346,6 +346,45 @@ class AppViewSet(ModelViewSet):
 
         return Response(response_data)
 
+    @action(detail=True, methods=['get'])
+    def get_app_status(self, request, pk=None):
+        app = self.get_object()
+
+        if not app.task_id:
+            return Response({'state': 'UNKNOWN', 'status': 'Nenhuma task vinculada.'})
+
+        task_result = AsyncResult(app.task_id)
+        response_data = {
+            'task_id': app.task_id,
+            'state': task_result.state,
+        }
+
+        if task_result.state == 'PROGRESS':
+            response_data.update(task_result.info)
+        elif task_result.state == 'SUCCESS':
+            task_payload = task_result.result if isinstance(task_result.result, dict) else {}
+            response_data['status'] = task_payload.get('message') or 'Operacao concluida com sucesso!'
+            response_data['current'] = 100
+            if isinstance(task_payload, dict):
+                for key in ('output', 'command', 'lines', 'app_id', 'action', 'dokku_app', 'commit'):
+                    if key in task_payload:
+                        response_data[key] = task_payload[key]
+        elif task_result.state == 'FAILURE':
+            response_data['status'] = app.error_details or str(task_result.result)
+            if app.error_type:
+                response_data['error_type'] = app.error_type
+            if app.error_details:
+                response_data['error_details'] = app.error_details
+            if app.help_url:
+                response_data['help_url'] = app.help_url
+            if app.error_type == 'DeployKeysDisabled':
+                response_data['deploy_keys_disabled'] = True
+        elif task_result.state == 'REVOKED':
+            response_data['status'] = 'Operacao cancelada pelo usuario.'
+            response_data['current'] = 100
+
+        return Response(response_data)
+
     @action(detail=True, methods=['post'])
     def run_command(self, request, pk=None):
         """Executa um comando dentro do container do app (ex: migrate, collectstatic)."""

@@ -327,6 +327,39 @@ class LinkServiceMixinTests(TestCase):
         self.assertEqual(app.variables['DATABASE_URL'], 'postgres://db-link-teste')
 
 
+class RunCommandTests(TestCase):
+    @patch('core.apps.mixins.apps.run_command.DokkuAdapter')
+    def test_run_command_marks_task_as_failure_when_output_contains_traceback(self, mock_dokku_cls):
+        user = User.objects.create_user(email='command@example.com', password='senha123', name='Command User')
+        project = Project.objects.create(name='Projeto Command')
+        project.users.add(user)
+        app = App.objects.create(
+            name='app-command-teste',
+            name_dokku='app-command-teste',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=project,
+            variables={},
+        )
+
+        mock_dokku = Mock()
+        mock_dokku.run_in_app_streaming.return_value = iter([
+            'Traceback (most recent call last):',
+            'django.db.utils.ProgrammingError: relation "foo" does not exist',
+        ])
+        mock_dokku_cls.return_value = mock_dokku
+
+        task = AppMixin.run_command
+        with patch.object(task, 'update_state'):
+            task.request.id = 'task-command-123'
+            with self.assertRaises(RuntimeError):
+                task.run(app_id=app.id, command='python manage.py migrate')
+
+        app.refresh_from_db()
+        self.assertEqual(app.error_type, 'CommandExecutionError')
+        self.assertIn('ProgrammingError', app.error_details)
+
+
 class ManageAppEndpointTests(APITestCase):
     def setUp(self):
         self.client = APIClient()
@@ -399,6 +432,51 @@ class ManageAppEndpointTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['state'], 'REVOKED')
         self.assertEqual(response.data['status'], 'OperaÃ§Ã£o cancelada pelo usuÃ¡rio.')
+        self.assertEqual(response.data['current'], 100)
+
+
+class RunCommandStatusEndpointTests(APITestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email='status@example.com',
+            password='senha123',
+            name='Status User',
+        )
+        self.project = Project.objects.create(name='Projeto Status')
+        self.project.users.add(self.user)
+        self.app = App.objects.create(
+            name='app-status-teste',
+            name_dokku='app-status-teste',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=self.project,
+            status='RUNNING',
+            task_id='task-command-success',
+        )
+        self.client.force_authenticate(user=self.user)
+
+    @patch('core.apps.views.AsyncResult')
+    def test_get_app_status_returns_command_output_on_success(self, mock_async_result_cls):
+        mock_async_result = Mock()
+        mock_async_result.state = 'SUCCESS'
+        mock_async_result.result = {
+            'status': 'success',
+            'message': 'Comando executado com sucesso: python manage.py migrate',
+            'command': 'python manage.py migrate',
+            'output': 'No migrations to apply.',
+            'lines': 1,
+        }
+        mock_async_result_cls.return_value = mock_async_result
+
+        response = self.client.get(f'/api/apps/apps/{self.app.id}/get_app_status/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['state'], 'SUCCESS')
+        self.assertEqual(response.data['status'], 'Comando executado com sucesso: python manage.py migrate')
+        self.assertEqual(response.data['command'], 'python manage.py migrate')
+        self.assertEqual(response.data['output'], 'No migrations to apply.')
+        self.assertEqual(response.data['lines'], 1)
         self.assertEqual(response.data['current'], 100)
 
 
