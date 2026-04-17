@@ -119,7 +119,7 @@ class RedeployAppMixin:
                     meta={'current': 5, 'total': 100, 'status': 'Sincronizando variáveis de ambiente...'},
                 )
                 logger.info('Aplicando variáveis de ambiente atualizadas...', category=LogCategory.CONFIG, progress=5)
-                dokku_adapter.set_config(app_name=dokku_app_name, env_vars=app.variables)
+                dokku_adapter.set_config(app_name=dokku_app_name, env_vars=app.variables, no_restart=True)
 
             task.update_state(
                 state='PROGRESS',

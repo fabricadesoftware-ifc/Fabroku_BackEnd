@@ -216,12 +216,12 @@ class CreateAppMixin:
             )
             logger.info(f'Aplicando {len(env_vars)} variáveis de ambiente...', category=LogCategory.CONFIG, progress=18)
 
-            output = adapter.set_config(app_name=dokku_app_name, env_vars=env_vars)
+            output = adapter.set_config(app_name=dokku_app_name, env_vars=env_vars, no_restart=True)
 
             var_names = ', '.join(env_vars.keys())
             logger.dokku(
                 output,
-                command=f'dokku config:set {dokku_app_name} [vars: {var_names}]',
+                command=f'dokku config:set --no-restart {dokku_app_name} [vars: {var_names}]',
                 category=LogCategory.CONFIG,
                 progress=22,
             )

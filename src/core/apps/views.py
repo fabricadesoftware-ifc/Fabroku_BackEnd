@@ -158,7 +158,7 @@ class AppViewSet(ModelViewSet):
         app.status = 'STARTING'
         app.save(update_fields=['status'])
 
-        task_result = AppMixin.manage_app.delay(app_id=app.id, action='start')  # type: ignore
+        task_result = AppMixin.manage_app_task.delay(app_id=app.id, action='start')  # type: ignore
 
         return Response(
             {
@@ -183,7 +183,7 @@ class AppViewSet(ModelViewSet):
         app.status = 'STOPPING'
         app.save(update_fields=['status'])
 
-        task_result = AppMixin.manage_app.delay(app_id=app.id, action='stop')  # type: ignore
+        task_result = AppMixin.manage_app_task.delay(app_id=app.id, action='stop')  # type: ignore
 
         return Response(
             {
@@ -208,7 +208,7 @@ class AppViewSet(ModelViewSet):
         app.status = 'RESTARTING'
         app.save(update_fields=['status'])
 
-        task_result = AppMixin.manage_app.delay(app_id=app.id, action='restart')  # type: ignore
+        task_result = AppMixin.manage_app_task.delay(app_id=app.id, action='restart')  # type: ignore
 
         return Response(
             {

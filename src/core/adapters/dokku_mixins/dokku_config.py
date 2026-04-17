@@ -8,11 +8,12 @@ class DokkuConfigMixin:
         """Executa um comando no servidor Dokku."""
         ...
 
-    def set_config(self, app_name: str, env_vars: Dict[str, str]) -> str:
+    def set_config(self, app_name: str, env_vars: Dict[str, str], no_restart: bool = False) -> str:
         """Configura variáveis de ambiente para uma aplicação."""
         outputs = []
+        flags = ' --no-restart' if no_restart else ''
         for key, value in env_vars.items():
-            output = self._run_command(f'config:set {app_name} {key}="{value}"')
+            output = self._run_command(f'config:set{flags} {app_name} {key}="{value}"')
             outputs.append(f'{key}: {output}')
         return '\n'.join(outputs)
 

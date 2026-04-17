@@ -1,8 +1,11 @@
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from django.test import override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from rest_framework.test import APIClient, APITestCase
 
+from core.adapters.dokku_mixins.dokku_config import DokkuConfigMixin
+from core.apps.mixins.apps.create_app import CreateAppMixin
+from core.apps.mixins.apps.redeploy_app import RedeployAppMixin
 from core.apps.models import App
 from core.auth_user.models import User
 from core.project.models import Project
@@ -45,6 +48,144 @@ class FakeRepo:
 
     def get_branch(self, branch_name):
         return FakeBranch()
+
+
+class FakeConfigAdapter(DokkuConfigMixin):
+    def __init__(self):
+        self.commands = []
+
+    def _run_command(self, command: str) -> str:
+        self.commands.append(command)
+        return 'OK'
+
+
+class FakeLogger:
+    def info(self, *args, **kwargs):
+        return None
+
+    def warning(self, *args, **kwargs):
+        return None
+
+    def error(self, *args, **kwargs):
+        return None
+
+    def success(self, *args, **kwargs):
+        return None
+
+    def dokku(self, *args, **kwargs):
+        return None
+
+
+class FakeRedeployDokkuAdapter:
+    def __init__(self):
+        self.set_config_calls = []
+
+    def exists_app(self, app_name: str) -> bool:
+        return True
+
+    def set_config(self, **kwargs):
+        self.set_config_calls.append(kwargs)
+        return 'OK'
+
+    def sync_git_streaming(self, **kwargs):
+        return 'Sync complete'
+
+    def get_app_domain(self, app_name: str) -> str:
+        return 'app.example.com'
+
+    def enable_letsencrypt(self, app_name: str) -> str:
+        return 'OK'
+
+
+class DokkuConfigMixinTests(SimpleTestCase):
+    def test_set_config_supports_no_restart_flag(self):
+        adapter = FakeConfigAdapter()
+
+        output = adapter.set_config(app_name='my-app', env_vars={'SECRET_KEY': 'abc'}, no_restart=True)
+
+        self.assertEqual(output, 'SECRET_KEY: OK')
+        self.assertEqual(adapter.commands, ['config:set --no-restart my-app SECRET_KEY="abc"'])
+
+
+class EnvVarFlowTests(TestCase):
+    def test_create_app_apply_env_vars_uses_no_restart(self):
+        task = Mock()
+        adapter = Mock()
+        logger = Mock()
+        env_vars = {'SECRET_KEY': 'abc', 'DEBUG': 'false'}
+        adapter.set_config.return_value = 'OK'
+
+        CreateAppMixin._apply_env_vars(task, adapter, 'my-app', env_vars, logger)
+
+        adapter.set_config.assert_called_once_with(app_name='my-app', env_vars=env_vars, no_restart=True)
+        self.assertIn('--no-restart', logger.dokku.call_args.kwargs['command'])
+
+    @patch('core.apps.mixins.apps.redeploy_app.AppLogManager', return_value=FakeLogger())
+    @patch('core.apps.mixins.apps.redeploy_app.DokkuAdapter')
+    @patch('core.apps.mixins.apps.redeploy_app.RedeployAppMixin._get_git_token', return_value=None)
+    def test_redeploy_syncs_env_vars_without_restart(self, mock_get_git_token, mock_dokku_cls, mock_logger_cls):
+        user = User.objects.create_user(email='redeploy@example.com', password='senha123', name='Redeploy User')
+        project = Project.objects.create(name='Projeto Redeploy')
+        project.users.add(user)
+        app = App.objects.create(
+            name='app-redeploy-teste',
+            name_dokku='app-redeploy-teste',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=project,
+            variables={'SECRET_KEY': 'abc'},
+            domain='app.example.com',
+        )
+
+        fake_dokku = FakeRedeployDokkuAdapter()
+        mock_dokku_cls.return_value = fake_dokku
+        task = RedeployAppMixin.redeploy_app
+
+        with patch.object(task, 'update_state') as mock_update_state:
+            task.request.id = 'task-123'
+            result = task.run(app_id=app.id, commit=None)
+
+        self.assertEqual(result['status'], 'success')
+        self.assertTrue(mock_update_state.called)
+        self.assertEqual(fake_dokku.set_config_calls, [
+            {
+                'app_name': 'app-redeploy-teste',
+                'env_vars': {'SECRET_KEY': 'abc'},
+                'no_restart': True,
+            }
+        ])
+
+
+class ManageAppEndpointTests(APITestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email='manage@example.com',
+            password='senha123',
+            name='Manage User',
+        )
+        self.project = Project.objects.create(name='Projeto Manage')
+        self.project.users.add(self.user)
+        self.app = App.objects.create(
+            name='app-manage-teste',
+            name_dokku='app-manage-teste',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=self.project,
+            status='RUNNING',
+        )
+        self.client.force_authenticate(user=self.user)
+
+    @patch('core.apps.views.AppMixin.manage_app_task.delay')
+    def test_stop_endpoint_dispatches_manage_app_task(self, mock_delay):
+        mock_delay.return_value = Mock(id='task-stop-123')
+
+        response = self.client.post(f'/api/apps/apps/{self.app.id}/stop/')
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.data['status'], 'STOPPING')
+        self.assertEqual(response.data['task_id'], 'task-stop-123')
+        mock_delay.assert_called_once_with(app_id=self.app.id, action='stop')
 
 
 @override_settings(BACKEND_URL='https://backend.example.com')

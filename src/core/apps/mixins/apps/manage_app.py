@@ -98,3 +98,6 @@ class ManageAppMixin:
             app.status = 'ERROR'
             app.save(update_fields=['status'])
             raise
+
+    # Compatibilidade com chamadas legadas que usam AppMixin.manage_app.delay(...)
+    manage_app = manage_app_task
