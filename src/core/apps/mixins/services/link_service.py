@@ -4,9 +4,10 @@ from typing import cast
 from celery import Task, shared_task
 
 from core.adapters import DokkuAdapter
-from core.apps.models import App, Service, ServiceType
-from core.logs.models import AppLogManager, LogCategory
 from core.apps.mixins.apps.manage_app import ManageAppMixin
+from core.apps.models import App, Service
+from core.logs.models import AppLogManager, LogCategory
+
 
 def _check_dokku_output(output: str, operation: str):
     if not output:
@@ -17,30 +18,30 @@ def _check_dokku_output(output: str, operation: str):
 
 
 class LinkServiceMixin:
-    """Mixin para vincular/desvincular serviços a apps."""
+    """Mixin para vincular/desvincular servicos a apps."""
 
     @shared_task(bind=True)
     def link_service(self, service_id: int, app_id: int) -> dict:
         """
-        Vincula um serviço existente a um app.
-        Executa postgres:link, sincroniza DATABASE_URL em app.variables.
+        Vincula um servico existente a um app.
+        Executa postgres:link e sincroniza DATABASE_URL em app.variables.
         """
         task = cast(Task, self)
         task_id = task.request.id
 
         try:
-            service = Service.objects.select_related('project').get(id=service_id)
-            app = App.objects.select_related('project').get(id=app_id)
+            service: Service = Service.objects.select_related('project').get(id=service_id)
+            app: App = App.objects.select_related('project').get(id=app_id)
         except Service.DoesNotExist:
-            return {'status': 'error', 'message': f'Serviço {service_id} não encontrado'}
+            return {'status': 'error', 'message': f'Servico {service_id} nao encontrado'}
         except App.DoesNotExist:
-            return {'status': 'error', 'message': f'App {app_id} não encontrado'}
+            return {'status': 'error', 'message': f'App {app_id} nao encontrado'}
 
-        if service.project.id != app.project.id:
-            return {'status': 'error', 'message': 'Serviço e app devem pertencer ao mesmo projeto'}
+        if service.project_id != app.project_id:
+            return {'status': 'error', 'message': 'Servico e app devem pertencer ao mesmo projeto'}
 
-        if service.app.id:
-            return {'status': 'error', 'message': f'Serviço já vinculado ao app {service.app.id}'}
+        if service.app_id:
+            return {'status': 'error', 'message': f'Servico ja vinculado ao app {service.app_id}'}
 
         if not app.name_dokku:
             return {'status': 'error', 'message': 'App sem name_dokku configurado'}
@@ -53,7 +54,7 @@ class LinkServiceMixin:
         dokku_service_name = service.container_name
 
         if not dokku_service_name:
-            return {'status': 'error', 'message': 'Serviço sem container_name'}
+            return {'status': 'error', 'message': 'Servico sem container_name'}
 
         try:
             task.update_state(
@@ -67,7 +68,9 @@ class LinkServiceMixin:
             )
 
             link_output = dokku_adapter.link_database(
-                db_name=dokku_service_name, app_name=app.name_dokku, no_restart=True,
+                db_name=dokku_service_name,
+                app_name=app.name_dokku,
+                no_restart=True,
             )
 
             logger.dokku(
@@ -85,7 +88,7 @@ class LinkServiceMixin:
 
             task.update_state(
                 state='PROGRESS',
-                meta={'current': 70, 'total': 100, 'status': 'Sincronizando variáveis...'},
+                meta={'current': 70, 'total': 100, 'status': 'Sincronizando variaveis...'},
             )
 
             database_url = dokku_adapter.get_config(app.name_dokku, 'DATABASE_URL')
@@ -94,7 +97,7 @@ class LinkServiceMixin:
                 app.variables['DATABASE_URL'] = database_url
                 app.save(update_fields=['variables'])
                 logger.info(
-                    'DATABASE_URL adicionada às variáveis do app',
+                    'DATABASE_URL adicionada as variaveis do app',
                     category=LogCategory.CONFIG,
                     progress=80,
                 )
@@ -106,7 +109,7 @@ class LinkServiceMixin:
             time.sleep(2)
 
             logger.success(
-                f'Serviço vinculado ao app {app.name} com sucesso!',
+                f'Servico vinculado ao app {app.name} com sucesso!',
                 category=LogCategory.DATABASE,
                 progress=100,
             )
@@ -119,7 +122,7 @@ class LinkServiceMixin:
 
         except Exception as e:
             logger.error(
-                f'Erro ao vincular serviço: {str(e)}',
+                f'Erro ao vincular servico: {str(e)}',
                 category=LogCategory.DATABASE,
                 metadata={'error_type': type(e).__name__, 'error_details': str(e)},
             )

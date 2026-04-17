@@ -7,6 +7,7 @@ from rest_framework.test import APIClient, APITestCase
 from core.adapters.dokku_mixins.dokku_apps import DokkuAppsMixin
 from core.adapters.dokku_mixins.dokku_config import DokkuConfigMixin
 from core.adapters.ssh import SSHAdapter
+from core.apps.mixins import AppMixin
 from core.apps.mixins.apps.create_app import CreateAppMixin
 from core.apps.mixins.apps.redeploy_app import RedeployAppMixin
 from core.apps.models import App, Service
@@ -278,6 +279,52 @@ class EnvVarFlowTests(TestCase):
 
         app.refresh_from_db()
         self.assertEqual(app.status, 'ERROR')
+
+
+class LinkServiceMixinTests(TestCase):
+    @patch('core.apps.mixins.services.link_service.ManageAppMixin.manage_app_task.delay')
+    @patch('core.apps.mixins.services.link_service.DokkuAdapter')
+    def test_link_service_allows_unlinked_service_without_none_id_error(self, mock_dokku_cls, mock_restart_delay):
+        user = User.objects.create_user(email='link@example.com', password='senha123', name='Link User')
+        project = Project.objects.create(name='Projeto Link')
+        project.users.add(user)
+        app = App.objects.create(
+            name='app-link-teste',
+            name_dokku='app-link-teste',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=project,
+            variables={},
+        )
+        service = Service.objects.create(
+            name='db-link-teste',
+            user='postgres',
+            password='secret',
+            host='localhost',
+            port=5432,
+            app=None,
+            project=project,
+            service_type='postgres',
+            container_name='db-link-teste',
+        )
+
+        mock_dokku = Mock()
+        mock_dokku.link_database.return_value = 'already linked'
+        mock_dokku.get_config.return_value = 'postgres://db-link-teste'
+        mock_dokku.start_database.return_value = 'OK'
+        mock_dokku_cls.return_value = mock_dokku
+        mock_restart_delay.return_value.get.return_value = 'restart ok'
+
+        task = AppMixin.link_service
+        with patch.object(task, 'update_state'):
+            task.request.id = 'task-link-123'
+            result = task.run(service_id=service.id, app_id=app.id)
+
+        self.assertEqual(result['status'], 'linked')
+        service.refresh_from_db()
+        app.refresh_from_db()
+        self.assertEqual(service.app_id, app.id)
+        self.assertEqual(app.variables['DATABASE_URL'], 'postgres://db-link-teste')
 
 
 class ManageAppEndpointTests(APITestCase):
