@@ -1,12 +1,15 @@
-from unittest.mock import Mock, patch
+import socket
+from unittest.mock import ANY, Mock, patch
 
 from django.test import SimpleTestCase, TestCase, override_settings
 from rest_framework.test import APIClient, APITestCase
 
+from core.adapters.dokku_mixins.dokku_apps import DokkuAppsMixin
 from core.adapters.dokku_mixins.dokku_config import DokkuConfigMixin
+from core.adapters.ssh import SSHAdapter
 from core.apps.mixins.apps.create_app import CreateAppMixin
 from core.apps.mixins.apps.redeploy_app import RedeployAppMixin
-from core.apps.models import App
+from core.apps.models import App, Service
 from core.auth_user.models import User
 from core.project.models import Project
 
@@ -59,33 +62,38 @@ class FakeConfigAdapter(DokkuConfigMixin):
         return 'OK'
 
 
-class FakeLogger:
-    def info(self, *args, **kwargs):
-        return None
+class FakeAppsAdapter(DokkuAppsMixin):
+    def __init__(self, output: str):
+        self.output = output
 
-    def warning(self, *args, **kwargs):
-        return None
-
-    def error(self, *args, **kwargs):
-        return None
-
-    def success(self, *args, **kwargs):
-        return None
-
-    def dokku(self, *args, **kwargs):
-        return None
+    def _run_command(self, command: str) -> str:
+        return self.output
 
 
 class FakeRedeployDokkuAdapter:
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        set_config_output: str = 'OK',
+        app_list_output: str = 'app-redeploy-teste',
+        start_database_output: str = 'service started',
+    ):
+        self.set_config_output = set_config_output
+        self.app_list_output = app_list_output
+        self.start_database_output = start_database_output
         self.set_config_calls = []
+        self.start_database_calls = []
 
-    def exists_app(self, app_name: str) -> bool:
-        return True
+    def start_database(self, db_name: str) -> str:
+        self.start_database_calls.append(db_name)
+        return self.start_database_output
+
+    def get_apps(self) -> str:
+        return self.app_list_output
 
     def set_config(self, **kwargs):
         self.set_config_calls.append(kwargs)
-        return 'OK'
+        return self.set_config_output
 
     def sync_git_streaming(self, **kwargs):
         return 'Sync complete'
@@ -103,8 +111,73 @@ class DokkuConfigMixinTests(SimpleTestCase):
 
         output = adapter.set_config(app_name='my-app', env_vars={'SECRET_KEY': 'abc'}, no_restart=True)
 
-        self.assertEqual(output, 'SECRET_KEY: OK')
-        self.assertEqual(adapter.commands, ['config:set --no-restart my-app SECRET_KEY="abc"'])
+        self.assertEqual(output, 'OK')
+        self.assertEqual(adapter.commands, ['config:set --no-restart my-app SECRET_KEY=abc'])
+
+    def test_set_config_batches_multiple_variables_into_one_command(self):
+        adapter = FakeConfigAdapter()
+
+        adapter.set_config(app_name='my-app', env_vars={'SECRET_KEY': 'abc', 'DEBUG': 'false'}, no_restart=True)
+
+        self.assertEqual(len(adapter.commands), 1)
+        self.assertEqual(adapter.commands[0], 'config:set --no-restart my-app SECRET_KEY=abc DEBUG=false')
+
+
+class DokkuAppsMixinTests(SimpleTestCase):
+    def test_exists_app_raises_when_apps_list_fails(self):
+        adapter = FakeAppsAdapter('SSH Command Timeout after 120s while executing: apps:list')
+
+        with self.assertRaises(RuntimeError):
+            adapter.exists_app('my-app')
+
+
+class SSHAdapterTests(SimpleTestCase):
+    @patch('core.adapters.ssh.paramiko.SSHClient')
+    def test_run_command_applies_connect_and_channel_timeouts(self, mock_ssh_client_cls):
+        client = Mock()
+        stdout = Mock()
+        stderr = Mock()
+        stdin = Mock()
+        stdout.read.return_value = b'OK'
+        stderr.read.return_value = b''
+        stdout.channel.recv_exit_status.return_value = 0
+        client.exec_command.return_value = (stdin, stdout, stderr)
+        mock_ssh_client_cls.return_value = client
+
+        adapter = SSHAdapter('dokku.example.com', 'dokku', 'fake-key', 22, connect_timeout=12, command_timeout=34)
+
+        with patch.object(adapter, '_get_pkey', return_value=Mock()):
+            output = adapter._run_command('apps:list')
+
+        self.assertEqual(output, 'OK')
+        client.connect.assert_called_once_with(
+            'dokku.example.com',
+            port=22,
+            username='dokku',
+            pkey=ANY,
+            timeout=12,
+            banner_timeout=12,
+            auth_timeout=12,
+        )
+        stdout.channel.settimeout.assert_called_once_with(34)
+        stderr.channel.settimeout.assert_called_once_with(34)
+
+    @patch('core.adapters.ssh.paramiko.SSHClient')
+    def test_run_command_returns_timeout_message(self, mock_ssh_client_cls):
+        client = Mock()
+        stdout = Mock()
+        stderr = Mock()
+        stdin = Mock()
+        stdout.read.side_effect = socket.timeout('timed out')
+        client.exec_command.return_value = (stdin, stdout, stderr)
+        mock_ssh_client_cls.return_value = client
+
+        adapter = SSHAdapter('dokku.example.com', 'dokku', 'fake-key', 22, command_timeout=45)
+
+        with patch.object(adapter, '_get_pkey', return_value=Mock()):
+            output = adapter._run_command('apps:list')
+
+        self.assertEqual(output, 'SSH Command Timeout after 45s while executing: apps:list')
 
 
 class EnvVarFlowTests(TestCase):
@@ -120,10 +193,12 @@ class EnvVarFlowTests(TestCase):
         adapter.set_config.assert_called_once_with(app_name='my-app', env_vars=env_vars, no_restart=True)
         self.assertIn('--no-restart', logger.dokku.call_args.kwargs['command'])
 
-    @patch('core.apps.mixins.apps.redeploy_app.AppLogManager', return_value=FakeLogger())
+    @patch('core.apps.mixins.apps.redeploy_app.AppLogManager')
     @patch('core.apps.mixins.apps.redeploy_app.DokkuAdapter')
     @patch('core.apps.mixins.apps.redeploy_app.RedeployAppMixin._get_git_token', return_value=None)
-    def test_redeploy_syncs_env_vars_without_restart(self, mock_get_git_token, mock_dokku_cls, mock_logger_cls):
+    def test_redeploy_syncs_env_vars_without_restart_and_logs_preflight(
+        self, mock_get_git_token, mock_dokku_cls, mock_logger_cls,
+    ):
         user = User.objects.create_user(email='redeploy@example.com', password='senha123', name='Redeploy User')
         project = Project.objects.create(name='Projeto Redeploy')
         project.users.add(user)
@@ -136,9 +211,22 @@ class EnvVarFlowTests(TestCase):
             variables={'SECRET_KEY': 'abc'},
             domain='app.example.com',
         )
+        Service.objects.create(
+            name='db-redeploy-teste',
+            user='postgres',
+            password='secret',
+            host='localhost',
+            port=5432,
+            app=app,
+            project=project,
+            service_type='postgres',
+            container_name='db-redeploy-teste',
+        )
 
         fake_dokku = FakeRedeployDokkuAdapter()
         mock_dokku_cls.return_value = fake_dokku
+        mock_logger = Mock()
+        mock_logger_cls.return_value = mock_logger
         task = RedeployAppMixin.redeploy_app
 
         with patch.object(task, 'update_state') as mock_update_state:
@@ -147,6 +235,7 @@ class EnvVarFlowTests(TestCase):
 
         self.assertEqual(result['status'], 'success')
         self.assertTrue(mock_update_state.called)
+        self.assertEqual(fake_dokku.start_database_calls, ['db-redeploy-teste'])
         self.assertEqual(fake_dokku.set_config_calls, [
             {
                 'app_name': 'app-redeploy-teste',
@@ -154,6 +243,41 @@ class EnvVarFlowTests(TestCase):
                 'no_restart': True,
             }
         ])
+        commands = [call.kwargs.get('command', '') for call in mock_logger.dokku.call_args_list]
+        self.assertIn('dokku postgres:start db-redeploy-teste', commands)
+        self.assertIn('dokku apps:list', commands)
+        self.assertIn('dokku config:set --no-restart app-redeploy-teste [vars: SECRET_KEY]', commands)
+
+    @patch('core.apps.mixins.apps.redeploy_app.AppLogManager')
+    @patch('core.apps.mixins.apps.redeploy_app.DokkuAdapter')
+    @patch('core.apps.mixins.apps.redeploy_app.RedeployAppMixin._get_git_token', return_value=None)
+    def test_redeploy_fails_fast_when_config_step_times_out(self, mock_get_git_token, mock_dokku_cls, mock_logger_cls):
+        user = User.objects.create_user(email='redeploy-timeout@example.com', password='senha123', name='Timeout User')
+        project = Project.objects.create(name='Projeto Timeout')
+        project.users.add(user)
+        app = App.objects.create(
+            name='app-timeout-teste',
+            name_dokku='app-timeout-teste',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=project,
+            variables={'SECRET_KEY': 'abc'},
+        )
+
+        fake_dokku = FakeRedeployDokkuAdapter(
+            set_config_output='SSH Command Timeout after 120s while executing: config:set app-timeout-teste SECRET_KEY=abc'
+        )
+        mock_dokku_cls.return_value = fake_dokku
+        mock_logger_cls.return_value = Mock()
+        task = RedeployAppMixin.redeploy_app
+
+        with patch.object(task, 'update_state'):
+            task.request.id = 'task-timeout-123'
+            with self.assertRaises(RuntimeError):
+                task.run(app_id=app.id, commit=None)
+
+        app.refresh_from_db()
+        self.assertEqual(app.status, 'ERROR')
 
 
 class ManageAppEndpointTests(APITestCase):
@@ -187,6 +311,49 @@ class ManageAppEndpointTests(APITestCase):
         self.assertEqual(response.data['task_id'], 'task-stop-123')
         mock_delay.assert_called_once_with(app_id=self.app.id, action='stop')
 
+    @patch('core.apps.views.AppLogManager')
+    @patch('core.apps.views.AppMixin.manage_app_task.delay')
+    @patch('core.apps.views.AsyncResult')
+    def test_stop_endpoint_cancels_redeploy_instead_of_stopping_app(
+        self, mock_async_result_cls, mock_delay, mock_logger_cls,
+    ):
+        self.app.status = 'DEPLOYING'
+        self.app.task_id = 'task-redeploy-123'
+        self.app.save(update_fields=['status', 'task_id'])
+
+        mock_async_result = Mock()
+        mock_async_result.state = 'PROGRESS'
+        mock_async_result_cls.return_value = mock_async_result
+
+        response = self.client.post(f'/api/apps/apps/{self.app.id}/stop/')
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.data['status'], 'RUNNING')
+        self.assertEqual(response.data['task_id'], 'task-redeploy-123')
+        self.assertEqual(response.data['cancelled_task_id'], 'task-redeploy-123')
+        mock_async_result.revoke.assert_called_once_with(terminate=True, signal='SIGTERM')
+        mock_delay.assert_not_called()
+        mock_logger_cls.return_value.warning.assert_called_once()
+
+        self.app.refresh_from_db()
+        self.assertEqual(self.app.status, 'RUNNING')
+
+    @patch('core.apps.views.AsyncResult')
+    def test_get_app_status_returns_cancelled_message_for_revoked_task(self, mock_async_result_cls):
+        self.app.task_id = 'task-redeploy-123'
+        self.app.save(update_fields=['task_id'])
+
+        mock_async_result = Mock()
+        mock_async_result.state = 'REVOKED'
+        mock_async_result_cls.return_value = mock_async_result
+
+        response = self.client.get(f'/api/apps/apps/{self.app.id}/get_app_status/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['state'], 'REVOKED')
+        self.assertEqual(response.data['status'], 'OperaÃ§Ã£o cancelada pelo usuÃ¡rio.')
+        self.assertEqual(response.data['current'], 100)
+
 
 @override_settings(BACKEND_URL='https://backend.example.com')
 class WebhookSetupTests(APITestCase):
@@ -218,7 +385,7 @@ class WebhookSetupTests(APITestCase):
     def test_setup_webhook_uses_project_member_token_when_request_user_cannot_manage_hooks(self, mock_create_webhook):
         mock_create_webhook.side_effect = [
             {
-                'status': 'sem permissão para listar webhooks',
+                'status': 'sem permissao para listar webhooks',
                 'error': 'token sem acesso a Webhooks',
             },
             {
@@ -241,11 +408,11 @@ class WebhookSetupTests(APITestCase):
     def test_setup_webhook_returns_clear_error_when_no_project_token_can_configure(self, mock_create_webhook):
         mock_create_webhook.side_effect = [
             {
-                'status': 'sem permissão para listar webhooks',
+                'status': 'sem permissao para listar webhooks',
                 'error': 'requester sem Webhooks',
             },
             {
-                'status': 'sem permissão para criar webhook',
+                'status': 'sem permissao para criar webhook',
                 'error': 'owner sem Webhooks write',
             },
         ]

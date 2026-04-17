@@ -14,6 +14,7 @@ from rest_framework.viewsets import ModelViewSet
 from core.adapters import GitHubAdapter
 from core.apps.mixins import AppMixin
 from core.apps.mixins.apps.run_command import ALLOWED_COMMANDS, ALLOWED_PREFIXES, is_command_allowed
+from core.logs.models import AppLogManager, LogCategory
 
 from .models import App, Service
 from .serializers import AppSerializer, ServiceSerializer
@@ -195,6 +196,55 @@ class AppViewSet(ModelViewSet):
         )
 
     @action(detail=True, methods=['post'])
+    def stop(self, request, pk=None):
+        """Para uma aplicaÃ§Ã£o em execuÃ§Ã£o ou cancela um redeploy ativo."""
+        app = self.get_object()
+
+        if app.status == 'DEPLOYING' and app.task_id:
+            current_task = AsyncResult(app.task_id)
+            if current_task.state not in ('SUCCESS', 'FAILURE', 'REVOKED'):
+                current_task.revoke(terminate=True, signal='SIGTERM')
+
+            AppLogManager(app, app.task_id).warning(
+                'Redeploy cancelado pelo usuÃ¡rio.',
+                category=LogCategory.DEPLOY,
+                progress=100,
+            )
+
+            app.status = 'RUNNING'
+            app.save(update_fields=['status'])
+
+            return Response(
+                {
+                    'status': 'RUNNING',
+                    'message': f'Redeploy de {app.name} cancelado.',
+                    'task_id': app.task_id,
+                    'cancelled_task_id': app.task_id,
+                },
+                status=status.HTTP_202_ACCEPTED,
+            )
+
+        if not app.name_dokku:
+            return Response(
+                {'error': 'App nÃ£o tem name_dokku configurado'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        app.status = 'STOPPING'
+        app.save(update_fields=['status'])
+
+        task_result = AppMixin.manage_app_task.delay(app_id=app.id, action='stop')  # type: ignore
+
+        return Response(
+            {
+                'status': 'STOPPING',
+                'message': f'Parando aplicaÃ§Ã£o {app.name}...',
+                'task_id': task_result.id,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+    @action(detail=True, methods=['post'])
     def restart(self, request, pk=None):
         """Reinicia uma aplicação."""
         app = self.get_object()
@@ -284,6 +334,10 @@ class AppViewSet(ModelViewSet):
             # Compatibilidade: deploy_keys_disabled legacy
             if app.error_type == 'DeployKeysDisabled':
                 response_data['deploy_keys_disabled'] = True
+
+        elif task_result.state == 'REVOKED':
+            response_data['status'] = 'OperaÃ§Ã£o cancelada pelo usuÃ¡rio.'
+            response_data['current'] = 100
 
         return Response(response_data)
 
