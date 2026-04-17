@@ -21,6 +21,75 @@ from .serializers import AppSerializer, ServiceSerializer
 logger = logging.getLogger(__name__)
 
 
+def _display_user(user) -> str:
+    """Retorna um identificador amigÃ¡vel do usuÃ¡rio para logs e diagnÃ³sticos."""
+    return user.name or user.email or f'user#{user.id}'
+
+
+def _parse_github_repo_name(git_url: str | None) -> str | None:
+    """Extrai owner/repo de URLs HTTPS ou SSH do GitHub."""
+    import re
+
+    git_url = git_url or ''
+    match_https = re.match(r'https://github\.com/([^/]+/[^/]+?)(?:\.git)?$', git_url)
+    match_ssh = re.match(r'git@github\.com:([^/]+/[^/]+?)(?:\.git)?$', git_url)
+    match = match_https or match_ssh
+    return match.group(1) if match else None
+
+
+def _iter_project_users_with_git_token(app: App, preferred_user=None):
+    """Itera pelos membros do projeto com token, priorizando o usuÃ¡rio atual."""
+    yielded_ids = set()
+
+    if preferred_user and preferred_user.git_token:
+        yielded_ids.add(preferred_user.id)
+        yield preferred_user
+
+    queryset = app.project.users.exclude(git_token__isnull=True).exclude(git_token='')
+    if yielded_ids:
+        queryset = queryset.exclude(id__in=yielded_ids)
+
+    for project_user in queryset:
+        yield project_user
+
+
+def _find_project_user_for_github_repo(app: App, preferred_user=None, *, require_hook_access: bool = False):
+    """
+    Procura um membro do projeto cujo token consiga acessar o repositÃ³rio.
+
+    Quando require_hook_access=True, tambÃ©m exige permissÃ£o para listar webhooks.
+    """
+    from github import Github, GithubException  # noqa: PLC0415
+
+    repo_name = _parse_github_repo_name(app.git)
+    attempts = []
+
+    if not repo_name:
+        return None, None, attempts
+
+    for project_user in _iter_project_users_with_git_token(app, preferred_user=preferred_user):
+        try:
+            gh = Github(project_user.git_token)
+            repo = gh.get_repo(repo_name)
+            if require_hook_access:
+                list(repo.get_hooks())
+            return project_user, repo, attempts
+        except GithubException as e:
+            attempts.append({
+                'user': _display_user(project_user),
+                'status': e.status,
+                'message': str(e.data),
+            })
+        except Exception as e:
+            attempts.append({
+                'user': _display_user(project_user),
+                'status': 'unexpected',
+                'message': str(e),
+            })
+
+    return None, None, attempts
+
+
 @extend_schema(tags=['apps'])
 class AppViewSet(ModelViewSet):
     queryset = App.objects.all()
@@ -274,43 +343,74 @@ class AppViewSet(ModelViewSet):
         app = self.get_object()
         user = request.user
 
-        if not user.git_token:
-            return Response(
-                {'error': 'Você precisa estar autenticado com o GitHub (git_token ausente).'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         if not app.git:
             return Response(
                 {'error': 'App não tem URL do repositório Git configurada.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        repo_name = app.git.rsplit('.com/', maxsplit=1)[-1].replace('.git', '')
-        github_adapter = GitHubAdapter()
+        repo_name = _parse_github_repo_name(app.git)
+        if not repo_name:
+            return Response(
+                {'error': f'Nao foi possivel extrair owner/repo de: {app.git}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        try:
+        candidate_users = list(_iter_project_users_with_git_token(app, preferred_user=user))
+        if not candidate_users:
+            return Response(
+                {'error': 'Nenhum usuario do projeto tem git_token salvo para configurar o webhook.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        github_adapter = GitHubAdapter()
+        webhook_url = f'{settings.BACKEND_URL}/api/webhooks/github/{app.id}/'
+        attempts = []
+
+        for candidate_user in candidate_users:
             result = github_adapter.create_webhook(
                 repo_name=repo_name,
                 app_id=app.id,
-                user_id=user.id,
+                user_id=candidate_user.id,
             )
-            webhook_url = f'{settings.BACKEND_URL}/api/webhooks/github/{app.id}/'
-            logger.info('Webhook setup para app %s: %s (URL: %s)', app.name, result, webhook_url)
 
-            return Response({
-                'status': result.get('status', 'unknown'),
-                'webhook_url': webhook_url,
-                'backend_url': settings.BACKEND_URL,
-                'repo': repo_name,
-                'hook_id': result.get('hook_id'),
-            })
-        except Exception as e:
-            logger.exception('Erro ao configurar webhook para app %s', app.name)
-            return Response(
-                {'error': f'Erro ao configurar webhook: {str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            logger.info(
+                'Webhook setup para app %s via %s: %s (URL: %s)',
+                app.name,
+                _display_user(candidate_user),
+                result,
+                webhook_url,
             )
+
+            status_value = result.get('status', 'unknown')
+            if status_value == 'webhook criado' or (status_value.startswith('webhook') and 'existe' in status_value):
+                return Response({
+                    'status': status_value,
+                    'webhook_url': webhook_url,
+                    'backend_url': settings.BACKEND_URL,
+                    'repo': repo_name,
+                    'hook_id': result.get('hook_id'),
+                    'configured_by': _display_user(candidate_user),
+                })
+
+            attempts.append({
+                'user': _display_user(candidate_user),
+                'status': status_value,
+                'error': result.get('error'),
+            })
+
+        logger.warning('Nao foi possivel configurar webhook para app %s. Tentativas: %s', app.name, attempts)
+        return Response(
+            {
+                'error': (
+                    'Nao foi possivel configurar o webhook com nenhum token do projeto. '
+                    'Verifique se ao menos um membro tem permissao de Webhooks no repositorio GitHub.'
+                ),
+                'repo': repo_name,
+                'attempts': attempts,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     @action(detail=True, methods=['get'])
     def diagnose_webhook(self, request, pk=None):
@@ -350,22 +450,23 @@ class AppViewSet(ModelViewSet):
         }
 
         # 3. Verificar git_token de algum usuário do projeto
-        project_user_with_token = app.project.users.exclude(git_token__isnull=True).exclude(git_token='').first()
+        project_user_with_token, repo_for_status, repo_access_attempts = _find_project_user_for_github_repo(
+            app,
+            preferred_user=user,
+        )
         diag['checks']['project_git_token'] = {
             'ok': project_user_with_token is not None,
-            'user': project_user_with_token.username if project_user_with_token else None,
-            'message': f'Token disponível via {project_user_with_token.username}.'
+            'user': _display_user(project_user_with_token) if project_user_with_token else None,
+            'message': f'Token com acesso ao repositorio disponivel via {_display_user(project_user_with_token)}.'
             if project_user_with_token
-            else 'Nenhum usuário do projeto tem git_token! Commit status não funciona.',
+            else 'Nenhum usuario do projeto tem git_token com acesso ao repositorio.',
         }
+        if repo_access_attempts:
+            diag['checks']['project_git_token']['attempts'] = repo_access_attempts
 
         # 4. Verificar git_url parseable
-        import re
-
         git_url = app.git or ''
-        match_https = re.match(r'https://github\.com/([^/]+/[^/]+?)(?:\.git)?$', git_url)
-        match_ssh = re.match(r'git@github\.com:([^/]+/[^/]+?)(?:\.git)?$', git_url)
-        repo_name = (match_https or match_ssh).group(1) if (match_https or match_ssh) else None
+        repo_name = _parse_github_repo_name(git_url)
         diag['checks']['git_url_parseable'] = {
             'ok': repo_name is not None,
             'repo_name': repo_name,
@@ -375,51 +476,64 @@ class AppViewSet(ModelViewSet):
         }
 
         # 5. Verificar webhook no GitHub
-        if has_token and repo_name:
+        if repo_name:
             try:
-                from github import Github
-
-                gh = Github(user.git_token)
-                repo = gh.get_repo(repo_name)
-                hooks = list(repo.get_hooks())
+                project_user_with_hook_access, repo_with_hook_access, hook_attempts = _find_project_user_for_github_repo(
+                    app,
+                    preferred_user=user,
+                    require_hook_access=True,
+                )
                 expected_url = f'{settings.BACKEND_URL}/api/webhooks/github/{app.id}/'
-                matching = [h for h in hooks if h.config.get('url') == expected_url]
-                all_hooks = [{'id': h.id, 'url': h.config.get('url'), 'active': h.active} for h in hooks]
+                if project_user_with_hook_access and repo_with_hook_access:
+                    hooks = list(repo_with_hook_access.get_hooks())
+                    matching = [h for h in hooks if h.config.get('url') == expected_url]
+                    all_hooks = [{'id': h.id, 'url': h.config.get('url'), 'active': h.active} for h in hooks]
 
-                diag['checks']['webhook_exists'] = {
-                    'ok': len(matching) > 0,
-                    'matching_hooks': len(matching),
-                    'all_hooks': all_hooks,
-                    'expected_url': expected_url,
-                    'message': f'{len(matching)} webhook(s) encontrado(s) apontando para o Fabroku.'
-                    if matching
-                    else f'Nenhum webhook aponta para {expected_url}. Use setup_webhook para criar.',
-                }
-
-                # 6. Verificar último commit e testar commit status
-                try:
-                    branch = repo.get_branch(app.branch)
-                    sha = branch.commit.sha
-                    statuses = list(branch.commit.get_statuses())
-                    fabroku_statuses = [s for s in statuses if s.context == 'fabroku/deploy']
-                    diag['checks']['last_commit'] = {
-                        'ok': True,
-                        'sha': sha,
-                        'branch': app.branch,
-                        'total_statuses': len(statuses),
-                        'fabroku_statuses': [
-                            {'state': s.state, 'description': s.description, 'created_at': str(s.created_at)}
-                            for s in fabroku_statuses[:5]
-                        ],
-                        'message': f'{len(fabroku_statuses)} status fabroku/deploy encontrado(s) no commit {sha[:7]}.'
-                        if fabroku_statuses
-                        else f'Nenhum status fabroku/deploy no commit {sha[:7]}.',
+                    diag['checks']['webhook_exists'] = {
+                        'ok': len(matching) > 0,
+                        'matching_hooks': len(matching),
+                        'all_hooks': all_hooks,
+                        'expected_url': expected_url,
+                        'checked_as': _display_user(project_user_with_hook_access),
+                        'message': f'{len(matching)} webhook(s) encontrado(s) apontando para o Fabroku.'
+                        if matching
+                        else f'Nenhum webhook aponta para {expected_url}. Use setup_webhook para criar.',
                     }
-                except Exception as e:
-                    diag['checks']['last_commit'] = {'ok': False, 'message': str(e)}
-
+                else:
+                    diag['checks']['webhook_exists'] = {
+                        'ok': False,
+                        'expected_url': expected_url,
+                        'attempts': hook_attempts,
+                        'message': (
+                            'Nenhum token do projeto conseguiu listar os webhooks no GitHub. '
+                            'Verifique se ao menos um membro tem permissao de Webhooks no repositorio.'
+                        ),
+                    }
             except Exception as e:
                 diag['checks']['webhook_exists'] = {'ok': False, 'message': f'Erro ao acessar GitHub API: {e}'}
+
+        # 6. Verificar último commit e testar commit status
+        if repo_for_status:
+            try:
+                branch = repo_for_status.get_branch(app.branch)
+                sha = branch.commit.sha
+                statuses = list(branch.commit.get_statuses())
+                fabroku_statuses = [s for s in statuses if s.context == 'fabroku/deploy']
+                diag['checks']['last_commit'] = {
+                    'ok': True,
+                    'sha': sha,
+                    'branch': app.branch,
+                    'total_statuses': len(statuses),
+                    'fabroku_statuses': [
+                        {'state': s.state, 'description': s.description, 'created_at': str(s.created_at)}
+                        for s in fabroku_statuses[:5]
+                    ],
+                    'message': f'{len(fabroku_statuses)} status fabroku/deploy encontrado(s) no commit {sha[:7]}.'
+                    if fabroku_statuses
+                    else f'Nenhum status fabroku/deploy no commit {sha[:7]}.',
+                }
+            except Exception as e:
+                diag['checks']['last_commit'] = {'ok': False, 'message': str(e)}
 
         return Response(diag)
 

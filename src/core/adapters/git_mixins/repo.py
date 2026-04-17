@@ -8,6 +8,18 @@ logger = logging.getLogger(__name__)
 
 
 class GitRepoMixin:
+    @staticmethod
+    def _format_github_error(data) -> str:
+        """Normaliza o payload de erro do GitHub para logs e respostas."""
+        if isinstance(data, dict):
+            message = data.get('message')
+            errors = data.get('errors')
+            if errors:
+                return f'{message} ({errors})' if message else str(errors)
+            if message:
+                return str(message)
+        return str(data)
+
     def list_user_repos(self, user_id: int):
         from core.auth_user.models import User  # noqa: PLC0415
 
@@ -140,7 +152,7 @@ class GitRepoMixin:
         try:
             repo = gh.get_repo(repo_name)
         except GithubException as e:
-            if e.status == 404:
+            if e.status in (403, 404):
                 return {
                     'status': 'repositório não encontrado ou sem acesso',
                     'error': (
@@ -149,13 +161,26 @@ class GitRepoMixin:
                         'permissão de administrador (para criar webhooks) no repositório. '
                         'Se o repositório pertence a uma organização, a organização pode '
                         'restringir o acesso de apps de terceiros. '
-                        f'Detalhes: {e.data}'
+                        f'Detalhes: {self._format_github_error(e.data)}'
                     ),
                 }
             raise
 
         # Verifica se já existe um webhook para este app
-        existing_hooks = repo.get_hooks()
+        try:
+            existing_hooks = list(repo.get_hooks())
+        except GithubException as e:
+            if e.status in (403, 404):
+                return {
+                    'status': 'sem permissão para listar webhooks',
+                    'error': (
+                        f'O token atual consegue acessar "{repo_name}", mas não consegue listar os webhooks. '
+                        'No GitHub, listar hooks exige permissão "Webhooks: read" ou acesso administrativo ao repo. '
+                        f'Detalhes: {self._format_github_error(e.data)}'
+                    ),
+                }
+            raise
+
         for hook in existing_hooks:
             if hook.config.get('url') == webhook_url:
                 return {'status': 'webhook já existe', 'hook_id': hook.id}
@@ -180,6 +205,15 @@ class GitRepoMixin:
             )
             return {'status': 'webhook criado', 'hook_id': hook.id, 'url': webhook_url}
         except GithubException as e:
+            if e.status in (403, 404):
+                return {
+                    'status': 'sem permissão para criar webhook',
+                    'error': (
+                        f'O token atual não tem permissão para criar webhooks em "{repo_name}". '
+                        'No GitHub, criar hooks exige permissão "Webhooks: write" ou acesso administrativo ao repo. '
+                        f'Detalhes: {self._format_github_error(e.data)}'
+                    ),
+                }
             if e.status == 422:
-                return {'status': 'erro ao criar webhook', 'error': str(e.data)}
+                return {'status': 'erro ao criar webhook', 'error': self._format_github_error(e.data)}
             raise
