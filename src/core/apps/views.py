@@ -22,6 +22,11 @@ from .serializers import AppSerializer, ServiceSerializer
 logger = logging.getLogger(__name__)
 
 
+def _has_global_access(user) -> bool:
+    """Retorna True para perfis com visibilidade administrativa global."""
+    return bool(getattr(user, 'is_superuser', False) or getattr(user, 'is_fabric', False))
+
+
 def _display_user(user) -> str:
     """Retorna um identificador amigÃ¡vel do usuÃ¡rio para logs e diagnÃ³sticos."""
     return user.name or user.email or f'user#{user.id}'
@@ -100,7 +105,7 @@ class AppViewSet(ModelViewSet):
 
     def get_queryset(self):
         """Superusers veem todos os apps, usuários normais só os seus."""
-        if self.request.user.is_superuser:
+        if _has_global_access(self.request.user):
             return App.objects.all()
         return App.objects.filter(project__users=self.request.user)
 
@@ -725,7 +730,7 @@ class ServiceViewSet(ModelViewSet):
 
     def get_queryset(self):
         """Superusers veem todos os serviços, usuários normais só os seus."""
-        if self.request.user.is_superuser:
+        if _has_global_access(self.request.user):
             return Service.objects.all()
         return Service.objects.filter(project__users=self.request.user)
 

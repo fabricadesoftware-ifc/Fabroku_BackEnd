@@ -8,6 +8,11 @@ from .models import Project
 from .serializers import ProjectSerializer
 
 
+def _has_global_access(user) -> bool:
+    """Retorna True para perfis com visibilidade administrativa global."""
+    return bool(getattr(user, 'is_superuser', False) or getattr(user, 'is_fabric', False))
+
+
 @extend_schema(tags=['projects'])
 class ProjectViewSet(ModelViewSet):
     queryset = Project.objects.all()
@@ -16,7 +21,7 @@ class ProjectViewSet(ModelViewSet):
 
     def get_queryset(self):
         """Superusers veem todos os projetos, usuários normais só os seus."""
-        if self.request.user.is_superuser:
+        if _has_global_access(self.request.user):
             return Project.objects.all()
         return Project.objects.filter(users=self.request.user)
 

@@ -402,6 +402,52 @@ class ManageAppEndpointTests(APITestCase):
         self.assertEqual(response.data['current'], 100)
 
 
+class ServiceVisibilityTests(APITestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.owner = User.objects.create_user(
+            email='owner-services@example.com',
+            password='senha123',
+            name='Owner Services',
+        )
+        self.admin_user = User.objects.create_user(
+            email='admin-services@example.com',
+            password='senha123',
+            name='Admin Services',
+            is_fabric=True,
+        )
+        self.project = Project.objects.create(name='Projeto Servicos')
+        self.project.users.add(self.owner)
+        self.app = App.objects.create(
+            name='app-servicos-teste',
+            name_dokku='app-servicos-teste',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=self.project,
+            status='RUNNING',
+        )
+        self.service = Service.objects.create(
+            name='db-servicos-teste',
+            user='postgres',
+            password='secret',
+            host='localhost',
+            port=5432,
+            app=self.app,
+            project=self.project,
+            service_type='postgres',
+            container_name='db-servicos-teste',
+        )
+
+    def test_is_fabric_user_can_list_services_from_other_people_projects(self):
+        self.client.force_authenticate(user=self.admin_user)
+
+        response = self.client.get(f'/api/apps/services/?project={self.project.id}')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['results'][0]['id'], self.service.id)
+
+
 @override_settings(BACKEND_URL='https://backend.example.com')
 class WebhookSetupTests(APITestCase):
     def setUp(self):

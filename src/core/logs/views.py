@@ -11,6 +11,11 @@ from .models import AppLog
 from .serializers import AppLogSerializer
 
 
+def _has_global_access(user) -> bool:
+    """Retorna True para perfis com visibilidade administrativa global."""
+    return bool(getattr(user, 'is_superuser', False) or getattr(user, 'is_fabric', False))
+
+
 @extend_schema(tags=['logs'])
 class AppLogViewSet(viewsets.ReadOnlyModelViewSet):
     """ViewSet para visualização de logs de aplicações."""
@@ -26,7 +31,7 @@ class AppLogViewSet(viewsets.ReadOnlyModelViewSet):
         """Retorna logs apenas das apps do usuário."""
         if self.request.user.is_anonymous:
             return AppLog.objects.none()
-        if self.request.user.is_superuser:
+        if _has_global_access(self.request.user):
             return AppLog.objects.all().select_related('app')
         return AppLog.objects.filter(app__project__users=self.request.user).distinct().select_related('app')
 
@@ -71,7 +76,7 @@ class AppLogViewSet(viewsets.ReadOnlyModelViewSet):
         except App.DoesNotExist:
             return Response({'error': 'App não encontrado'}, status=404)
 
-        if not request.user.is_superuser and not app.project.users.filter(id=request.user.id).exists():
+        if not _has_global_access(request.user) and not app.project.users.filter(id=request.user.id).exists():
             return Response({'error': 'Sem permissão'}, status=403)
 
         if not app.name_dokku:
