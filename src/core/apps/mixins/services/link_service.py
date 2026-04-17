@@ -8,8 +8,6 @@ from core.apps.models import App, Service, ServiceType
 from core.logs.models import AppLogManager, LogCategory
 from core.apps.mixins.apps.manage_app import ManageAppMixin
 
-manage_app = ManageAppMixin()
-
 def _check_dokku_output(output: str, operation: str):
     if not output:
         raise RuntimeError(f'{operation}: nenhuma resposta do servidor')
@@ -38,11 +36,11 @@ class LinkServiceMixin:
         except App.DoesNotExist:
             return {'status': 'error', 'message': f'App {app_id} não encontrado'}
 
-        if service.project_id != app.project_id:
+        if service.project.id != app.project.id:
             return {'status': 'error', 'message': 'Serviço e app devem pertencer ao mesmo projeto'}
 
-        if service.app_id:
-            return {'status': 'error', 'message': f'Serviço já vinculado ao app {service.app_id}'}
+        if service.app.id:
+            return {'status': 'error', 'message': f'Serviço já vinculado ao app {service.app.id}'}
 
         if not app.name_dokku:
             return {'status': 'error', 'message': 'App sem name_dokku configurado'}
@@ -71,15 +69,15 @@ class LinkServiceMixin:
             link_output = dokku_adapter.link_database(
                 db_name=dokku_service_name, app_name=app.name_dokku, no_restart=True,
             )
-            
+
             logger.dokku(
                 link_output,
                 command=f'postgres:link {dokku_service_name} {app.name_dokku}',
                 category=LogCategory.DATABASE,
                 progress=50,
             )
-            
-            restart_output = manage_app.manage_app.delay(app_id=app.id, action='restart').get()
+
+            restart_output = ManageAppMixin.manage_app_task.delay(app_id=app.pk, action='restart').get()
             logger.dokku(restart_output, category=LogCategory.DEPLOY, progress=60)
 
             if 'already linked' not in link_output.lower():

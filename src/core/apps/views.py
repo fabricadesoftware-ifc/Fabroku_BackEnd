@@ -2,6 +2,7 @@ import logging
 
 from celery.result import AsyncResult
 from django.conf import settings
+from django.db.models import Q
 from drf_spectacular.utils import extend_schema
 from rest_framework import serializers as drf_serializers
 from rest_framework import status
@@ -9,8 +10,6 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
-
-from django.db.models import Q
 
 from core.adapters import GitHubAdapter
 from core.apps.mixins import AppMixin

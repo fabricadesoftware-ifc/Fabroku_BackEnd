@@ -13,7 +13,7 @@ class ManageAppMixin:
     """Mixin para gerenciamento de aplicações (start/stop/restart)."""
 
     @shared_task(bind=True)
-    def manage_app(self, app_id: int, action: ActionType) -> dict:
+    def manage_app_task(self, app_id: int, action: ActionType) -> dict:
         """
         Gerencia o estado de uma aplicação (start/stop/restart).
         """

@@ -1,3 +1,4 @@
+import datetime
 import logging
 import re
 from typing import cast
@@ -219,6 +220,9 @@ class RedeployAppMixin:
 
             if commit and git_token:
                 github_adapter.set_deploy_success(git_token, app.git, commit, app.name)
+
+            app.updated_at = datetime.datetime.now()  # Trigger update
+            app.save(update_fields=['updated_at'])
 
             logger.success(
                 f'Redeploy concluído com sucesso! ({line_count[0]} linhas processadas)',
