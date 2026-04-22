@@ -14,6 +14,22 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _parse_csv_env(name, default=None):
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return list(default or [])
+    return [item.strip() for item in raw_value.split(',') if item.strip()]
+
+
+LOCAL_DEV_ORIGINS = [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+]
+
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.getenv('SECRET_KEY')
@@ -109,11 +125,15 @@ STATIC_URL = 'static/'
 
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
+CSRF_TRUSTED_ORIGINS = _parse_csv_env('CSRF_TRUSTED_ORIGINS', LOCAL_DEV_ORIGINS)
+
 CSRF_TRUSTED_ORIGIN_REGEXES = [
     r'^https://.*\.fabricadesoftware\.ifc\.edu\.br$',
     r'^https://.*\.fexcompany\.me$',
 ]
 
+
+CORS_ALLOWED_ORIGINS = _parse_csv_env('CORS_ALLOWED_ORIGINS', LOCAL_DEV_ORIGINS)
 
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r'^https://.*\.fabricadesoftware\.ifc\.edu\.br$',
