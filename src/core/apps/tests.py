@@ -1,7 +1,9 @@
 import socket
 from unittest.mock import ANY, Mock, patch
 
+from django.db import connection
 from django.test import SimpleTestCase, TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from rest_framework.test import APIClient, APITestCase
 
 from core.adapters.dokku_mixins.dokku_apps import DokkuAppsMixin
@@ -529,6 +531,59 @@ class AppVisibilityTests(APITestCase):
         self.assertEqual(response.data['count'], 1)
         self.assertEqual(response.data['results'][0]['id'], self.app.id)
 
+    def test_apps_list_avoids_n_plus_one_queries(self):
+        collaborator = User.objects.create_user(
+            email='collaborator-apps@example.com',
+            password='senha123',
+            name='Collaborator Apps',
+        )
+        self.project.users.add(collaborator)
+        Service.objects.create(
+            name='db-visibilidade-teste',
+            user='postgres',
+            password='secret',
+            host='localhost',
+            port=5432,
+            app=self.app,
+            project=self.project,
+            service_type='postgres',
+            container_name='db-visibilidade-teste',
+        )
+
+        for index in range(9):
+            project = Project.objects.create(name=f'Projeto Apps {index}')
+            project.users.add(self.owner, collaborator)
+            app = App.objects.create(
+                name=f'app-visibilidade-{index}',
+                name_dokku=f'app-visibilidade-{index}',
+                git='https://github.com/org/repo.git',
+                branch='main',
+                project=project,
+                status='RUNNING',
+            )
+            Service.objects.create(
+                name=f'db-visibilidade-{index}',
+                user='postgres',
+                password='secret',
+                host='localhost',
+                port=5432,
+                app=app,
+                project=project,
+                service_type='postgres',
+                container_name=f'db-visibilidade-{index}',
+            )
+
+        self.client.force_authenticate(user=self.owner)
+
+        with CaptureQueriesContext(connection) as queries:
+            response = self.client.get('/api/apps/apps/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['count'], 10)
+        self.assertTrue(all(app_data['is_owner'] for app_data in response.data['results']))
+        self.assertTrue(all(len(app_data['services']) == 1 for app_data in response.data['results']))
+        self.assertLessEqual(len(queries), 7)
+
 
 class ServiceVisibilityTests(APITestCase):
     def setUp(self):
@@ -589,6 +644,62 @@ class ServiceVisibilityTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['count'], 1)
         self.assertEqual(response.data['results'][0]['id'], self.service.id)
+
+
+class StorageUsageTests(APITestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.superuser = User.objects.create_user(
+            email='superuser-storage@example.com',
+            password='senha123',
+            name='Superuser Storage',
+            is_superuser=True,
+            is_staff=True,
+        )
+        self.client.force_authenticate(user=self.superuser)
+
+    @patch('core.apps.admin_views.DokkuAdapter')
+    def test_storage_usage_avoids_n_plus_one_when_resolving_apps(self, mock_dokku_cls):
+        mock_dokku = Mock()
+        mock_dokku.get_database_size.return_value = 1024
+        mock_dokku.app_links_for_service.side_effect = [f'app-storage-{index}' for index in range(5)]
+        mock_dokku_cls.return_value = mock_dokku
+
+        for index in range(5):
+            owner = User.objects.create_user(
+                email=f'owner-storage-{index}@example.com',
+                password='senha123',
+                name=f'Owner Storage {index}',
+            )
+            project = Project.objects.create(name=f'Projeto Storage {index}')
+            project.users.add(owner)
+            App.objects.create(
+                name=f'app-storage-{index}',
+                name_dokku=f'app-storage-{index}',
+                git='https://github.com/org/repo.git',
+                branch='main',
+                project=project,
+                status='RUNNING',
+            )
+            Service.objects.create(
+                name=f'db-storage-{index}',
+                user='postgres',
+                password='secret',
+                host='localhost',
+                port=5432,
+                app=None,
+                project=project,
+                service_type='postgres',
+                container_name=f'db-storage-{index}',
+            )
+
+        with CaptureQueriesContext(connection) as queries:
+            response = self.client.get('/api/admin-api/storage-usage/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data['services']), 5)
+        self.assertTrue(all(service['app_name'].startswith('app-storage-') for service in response.data['services']))
+        self.assertLessEqual(len(queries), 4)
 
 
 @override_settings(BACKEND_URL='https://backend.example.com')

@@ -7,7 +7,7 @@ from core.apps.models import App, Service, ServiceType
 
 
 class ServiceSerializer(serializers.ModelSerializer):
-    """Serializer para serviços (banco de dados, redis, etc.)."""
+    """Serializer para servicos (banco de dados, redis, etc.)."""
 
     class Meta:
         model = Service
@@ -35,9 +35,10 @@ class ServiceSerializer(serializers.ModelSerializer):
         ]
 
     def validate(self, attrs):
-        """Valida criação: app OU (project + service_type) para standalone."""
+        """Valida criacao: app OU (project + service_type) para standalone."""
         if self.instance:
             return attrs
+
         app = attrs.get('app')
         project = attrs.get('project')
         service_type = attrs.get('service_type')
@@ -49,15 +50,14 @@ class ServiceSerializer(serializers.ModelSerializer):
 
         if not project or not service_type:
             raise serializers.ValidationError(
-                'Para criar serviço standalone, informe project e service_type. '
+                'Para criar servico standalone, informe project e service_type. '
                 'Para vincular a um app, informe app e service_type.'
             )
         if service_type != ServiceType.POSTGRES:
-            raise serializers.ValidationError('Apenas Postgres está habilitado no momento.')
+            raise serializers.ValidationError('Apenas Postgres esta habilitado no momento.')
         return attrs
 
     def create(self, validated_data):
-        # Validação de quota
         request = self.context.get('request')
         if request and request.user:
             user = request.user
@@ -65,7 +65,7 @@ class ServiceSerializer(serializers.ModelSerializer):
                 max_services = user.max_services
                 current = user.services_count
                 raise serializers.ValidationError({
-                    'quota': f'Limite de serviços atingido ({current}/{max_services}). '
+                    'quota': f'Limite de servicos atingido ({current}/{max_services}). '
                     'Entre em contato com um administrador para aumentar seu limite.',
                     'limit': max_services,
                     'current': current,
@@ -77,7 +77,6 @@ class ServiceSerializer(serializers.ModelSerializer):
         name = validated_data.get('name')
 
         if app:
-            # Fluxo vinculado: cria serviço no app (task cria no Dokku)
             task_result = AppMixin.create_service.delay(
                 app_id=app.id,
                 service_type=service_type,
@@ -93,7 +92,6 @@ class ServiceSerializer(serializers.ModelSerializer):
                 port=0,
             )
 
-        # Fluxo standalone: cria placeholder e dispara task
         password = uuid.uuid4().hex
         service_name = name or 'provisionando...'
         placeholder = Service.objects.create(
@@ -158,27 +156,38 @@ class AppSerializer(serializers.ModelSerializer):
         ]
 
     def validate_name_dokku(self, value):
-        """Apenas membros da fábrica ou admins podem definir nome personalizado."""
+        """Apenas membros da fabrica ou admins podem definir nome personalizado."""
         request = self.context.get('request')
         if request and request.user:
             is_fabric = getattr(request.user, 'is_fabric', False)
             if not is_fabric and not request.user.is_superuser:
                 raise serializers.ValidationError(
-                    'Apenas membros da Fábrica ou administradores podem personalizar o nome do app.'
+                    'Apenas membros da Fabrica ou administradores podem personalizar o nome do app.'
                 )
         return value
 
+    def _get_project_users(self, obj):
+        """Reaproveita o prefetch do projeto quando disponivel."""
+        project = getattr(obj, 'project', None)
+        if not project:
+            return []
+
+        prefetched_objects = getattr(project, '_prefetched_objects_cache', {})
+        if 'users' in prefetched_objects:
+            return prefetched_objects['users']
+
+        return list(project.users.only('id'))
+
     def get_is_owner(self, obj):
-        """Retorna True se o usuário logado é dono do app (via projeto)."""
+        """Retorna True se o usuario logado e membro do projeto."""
         request = self.context.get('request')
         if request and request.user:
-            return obj.project.users.filter(id=request.user.id).exists()
+            return any(user.id == request.user.id for user in self._get_project_users(obj))
         return False
 
     def create(self, validated_data):
         user = self.context['request'].user
 
-        # Validação de quota
         if not user.can_create_app():
             max_apps = user.max_apps
             current = user.apps_count

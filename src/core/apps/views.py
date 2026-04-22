@@ -2,7 +2,7 @@ import logging
 
 from celery.result import AsyncResult
 from django.conf import settings
-from django.db.models import Q
+from django.db.models import Prefetch, Q
 from drf_spectacular.utils import extend_schema
 from rest_framework import serializers as drf_serializers
 from rest_framework import status
@@ -14,6 +14,7 @@ from rest_framework.viewsets import ModelViewSet
 from core.adapters import GitHubAdapter
 from core.apps.mixins import AppMixin
 from core.apps.mixins.apps.run_command import ALLOWED_COMMANDS, ALLOWED_PREFIXES, is_command_allowed
+from core.auth_user.models import User
 from core.logs.models import AppLogManager, LogCategory
 
 from .models import App, Service
@@ -105,9 +106,17 @@ class AppViewSet(ModelViewSet):
 
     def get_queryset(self):
         """Superusers veem todos os apps, usuários normais só os seus."""
+        queryset = App.objects.select_related('project')
+
+        if getattr(self, 'action', None) in {'list', 'retrieve'}:
+            queryset = queryset.prefetch_related(
+                Prefetch('services', queryset=Service.objects.all()),
+                Prefetch('project__users', queryset=User.objects.only('id')),
+            )
+
         if _has_global_access(self.request.user):
-            return App.objects.all()
-        return App.objects.filter(project__users=self.request.user)
+            return queryset
+        return queryset.filter(project__users=self.request.user)
 
     def destroy(self, request, *args, **kwargs):
         """Override destroy para lançar task de deleção no Dokku."""

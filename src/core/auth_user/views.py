@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.db.models import Count
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.decorators import action, api_view, permission_classes
@@ -39,6 +40,12 @@ class UserViewSet(ModelViewSet):
         serializer = UserRetrieveSerializer(user)
         return Response(serializer.data)
 
+    def _get_admin_queryset(self):
+        return User.objects.annotate(
+            annotated_apps_count=Count('projects__app__id', distinct=True),
+            annotated_services_count=Count('projects__service__id', distinct=True),
+        )
+
     @action(detail=False, methods=['get'], url_path='admin_list')
     def admin_list(self, request):
         """Lista todos os usuários (somente admin)."""
@@ -47,7 +54,7 @@ class UserViewSet(ModelViewSet):
                 {'error': 'Permissão negada'},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        queryset = self.filter_queryset(User.objects.all())
+        queryset = self.filter_queryset(self._get_admin_queryset())
         serializer = UserAdminSerializer(queryset, many=True)
         return Response(serializer.data)
 
@@ -67,6 +74,28 @@ class UserViewSet(ModelViewSet):
             )
         user.is_active = not user.is_active
         user.save(update_fields=['is_active'])
+        return Response(UserAdminSerializer(user).data)
+
+    @action(detail=True, methods=['post'], url_path='toggle_admin')
+    def toggle_admin(self, request, pk=None):
+        """Promove ou remove privilégios administrativos de outro usuário."""
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Permissão negada'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        user = self.get_object()
+        if user.id == request.user.id:
+            return Response(
+                {'error': 'Você não pode alterar seu próprio status de administrador'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user.is_superuser = not user.is_superuser
+        user.is_staff = user.is_superuser
+        user.save(update_fields=['is_superuser', 'is_staff'])
+
         return Response(UserAdminSerializer(user).data)
 
     @action(detail=True, methods=['post'], url_path='set_quota')

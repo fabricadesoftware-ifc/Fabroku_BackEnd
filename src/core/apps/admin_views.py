@@ -47,6 +47,9 @@ def storage_usage(request):
     # Pré-carregar apps do banco para resolver nomes via Dokku links
     from core.apps.models import App
 
+    apps = list(App.objects.only('id', 'name', 'name_dokku'))
+    apps_by_name_dokku = {app.name_dokku: app for app in apps if app.name_dokku}
+    apps_by_name = {app.name: app for app in apps}
     app_name_cache: dict[str, str] = {}
 
     for svc in services:
@@ -81,10 +84,7 @@ def storage_usage(request):
             resolved = app_name_cache.get(cache_key, '')
             if resolved:
                 app_name = resolved
-                # Tentar encontrar o app no banco para obter o ID
-                matching_app = (
-                    App.objects.filter(name_dokku=resolved).first() or App.objects.filter(name=resolved).first()
-                )
+                matching_app = apps_by_name_dokku.get(resolved) or apps_by_name.get(resolved)
                 if matching_app:
                     app_id = matching_app.id
 
