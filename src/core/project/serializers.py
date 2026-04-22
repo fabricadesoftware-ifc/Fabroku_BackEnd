@@ -30,11 +30,17 @@ class ProjectSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'is_owner', 'users_detail', 'created_at', 'updated_at']
 
+    def _get_project_users(self, obj):
+        prefetched_users = getattr(obj, '_prefetched_objects_cache', {}).get('users')
+        if prefetched_users is not None:
+            return prefetched_users
+        return obj.users.all()
+
     def get_is_owner(self, obj):
         """Retorna True se o usuario logado faz parte do projeto."""
         request = self.context.get('request')
         if request and request.user:
-            return obj.users.filter(id=request.user.id).exists()
+            return any(user.id == request.user.id for user in self._get_project_users(obj))
         return False
 
     def validate(self, attrs):

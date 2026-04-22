@@ -1,4 +1,6 @@
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from rest_framework.test import APIClient
 
 from core.auth_user.models import User
@@ -84,3 +86,17 @@ class ProjectVisibilityTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn('users', response.data)
+
+    def test_projects_list_avoids_n_plus_one_queries(self):
+        self.client.force_authenticate(user=self.owner)
+
+        for index in range(9):
+            project = Project.objects.create(name=f'Projeto {index}')
+            project.users.add(self.owner, self.collaborator)
+
+        with CaptureQueriesContext(connection) as queries:
+            response = self.client.get('/api/projects/projects/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['count'], 10)
+        self.assertLessEqual(len(queries), 6)
