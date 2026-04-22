@@ -19,6 +19,11 @@ class ProjectVisibilityTests(TestCase):
             name='Fabric Project',
             is_fabric=True,
         )
+        self.collaborator = User.objects.create_user(
+            email='collaborator-project@example.com',
+            password='senha123',
+            name='Collaborator Project',
+        )
         self.superuser = User.objects.create_user(
             email='superuser-project@example.com',
             password='senha123',
@@ -45,3 +50,37 @@ class ProjectVisibilityTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['count'], 1)
         self.assertEqual(str(response.data['results'][0]['id']), str(self.project.id))
+
+    def test_member_can_add_and_remove_people_from_team_after_project_creation(self):
+        self.client.force_authenticate(user=self.owner)
+
+        add_response = self.client.patch(
+            f'/api/projects/projects/{self.project.id}/',
+            {'users': [self.owner.id, self.collaborator.id]},
+            format='json',
+        )
+
+        self.assertEqual(add_response.status_code, 200)
+        self.assertCountEqual(add_response.data['users'], [self.owner.id, self.collaborator.id])
+
+        remove_response = self.client.patch(
+            f'/api/projects/projects/{self.project.id}/',
+            {'users': [self.owner.id]},
+            format='json',
+        )
+
+        self.assertEqual(remove_response.status_code, 200)
+        self.assertEqual(remove_response.data['users'], [self.owner.id])
+
+    def test_member_cannot_remove_themselves_from_team(self):
+        self.project.users.add(self.collaborator)
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.patch(
+            f'/api/projects/projects/{self.project.id}/',
+            {'users': [self.collaborator.id]},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('users', response.data)

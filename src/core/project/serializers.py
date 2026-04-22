@@ -5,7 +5,7 @@ from core.project.models import Project
 
 
 class ProjectUserSerializer(serializers.ModelSerializer):
-    """Serializer resumido do usuário para exibir dentro de projetos."""
+    """Serializer resumido do usuario para exibir dentro de projetos."""
 
     class Meta:
         model = User
@@ -13,7 +13,7 @@ class ProjectUserSerializer(serializers.ModelSerializer):
 
 
 class ProjectSerializer(serializers.ModelSerializer):
-    users = serializers.PrimaryKeyRelatedField(queryset=User.objects.all(), many=True)
+    users = serializers.PrimaryKeyRelatedField(queryset=User.objects.all(), many=True, required=False)
     users_detail = ProjectUserSerializer(source='users', many=True, read_only=True)
     is_owner = serializers.SerializerMethodField()
 
@@ -31,8 +31,34 @@ class ProjectSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'is_owner', 'users_detail', 'created_at', 'updated_at']
 
     def get_is_owner(self, obj):
-        """Retorna True se o usuário logado é dono do projeto."""
+        """Retorna True se o usuario logado faz parte do projeto."""
         request = self.context.get('request')
         if request and request.user:
             return obj.users.filter(id=request.user.id).exists()
         return False
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        users = attrs.get('users')
+
+        if users is None:
+            return attrs
+
+        if not users:
+            raise serializers.ValidationError({
+                'users': 'O projeto precisa ter pelo menos um membro.',
+            })
+
+        if (
+            request
+            and request.user
+            and not getattr(request.user, 'is_superuser', False)
+            and self.instance
+            and self.instance.users.filter(id=request.user.id).exists()
+            and not any(user.id == request.user.id for user in users)
+        ):
+            raise serializers.ValidationError({
+                'users': 'Voce nao pode remover a si mesmo do projeto.',
+            })
+
+        return attrs
