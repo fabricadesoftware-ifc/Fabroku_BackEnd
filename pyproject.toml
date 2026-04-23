@@ -1,17 +1,95 @@
-
 [project]
-name = "Fabroku"
-version = "0.1"
-description = "A system for managing the CI/CD of the F.S;"
+name = "Fabrocker"
+version = "0.1.0"
+description = "Default template for PDM package"
 authors = [
-    {name = "Snow-sr", email = "joaofelipi877@gmail.com, snowsr.dev@gmail.com, snowsr@cock.li"},
+    {name = "jonatasperaza", email = "jonatassilvaperaza@gmail.com"},
 ]
-dependencies = [
-    "fastapi>=0.96.1",
-    "uvicorn>=0.22.0",
-    "paramiko>=3.2.0",
-    "python-dotenv>=1.0.0",
-    "prisma>=0.9.0",
-]
-requires-python = ">=3.10"
+dependencies = ["django>=5.2.8", "djangorestframework>=3.16.1", "dj-database-url>=3.0.1", "psycopg2-binary>=2.9.11", "django-celery-results>=2.6.0", "djangorestframework-simplejwt>=5.5.1", "python-dotenv>=1.2.1", "drf-spectacular>=0.29.0", "celery>=5.5.3", "whitenoise>=6.11.0", "requests>=2.32.5", "gunicorn>=23.0.0", "paramiko>=4.0.0", "ruff>=0.14.6", "django-cors-headers>=4.9.0", "django-filter>=25.2", "pygithub>=2.8.1", "click>=8.1.0"]
+requires-python = ">=3.13"
+readme = "README.md"
 license = {text = "MIT"}
+
+[project.scripts]
+fabroku = "cli.main:main"
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+
+[tool.pdm]
+distribution = true
+
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "*/migrations/*",
+    "*/tests/*",
+    "*/__pycache__/*",
+    "*/venv/*",
+    "*/virtualenv/*"
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod"
+]
+
+[[tool.pdm.autoexport]]
+filename = "requirements.txt"
+without-hashes = "true"
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ['migrations', '__init__.py', 'manage.py']
+
+[tool.ruff.lint]
+preview = true
+select = ['I', 'F', 'E', 'W', 'PL', 'PT']
+ignore = ["PLR6301"]
+
+[tool.ruff.format]
+preview = true
+quote-style = 'single'
+
+
+[tool.pdm.scripts]
+dev = "python src/manage.py runserver"
+runserver = "python src/manage.py runserver"
+createsuperuser = "python src/manage.py createsuperuser"
+migrate = "python src/manage.py migrate"
+makemigrations = "python src/manage.py makemigrations"
+shell = "python src/manage.py shell"
+celery = "celery -A src.config worker --loglevel=INFO --concurrency=10 -n worker1.%h --pool=solo"
+beat = "celery -A src.config beat --loglevel=INFO"
+model = "python src/manage.py graph_models -a -g -o models.png"
+startapp = "python src/manage.py startapp {args}"
+loaddata = "python src/manage.py loaddata {args}"
+dumpdata = "python src/manage.py dumpdata {args}"
+test = "pytest {args}"
+test-all = "pytest"
+test-cov = "pytest --cov=src --cov-report=html --cov-report=term {args}"
+test-unit = "pytest tests/unit {args}"
+test-integration = "pytest tests/integration {args}"
+test-e2e = "pytest tests/e2e {args}"
+check = "ruff check"
+pre_format = "ruff check --fix"
+format = "ruff format"
+fabroku = "python -m cli.main {args}"
+
+
+[dependency-groups]
+dev = [
+    "pygraphviz>=1.14",
+    "pylint>=3.0.2",
+    "ipython>=8.26.0",
+    "ruff>=0.11.2",
+]
