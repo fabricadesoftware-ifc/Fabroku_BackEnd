@@ -1,10 +1,13 @@
 import socket
+from datetime import timedelta
 from unittest.mock import ANY, Mock, patch
 
 from django.core.cache import cache
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 from rest_framework.test import APIClient, APITestCase
 
 from core.adapters.dokku_mixins.dokku_apps import DokkuAppsMixin
@@ -12,9 +15,10 @@ from core.adapters.dokku_mixins.dokku_config import DokkuConfigMixin
 from core.adapters.ssh import SSHAdapter
 from core.cache_versioning import APP_LAST_COMMIT_CACHE_NAMESPACE, get_cache_ttl
 from core.apps.mixins import AppMixin
+from core.apps.mixins.apps.run_data import validate_dump_args, validate_manage_path
 from core.apps.mixins.apps.create_app import CreateAppMixin
 from core.apps.mixins.apps.redeploy_app import RedeployAppMixin
-from core.apps.models import App, Service
+from core.apps.models import App, AppRunArtifact, AppRunArtifactKind, Service
 from core.auth_user.models import User
 from core.project.models import Project
 
@@ -123,6 +127,23 @@ class CacheVersioningTests(SimpleTestCase):
     def test_get_cache_ttl_allows_namespace_env_override(self):
         with patch.dict('os.environ', {'CACHE_TTL_APP_LAST_COMMIT': '120'}):
             self.assertEqual(get_cache_ttl(APP_LAST_COMMIT_CACHE_NAMESPACE, default=300), 120)
+
+
+class RunDataValidationTests(SimpleTestCase):
+    def test_validate_manage_path_accepts_relative_manage_py(self):
+        self.assertEqual(validate_manage_path('src/manage.py'), 'src/manage.py')
+
+    def test_validate_manage_path_rejects_unsafe_paths(self):
+        for value in ('/app/manage.py', '../manage.py', 'src/settings.py', 'C:/app/manage.py'):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    validate_manage_path(value)
+
+    def test_validate_dump_args_blocks_output_and_shell_operators(self):
+        for args in (['--output', 'dump.json'], ['--output=dump.json'], ['auth.User', '&&', 'rm']):
+            with self.subTest(args=args):
+                with self.assertRaises(ValueError):
+                    validate_dump_args(args)
 
 
 class DokkuConfigMixinTests(SimpleTestCase):
@@ -497,6 +518,193 @@ class RunCommandStatusEndpointTests(APITestCase):
         self.assertEqual(response.data['output'], 'No migrations to apply.')
         self.assertEqual(response.data['lines'], 1)
         self.assertEqual(response.data['current'], 100)
+
+
+class RunDataEndpointTests(APITestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email='run-data@example.com',
+            password='senha123',
+            name='Run Data User',
+        )
+        self.project = Project.objects.create(name='Projeto Run Data')
+        self.project.users.add(self.user)
+        self.app = App.objects.create(
+            name='app-run-data',
+            name_dokku='app-run-data',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=self.project,
+            status='RUNNING',
+        )
+        self.client.force_authenticate(user=self.user)
+
+    @patch('core.apps.views.AppMixin.run_loaddata.delay')
+    def test_run_loaddata_creates_upload_artifact_and_dispatches_task(self, mock_delay):
+        mock_delay.return_value = Mock(id='task-loaddata-123')
+        fixture = SimpleUploadedFile(
+            'my_data.json',
+            b'[{"model":"auth.user","fields":{"username":"alice"}}]',
+            content_type='application/json',
+        )
+
+        response = self.client.post(
+            f'/api/apps/apps/{self.app.id}/run_loaddata/',
+            {'fixture': fixture, 'manage_path': 'src/manage.py'},
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 202)
+        artifact = AppRunArtifact.objects.get(app=self.app, kind=AppRunArtifactKind.LOAD_DATA_UPLOAD)
+        self.assertEqual(artifact.filename, 'my_data.json')
+        self.assertEqual(bytes(artifact.content), b'[{"model":"auth.user","fields":{"username":"alice"}}]')
+        mock_delay.assert_called_once_with(
+            app_id=self.app.id,
+            artifact_id=str(artifact.id),
+            manage_path='src/manage.py',
+            user_id=self.user.id,
+        )
+
+    def test_run_loaddata_rejects_unsafe_manage_path(self):
+        fixture = SimpleUploadedFile('my_data.json', b'[]', content_type='application/json')
+
+        response = self.client.post(
+            f'/api/apps/apps/{self.app.id}/run_loaddata/',
+            {'fixture': fixture, 'manage_path': '../manage.py'},
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(AppRunArtifact.objects.count(), 0)
+
+    def test_run_dumpdata_rejects_dangerous_args(self):
+        response = self.client.post(
+            f'/api/apps/apps/{self.app.id}/run_dumpdata/',
+            {
+                'manage_path': 'manage.py',
+                'dump_args': ['--output', 'dump.json'],
+                'output_filename': 'dump.json',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    @patch('core.apps.views.AppMixin.run_dumpdata.delay')
+    def test_run_dumpdata_dispatches_task(self, mock_delay):
+        mock_delay.return_value = Mock(id='task-dumpdata-123')
+
+        response = self.client.post(
+            f'/api/apps/apps/{self.app.id}/run_dumpdata/',
+            {
+                'manage_path': 'src/manage.py',
+                'dump_args': ['--indent', '2', 'auth.User'],
+                'output_filename': 'users.json',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 202)
+        mock_delay.assert_called_once_with(
+            app_id=self.app.id,
+            manage_path='src/manage.py',
+            dump_args=['--indent', '2', 'auth.User'],
+            output_filename='users.json',
+            user_id=self.user.id,
+        )
+
+    def test_download_artifact_requires_project_access(self):
+        other_user = User.objects.create_user(
+            email='other-run-data@example.com',
+            password='senha123',
+            name='Other Run Data',
+        )
+        artifact = AppRunArtifact.objects.create(
+            app=self.app,
+            created_by=self.user,
+            kind=AppRunArtifactKind.DUMP_DATA_EXPORT,
+            filename='dump.json',
+            content_type='application/json',
+            size=2,
+            content=b'[]',
+            expires_at=timezone.now() + timedelta(hours=1),
+        )
+
+        self.client.force_authenticate(user=other_user)
+        response = self.client.get(f'/api/apps/apps/{self.app.id}/artifacts/{artifact.id}/download/')
+
+        self.assertEqual(response.status_code, 404)
+
+
+class RunDataTaskTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='run-data-task@example.com',
+            password='senha123',
+            name='Run Data Task User',
+        )
+        self.project = Project.objects.create(name='Projeto Run Data Task')
+        self.project.users.add(self.user)
+        self.app = App.objects.create(
+            name='app-run-data-task',
+            name_dokku='app-run-data-task',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=self.project,
+            status='RUNNING',
+        )
+
+    @patch('core.apps.mixins.apps.run_data.DokkuAdapter')
+    def test_run_loaddata_sends_fixture_via_stdin_and_removes_upload(self, mock_dokku_cls):
+        mock_dokku = Mock()
+        mock_dokku.run_in_app_with_stdin.return_value = 'Installed 1 object(s)'
+        mock_dokku_cls.return_value = mock_dokku
+        artifact = AppRunArtifact.objects.create(
+            app=self.app,
+            created_by=self.user,
+            kind=AppRunArtifactKind.LOAD_DATA_UPLOAD,
+            filename='fixture.json',
+            content_type='application/json',
+            size=2,
+            content=b'[]',
+            expires_at=timezone.now() + timedelta(hours=1),
+        )
+
+        task = AppMixin.run_loaddata
+        task.request.id = 'task-loaddata-direct'
+        result = task.run(
+            app_id=self.app.id,
+            artifact_id=str(artifact.id),
+            manage_path='manage.py',
+            user_id=self.user.id,
+        )
+
+        self.assertEqual(result['status'], 'success')
+        mock_dokku.run_in_app_with_stdin.assert_called_once()
+        self.assertEqual(mock_dokku.run_in_app_with_stdin.call_args.kwargs['stdin_data'], '[]')
+        self.assertFalse(AppRunArtifact.objects.filter(id=artifact.id).exists())
+
+    @patch('core.apps.mixins.apps.run_data.DokkuAdapter')
+    def test_run_dumpdata_creates_download_artifact_without_logging_content(self, mock_dokku_cls):
+        mock_dokku = Mock()
+        mock_dokku.run_in_app.return_value = '[{"model":"auth.user"}]'
+        mock_dokku_cls.return_value = mock_dokku
+
+        task = AppMixin.run_dumpdata
+        task.request.id = 'task-dumpdata-direct'
+        result = task.run(
+            app_id=self.app.id,
+            manage_path='manage.py',
+            dump_args=['auth.User'],
+            output_filename='users.json',
+            user_id=self.user.id,
+        )
+
+        artifact = AppRunArtifact.objects.get(app=self.app, kind=AppRunArtifactKind.DUMP_DATA_EXPORT)
+        self.assertEqual(result['artifact']['id'], str(artifact.id))
+        self.assertEqual(bytes(artifact.content), b'[{"model":"auth.user"}]')
+        self.assertFalse(self.app.logs.filter(message__contains='auth.user').exists())
 
 
 class LastCommitEndpointTests(APITestCase):

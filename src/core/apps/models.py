@@ -1,3 +1,6 @@
+import uuid
+
+from django.conf import settings
 from django.db import models
 
 from core.project.models import Project
@@ -89,3 +92,37 @@ class CacheVersionIndex(models.Model):
         db_table = 'cache_version_indexes'
         verbose_name = 'Cache Version Index'
         verbose_name_plural = 'Cache Version Indexes'
+
+
+class AppRunArtifactKind(models.TextChoices):
+    LOAD_DATA_UPLOAD = 'loaddata_upload', 'Loaddata Upload'
+    DUMP_DATA_EXPORT = 'dumpdata_export', 'Dumpdata Export'
+
+
+class AppRunArtifact(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    app = models.ForeignKey(App, on_delete=models.CASCADE, related_name='run_artifacts')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='app_run_artifacts',
+    )
+    kind = models.CharField(max_length=32, choices=AppRunArtifactKind.choices)
+    filename = models.CharField(max_length=255)
+    content_type = models.CharField(max_length=100, default='application/json')
+    size = models.PositiveIntegerField(default=0)
+    content = models.BinaryField()
+    expires_at = models.DateTimeField(db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'{self.kind}:{self.filename}'
+
+    class Meta:
+        db_table = 'app_run_artifacts'
+        verbose_name = 'App Run Artifact'
+        verbose_name_plural = 'App Run Artifacts'
+        indexes = [
+            models.Index(fields=['app', 'kind'], name='idx_run_art_app_kind'),
+            models.Index(fields=['created_by', 'created_at'], name='idx_run_art_user_created'),
+        ]

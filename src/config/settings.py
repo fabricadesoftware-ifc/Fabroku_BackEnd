@@ -230,6 +230,7 @@ BACKEND_URL = os.getenv('BACKEND_URL', 'http://localhost:8000')  # URL pública 
 CACHE_TTL_DEFAULT = int(os.getenv('CACHE_TTL_DEFAULT', 60))
 # Caches especificos podem sobrescrever esse valor com env vars no formato CACHE_TTL_<NAMESPACE>.
 ADMIN_STORAGE_USAGE_MAX_WORKERS = int(os.getenv('ADMIN_STORAGE_USAGE_MAX_WORKERS', 6))
+CLI_RUN_ARTIFACT_MAX_BYTES = int(os.getenv('CLI_RUN_ARTIFACT_MAX_BYTES', 50 * 1024 * 1024))
 
 CELERY_TIMEZONE = 'America/Sao_Paulo'
 CELERY_TASK_TRACK_STARTED = True

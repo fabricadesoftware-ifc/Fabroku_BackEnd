@@ -1,13 +1,18 @@
 import logging
+from pathlib import PurePosixPath
 
 from celery.result import AsyncResult
 from django.conf import settings
 from django.core.cache import cache
+from django.http import HttpResponse
 from django.db.models import Prefetch, Q
+from django.utils import timezone
+from django.utils.http import content_disposition_header
 from drf_spectacular.utils import extend_schema
 from rest_framework import serializers as drf_serializers
 from rest_framework import status
 from rest_framework.decorators import action
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
@@ -15,11 +20,17 @@ from rest_framework.viewsets import ModelViewSet
 from core.adapters import GitHubAdapter
 from core.apps.mixins import AppMixin
 from core.apps.mixins.apps.run_command import ALLOWED_COMMANDS, ALLOWED_PREFIXES, is_command_allowed
+from core.apps.mixins.apps.run_data import (
+    cleanup_expired_run_artifacts,
+    get_run_artifact_expires_at,
+    validate_dump_args,
+    validate_manage_path,
+)
 from core.auth_user.models import User
 from core.cache_versioning import APP_LAST_COMMIT_CACHE_NAMESPACE, build_versioned_cache_key, get_cache_ttl
 from core.logs.models import AppLogManager, LogCategory
 
-from .models import App, Service
+from .models import App, AppRunArtifact, AppRunArtifactKind, Service
 from .serializers import AppSerializer, ServiceSerializer
 
 logger = logging.getLogger(__name__)
@@ -44,6 +55,14 @@ def _parse_github_repo_name(git_url: str | None) -> str | None:
     match_ssh = re.match(r'git@github\.com:([^/]+/[^/]+?)(?:\.git)?$', git_url)
     match = match_https or match_ssh
     return match.group(1) if match else None
+
+
+def _safe_json_filename(filename: str | None, *, default: str = 'dump.json') -> str:
+    normalized = (filename or default).strip().replace('\\', '/')
+    safe_name = PurePosixPath(normalized).name or default
+    if not safe_name.lower().endswith('.json'):
+        raise ValueError('O arquivo deve ter extensao .json.')
+    return safe_name
 
 
 def _iter_project_users_with_git_token(app: App, preferred_user=None):
@@ -377,7 +396,7 @@ class AppViewSet(ModelViewSet):
             response_data['status'] = task_payload.get('message') or 'Operacao concluida com sucesso!'
             response_data['current'] = 100
             if isinstance(task_payload, dict):
-                for key in ('output', 'command', 'lines', 'app_id', 'action', 'dokku_app', 'commit'):
+                for key in ('output', 'command', 'lines', 'app_id', 'action', 'dokku_app', 'commit', 'artifact'):
                     if key in task_payload:
                         response_data[key] = task_payload[key]
         elif task_result.state == 'FAILURE':
@@ -437,6 +456,125 @@ class AppViewSet(ModelViewSet):
             },
             status=status.HTTP_202_ACCEPTED,
         )
+
+    @action(detail=True, methods=['post'], url_path='run_loaddata', parser_classes=[MultiPartParser, FormParser])
+    def run_loaddata(self, request, pk=None):
+        """Recebe um fixture JSON da CLI e executa Django loaddata no app."""
+        app = self.get_object()
+
+        if not app.name_dokku:
+            return Response(
+                {'error': 'App nao tem name_dokku configurado'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        fixture = request.FILES.get('fixture')
+        if not fixture:
+            return Response({'error': 'O campo fixture e obrigatorio.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        max_size = int(getattr(settings, 'CLI_RUN_ARTIFACT_MAX_BYTES', 50 * 1024 * 1024))
+        if fixture.size > max_size:
+            return Response(
+                {'error': f'Fixture excede o limite de {max_size} bytes.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            filename = _safe_json_filename(fixture.name, default='fixture.json')
+            manage_path = validate_manage_path(request.data.get('manage_path'))
+            content = fixture.read()
+            content.decode('utf-8')
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except UnicodeDecodeError:
+            return Response({'error': 'Fixture deve ser JSON UTF-8.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        cleanup_expired_run_artifacts()
+        artifact = AppRunArtifact.objects.create(
+            app=app,
+            created_by=request.user,
+            kind=AppRunArtifactKind.LOAD_DATA_UPLOAD,
+            filename=filename,
+            content_type='application/json',
+            size=len(content),
+            content=content,
+            expires_at=get_run_artifact_expires_at(),
+        )
+
+        task_result = AppMixin.run_loaddata.delay(
+            app_id=app.id,
+            artifact_id=str(artifact.id),
+            manage_path=manage_path,
+            user_id=request.user.id,
+        )  # type: ignore
+        app.task_id = task_result.id
+        app.save(update_fields=['task_id'])
+
+        return Response(
+            {
+                'status': 'RUNNING',
+                'message': f'Executando loaddata com {filename}',
+                'task_id': task_result.id,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+    @action(detail=True, methods=['post'], url_path='run_dumpdata')
+    def run_dumpdata(self, request, pk=None):
+        """Executa Django dumpdata no app e gera um artefato para download pela CLI."""
+        app = self.get_object()
+
+        if not app.name_dokku:
+            return Response(
+                {'error': 'App nao tem name_dokku configurado'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            manage_path = validate_manage_path(request.data.get('manage_path'))
+            dump_args = validate_dump_args(request.data.get('dump_args', []))
+            output_filename = _safe_json_filename(request.data.get('output_filename'), default='dump.json')
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        cleanup_expired_run_artifacts()
+        task_result = AppMixin.run_dumpdata.delay(
+            app_id=app.id,
+            manage_path=manage_path,
+            dump_args=dump_args,
+            output_filename=output_filename,
+            user_id=request.user.id,
+        )  # type: ignore
+        app.task_id = task_result.id
+        app.save(update_fields=['task_id'])
+
+        return Response(
+            {
+                'status': 'RUNNING',
+                'message': f'Gerando dumpdata para {output_filename}',
+                'task_id': task_result.id,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+    @action(detail=True, methods=['get'], url_path=r'artifacts/(?P<artifact_id>[^/.]+)/download')
+    def download_artifact(self, request, pk=None, artifact_id=None):
+        """Baixa um artefato temporario gerado pelo dumpdata."""
+        app = self.get_object()
+        artifact = AppRunArtifact.objects.filter(
+            id=artifact_id,
+            app=app,
+            kind=AppRunArtifactKind.DUMP_DATA_EXPORT,
+            expires_at__gt=timezone.now(),
+        ).first()
+
+        if not artifact:
+            return Response({'error': 'Artefato nao encontrado ou expirado.'}, status=status.HTTP_404_NOT_FOUND)
+
+        response = HttpResponse(bytes(artifact.content), content_type=artifact.content_type)
+        response['Content-Length'] = str(artifact.size)
+        response['Content-Disposition'] = content_disposition_header(True, artifact.filename)
+        return response
 
     @action(detail=True, methods=['get'])
     def allowed_commands(self, request, pk=None):

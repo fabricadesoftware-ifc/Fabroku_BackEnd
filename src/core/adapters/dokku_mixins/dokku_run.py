@@ -15,6 +15,11 @@ class DokkuRunMixin:
         """Executa um comando SSH com streaming."""
         ...
 
+    @abstractmethod
+    def _run_command_with_stdin(self, command: str, stdin_data: str) -> str:
+        """Executa um comando SSH enviando dados no stdin."""
+        ...
+
     def run_in_app(self, app_name: str, command: str) -> str:
         """
         Executa um comando dentro do container de uma aplicação.
@@ -28,3 +33,10 @@ class DokkuRunMixin:
         Equivalente a: dokku run <app> <command>
         """
         return self._run_command_streaming(f'run {app_name} {command}')
+
+    def run_in_app_with_stdin(self, app_name: str, command: str, stdin_data: str) -> str:
+        """
+        Executa um comando dentro do container enviando dados no stdin.
+        Equivalente a: dokku run <app> <command>
+        """
+        return self._run_command_with_stdin(f'run {app_name} {command}', stdin_data)
