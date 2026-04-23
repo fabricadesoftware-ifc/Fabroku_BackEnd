@@ -15,10 +15,22 @@ from core.adapters.dokku_mixins.dokku_config import DokkuConfigMixin
 from core.adapters.ssh import SSHAdapter
 from core.cache_versioning import APP_LAST_COMMIT_CACHE_NAMESPACE, get_cache_ttl
 from core.apps.mixins import AppMixin
+from core.apps.mixins.apps import interactive_run
+from core.apps.mixins.apps.interactive_run import get_interactive_driver, submit_interactive_session_answer
 from core.apps.mixins.apps.run_data import validate_dump_args, validate_manage_path
 from core.apps.mixins.apps.create_app import CreateAppMixin
 from core.apps.mixins.apps.redeploy_app import RedeployAppMixin
-from core.apps.models import App, AppRunArtifact, AppRunArtifactKind, Service
+from core.apps.models import (
+    App,
+    AppRunArtifact,
+    AppRunArtifactKind,
+    InteractiveRunCommandKind,
+    InteractiveRunEvent,
+    InteractiveRunEventType,
+    InteractiveRunSession,
+    InteractiveRunSessionStatus,
+    Service,
+)
 from core.auth_user.models import User
 from core.project.models import Project
 
@@ -144,6 +156,342 @@ class RunDataValidationTests(SimpleTestCase):
             with self.subTest(args=args):
                 with self.assertRaises(ValueError):
                     validate_dump_args(args)
+
+
+class InteractiveRunValidationTests(SimpleTestCase):
+    def test_createsuperuser_driver_matches_expected_prompts(self):
+        driver = get_interactive_driver(InteractiveRunCommandKind.DJANGO_CREATESUPERUSER)
+
+        samples = [
+            ('Email address: ', 'email', False),
+            ('Name: ', 'name', False),
+            ('Password: ', 'password', True),
+            ('Password (again): ', 'password_confirmation', True),
+        ]
+
+        for prompt_text, prompt_key, is_secret in samples:
+            with self.subTest(prompt_text=prompt_text):
+                prompt_match = driver.match_prompt(prompt_text)
+                self.assertIsNotNone(prompt_match)
+                self.assertEqual(prompt_match.spec.key, prompt_key)
+                self.assertEqual(prompt_match.spec.secret, is_secret)
+
+
+class FakeInteractiveChannel:
+    def __init__(self, scripted_outputs, exit_status=0):
+        self.pending_outputs = [scripted_outputs[0]] if scripted_outputs else []
+        self.future_outputs = list(scripted_outputs[1:])
+        self.exit_status = exit_status
+        self.written_inputs = []
+        self.timeout = None
+
+    def settimeout(self, value):
+        self.timeout = value
+
+    def recv_ready(self):
+        return bool(self.pending_outputs)
+
+    def recv(self, size):
+        if not self.pending_outputs:
+            return b''
+        return self.pending_outputs.pop(0).encode('utf-8')
+
+    def recv_stderr_ready(self):
+        return False
+
+    def recv_stderr(self, size):
+        return b''
+
+    def exit_status_ready(self):
+        return not self.pending_outputs and not self.future_outputs
+
+    def recv_exit_status(self):
+        return self.exit_status
+
+    def handle_input(self, value):
+        self.written_inputs.append(value.rstrip('\n'))
+        if self.future_outputs:
+            self.pending_outputs.append(self.future_outputs.pop(0))
+
+
+class FakeInteractiveStdin:
+    def __init__(self, channel):
+        self.channel = channel
+
+    def write(self, value):
+        self.channel.handle_input(value)
+
+    def flush(self):
+        return None
+
+    def close(self):
+        return None
+
+
+class FakeInteractiveStdStream:
+    def __init__(self, channel):
+        self.channel = channel
+
+
+class FakeInteractiveClient:
+    def close(self):
+        return None
+
+
+class InteractiveRunEndpointTests(APITestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email='interactive@example.com',
+            password='senha123',
+            name='Interactive User',
+        )
+        self.other_user = User.objects.create_user(
+            email='interactive-other@example.com',
+            password='senha123',
+            name='Other Interactive User',
+        )
+        self.project = Project.objects.create(name='Projeto Interactive')
+        self.project.users.add(self.user)
+        self.app = App.objects.create(
+            name='app-interactive',
+            name_dokku='app-interactive',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=self.project,
+            status='RUNNING',
+        )
+        self.client.force_authenticate(user=self.user)
+
+    @patch('core.apps.views.AppMixin.run_interactive_session.delay')
+    def test_create_interactive_session_dispatches_task(self, mock_delay):
+        mock_delay.return_value = Mock(id='task-interactive-123')
+
+        response = self.client.post(
+            f'/api/apps/apps/{self.app.id}/interactive_sessions/',
+            {'command_kind': 'django_createsuperuser', 'manage_path': 'src/manage.py'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.data['task_id'], 'task-interactive-123')
+        session = InteractiveRunSession.objects.get(id=response.data['session_id'])
+        self.assertEqual(session.status, InteractiveRunSessionStatus.PENDING)
+        self.assertEqual(session.manage_path, 'src/manage.py')
+        self.assertEqual(session.task_id, 'task-interactive-123')
+        mock_delay.assert_called_once_with(session_id=str(session.id))
+
+    def test_answer_endpoint_encrypts_pending_answer_without_storing_plaintext(self):
+        session = InteractiveRunSession.objects.create(
+            app=self.app,
+            created_by=self.user,
+            command_kind=InteractiveRunCommandKind.DJANGO_CREATESUPERUSER,
+            status=InteractiveRunSessionStatus.AWAITING_INPUT,
+            manage_path='manage.py',
+            awaiting_prompt_id='email-1',
+            awaiting_prompt_text='Email address:',
+            awaiting_prompt_secret=False,
+            expires_at=timezone.now() + timedelta(minutes=5),
+            last_activity_at=timezone.now(),
+        )
+
+        response = self.client.post(
+            f'/api/apps/apps/{self.app.id}/interactive_sessions/{session.id}/answer/',
+            {'prompt_id': 'email-1', 'value': 'admin@example.com'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        session.refresh_from_db()
+        encrypted_value = bytes(session.pending_answer_ciphertext)
+        self.assertIsNotNone(session.pending_answer_ciphertext)
+        self.assertNotIn(b'admin@example.com', encrypted_value)
+
+    def test_answer_endpoint_rejects_invalid_prompt(self):
+        session = InteractiveRunSession.objects.create(
+            app=self.app,
+            created_by=self.user,
+            command_kind=InteractiveRunCommandKind.DJANGO_CREATESUPERUSER,
+            status=InteractiveRunSessionStatus.AWAITING_INPUT,
+            manage_path='manage.py',
+            awaiting_prompt_id='email-1',
+            awaiting_prompt_text='Email address:',
+            awaiting_prompt_secret=False,
+            expires_at=timezone.now() + timedelta(minutes=5),
+            last_activity_at=timezone.now(),
+        )
+
+        response = self.client.post(
+            f'/api/apps/apps/{self.app.id}/interactive_sessions/{session.id}/answer/',
+            {'prompt_id': 'name-2', 'value': 'Admin'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn('prompt', response.data['error'].lower())
+
+    def test_cancel_endpoint_marks_session_for_cancellation(self):
+        session = InteractiveRunSession.objects.create(
+            app=self.app,
+            created_by=self.user,
+            command_kind=InteractiveRunCommandKind.DJANGO_CREATESUPERUSER,
+            status=InteractiveRunSessionStatus.RUNNING,
+            manage_path='manage.py',
+            expires_at=timezone.now() + timedelta(minutes=5),
+            last_activity_at=timezone.now(),
+        )
+
+        response = self.client.post(f'/api/apps/apps/{self.app.id}/interactive_sessions/{session.id}/cancel/')
+
+        self.assertEqual(response.status_code, 200)
+        session.refresh_from_db()
+        self.assertTrue(session.cancel_requested)
+
+    def test_events_endpoint_streams_existing_events(self):
+        session = InteractiveRunSession.objects.create(
+            app=self.app,
+            created_by=self.user,
+            command_kind=InteractiveRunCommandKind.DJANGO_CREATESUPERUSER,
+            status=InteractiveRunSessionStatus.COMPLETED,
+            manage_path='manage.py',
+            completed_at=timezone.now(),
+            expires_at=timezone.now() + timedelta(minutes=5),
+            last_activity_at=timezone.now(),
+        )
+        InteractiveRunEvent.objects.create(
+            session=session,
+            event_type=InteractiveRunEventType.COMPLETE,
+            payload={'message': 'Superusuario criado com sucesso.'},
+        )
+
+        response = self.client.get(f'/api/apps/apps/{self.app.id}/interactive_sessions/{session.id}/events/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'text/event-stream')
+        streamed_content = b''.join(
+            chunk if isinstance(chunk, bytes) else chunk.encode('utf-8')
+            for chunk in response.streaming_content
+        ).decode('utf-8')
+        self.assertIn('event: complete', streamed_content)
+        self.assertIn('Superusuario criado com sucesso.', streamed_content)
+
+    def test_other_user_cannot_access_foreign_session(self):
+        session = InteractiveRunSession.objects.create(
+            app=self.app,
+            created_by=self.user,
+            command_kind=InteractiveRunCommandKind.DJANGO_CREATESUPERUSER,
+            status=InteractiveRunSessionStatus.AWAITING_INPUT,
+            manage_path='manage.py',
+            awaiting_prompt_id='email-1',
+            awaiting_prompt_text='Email address:',
+            awaiting_prompt_secret=False,
+            expires_at=timezone.now() + timedelta(minutes=5),
+            last_activity_at=timezone.now(),
+        )
+
+        self.client.force_authenticate(user=self.other_user)
+        response = self.client.post(
+            f'/api/apps/apps/{self.app.id}/interactive_sessions/{session.id}/answer/',
+            {'prompt_id': 'email-1', 'value': 'blocked@example.com'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+
+class InteractiveRunTaskTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='interactive-task@example.com',
+            password='senha123',
+            name='Interactive Task User',
+        )
+        self.project = Project.objects.create(name='Projeto Interactive Task')
+        self.project.users.add(self.user)
+        self.app = App.objects.create(
+            name='app-interactive-task',
+            name_dokku='app-interactive-task',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=self.project,
+            status='RUNNING',
+        )
+
+    def _make_session(self):
+        return InteractiveRunSession.objects.create(
+            app=self.app,
+            created_by=self.user,
+            command_kind=InteractiveRunCommandKind.DJANGO_CREATESUPERUSER,
+            status=InteractiveRunSessionStatus.PENDING,
+            manage_path='manage.py',
+            expires_at=timezone.now() + timedelta(minutes=5),
+            last_activity_at=timezone.now(),
+        )
+
+    def _run_task_with_script(self, scripted_outputs, answers):
+        session = self._make_session()
+        channel = FakeInteractiveChannel(scripted_outputs)
+        stdin = FakeInteractiveStdin(channel)
+        stdout = FakeInteractiveStdStream(channel)
+        stderr = FakeInteractiveStdStream(channel)
+
+        original_set_prompt = interactive_run._set_session_prompt
+        answers_iter = iter(answers)
+
+        def auto_answer(session_id, prompt_match):
+            prompt_id = original_set_prompt(session_id, prompt_match)
+            submit_interactive_session_answer(session_id, prompt_id, next(answers_iter))
+            return prompt_id
+
+        task = AppMixin.run_interactive_session
+        with (
+            patch('core.apps.mixins.apps.interactive_run._open_interactive_command', return_value=(FakeInteractiveClient(), stdin, stdout, stderr)),
+            patch('core.apps.mixins.apps.interactive_run._set_session_prompt', side_effect=auto_answer),
+            patch('core.apps.mixins.apps.interactive_run.time.sleep', return_value=None),
+        ):
+            task.request.id = 'task-interactive-session'
+            result = task.run(session_id=str(session.id))
+
+        session.refresh_from_db()
+        return result, session, channel
+
+    def test_run_interactive_session_completes_createsuperuser_flow(self):
+        result, session, channel = self._run_task_with_script(
+            [
+                'Email address: ',
+                'Name: ',
+                'Password: ',
+                'Password (again): ',
+                'Superuser created successfully.\n',
+            ],
+            ['admin@example.com', 'Admin', '123123Admin', '123123Admin'],
+        )
+
+        self.assertEqual(result['status'], 'success')
+        self.assertEqual(session.status, InteractiveRunSessionStatus.COMPLETED)
+        self.assertEqual(channel.written_inputs, ['admin@example.com', 'Admin', '123123Admin', '123123Admin'])
+        self.assertEqual(session.events.filter(event_type=InteractiveRunEventType.PROMPT).count(), 4)
+        self.assertTrue(session.events.filter(event_type=InteractiveRunEventType.COMPLETE).exists())
+        self.assertFalse(any('123123Admin' in str(event.payload) for event in session.events.all()))
+
+    def test_run_interactive_session_handles_validation_message_and_reprompt(self):
+        result, session, channel = self._run_task_with_script(
+            [
+                'Email address: ',
+                'Error: That email address is already taken.\nEmail address: ',
+                'Name: ',
+                'Password: ',
+                'Password (again): ',
+                'Superuser created successfully.\n',
+            ],
+            ['used@example.com', 'admin@example.com', 'Admin', '123123Admin', '123123Admin'],
+        )
+
+        self.assertEqual(result['status'], 'success')
+        self.assertEqual(session.status, InteractiveRunSessionStatus.COMPLETED)
+        self.assertEqual(channel.written_inputs[0], 'used@example.com')
+        self.assertEqual(channel.written_inputs[1], 'admin@example.com')
+        self.assertTrue(any('already taken' in str(event.payload) for event in session.events.all()))
 
 
 class DokkuConfigMixinTests(SimpleTestCase):

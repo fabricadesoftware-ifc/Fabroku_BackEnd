@@ -1,10 +1,12 @@
 import logging
+import json
+import time
 from pathlib import PurePosixPath
 
 from celery.result import AsyncResult
 from django.conf import settings
 from django.core.cache import cache
-from django.http import HttpResponse
+from django.http import HttpResponse, StreamingHttpResponse
 from django.db.models import Prefetch, Q
 from django.utils import timezone
 from django.utils.http import content_disposition_header
@@ -19,6 +21,14 @@ from rest_framework.viewsets import ModelViewSet
 
 from core.adapters import GitHubAdapter
 from core.apps.mixins import AppMixin
+from core.apps.mixins.apps.interactive_run import (
+    TERMINAL_SESSION_STATUSES,
+    cleanup_expired_interactive_sessions,
+    get_interactive_driver,
+    get_interactive_session_expires_at,
+    request_interactive_session_cancel,
+    submit_interactive_session_answer,
+)
 from core.apps.mixins.apps.run_command import ALLOWED_COMMANDS, ALLOWED_PREFIXES, is_command_allowed
 from core.apps.mixins.apps.run_data import (
     cleanup_expired_run_artifacts,
@@ -30,7 +40,17 @@ from core.auth_user.models import User
 from core.cache_versioning import APP_LAST_COMMIT_CACHE_NAMESPACE, build_versioned_cache_key, get_cache_ttl
 from core.logs.models import AppLogManager, LogCategory
 
-from .models import App, AppRunArtifact, AppRunArtifactKind, Service
+from .models import (
+    App,
+    AppRunArtifact,
+    AppRunArtifactKind,
+    InteractiveRunCommandKind,
+    InteractiveRunEvent,
+    InteractiveRunEventType,
+    InteractiveRunSession,
+    InteractiveRunSessionStatus,
+    Service,
+)
 from .serializers import AppSerializer, ServiceSerializer
 
 logger = logging.getLogger(__name__)
@@ -63,6 +83,31 @@ def _safe_json_filename(filename: str | None, *, default: str = 'dump.json') -> 
     if not safe_name.lower().endswith('.json'):
         raise ValueError('O arquivo deve ter extensao .json.')
     return safe_name
+
+
+def _serialize_interactive_session(session: InteractiveRunSession, *, app_id) -> dict:
+    return {
+        'session_id': str(session.id),
+        'status': session.status,
+        'command_kind': session.command_kind,
+        'expires_at': session.expires_at.isoformat() if session.expires_at else None,
+        'stream_url': f'/api/apps/apps/{app_id}/interactive_sessions/{session.id}/events/',
+    }
+
+
+def _format_sse_event(event: InteractiveRunEvent) -> str:
+    payload = json.dumps({'id': event.id, **event.payload}, ensure_ascii=True)
+    return f'id: {event.id}\nevent: {event.event_type}\ndata: {payload}\n\n'
+
+
+class InteractiveSessionCreateSerializer(drf_serializers.Serializer):
+    command_kind = drf_serializers.ChoiceField(choices=InteractiveRunCommandKind.choices)
+    manage_path = drf_serializers.CharField(required=False, allow_blank=False, default='manage.py')
+
+
+class InteractiveSessionAnswerSerializer(drf_serializers.Serializer):
+    prompt_id = drf_serializers.CharField()
+    value = drf_serializers.CharField(allow_blank=True)
 
 
 def _iter_project_users_with_git_token(app: App, preferred_user=None):
@@ -575,6 +620,129 @@ class AppViewSet(ModelViewSet):
         response['Content-Length'] = str(artifact.size)
         response['Content-Disposition'] = content_disposition_header(True, artifact.filename)
         return response
+
+    def _get_interactive_session(self, app: App, session_id: str, user) -> InteractiveRunSession | None:
+        return InteractiveRunSession.objects.filter(id=session_id, app=app, created_by=user).first()
+
+    @action(detail=True, methods=['post'], url_path='interactive_sessions')
+    def create_interactive_session(self, request, pk=None):
+        """Inicia uma sessao interativa controlada pela CLI para comandos registrados."""
+        app = self.get_object()
+        if not app.name_dokku:
+            return Response({'error': 'App nao tem name_dokku configurado'}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = InteractiveSessionCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        command_kind = serializer.validated_data['command_kind']
+        try:
+            manage_path = validate_manage_path(serializer.validated_data.get('manage_path'))
+            get_interactive_driver(command_kind)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        cleanup_expired_interactive_sessions()
+        session = InteractiveRunSession.objects.create(
+            app=app,
+            created_by=request.user,
+            command_kind=command_kind,
+            status=InteractiveRunSessionStatus.PENDING,
+            manage_path=manage_path,
+            expires_at=get_interactive_session_expires_at(),
+            last_activity_at=timezone.now(),
+        )
+
+        task_result = AppMixin.run_interactive_session.delay(session_id=str(session.id))  # type: ignore
+        session.task_id = task_result.id
+        session.save(update_fields=['task_id'])
+
+        payload = _serialize_interactive_session(session, app_id=app.id)
+        payload['task_id'] = task_result.id
+        return Response(payload, status=status.HTTP_202_ACCEPTED)
+
+    @action(detail=True, methods=['get'], url_path=r'interactive_sessions/(?P<session_id>[^/.]+)/events')
+    def interactive_session_events(self, request, pk=None, session_id=None):
+        """Stream SSE com eventos da sessao interativa."""
+        app = self.get_object()
+        session = self._get_interactive_session(app, session_id, request.user)
+        if not session:
+            return Response({'error': 'Sessao interativa nao encontrada.'}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            after_event_id = int(request.query_params.get('after', '0') or 0)
+        except ValueError:
+            after_event_id = 0
+
+        def event_stream():
+            nonlocal after_event_id
+            keepalive_at = time.monotonic()
+
+            while True:
+                events = list(
+                    InteractiveRunEvent.objects.filter(session=session, id__gt=after_event_id).order_by('id')[:50]
+                )
+                if events:
+                    for interactive_event in events:
+                        after_event_id = interactive_event.id
+                        yield _format_sse_event(interactive_event)
+                    keepalive_at = time.monotonic()
+                    continue
+
+                current_session = self._get_interactive_session(app, session_id, request.user)
+                if not current_session:
+                    break
+
+                if (
+                    current_session.status in TERMINAL_SESSION_STATUSES
+                    and not InteractiveRunEvent.objects.filter(session=current_session, id__gt=after_event_id).exists()
+                ):
+                    break
+
+                if time.monotonic() - keepalive_at >= 5:
+                    keepalive_at = time.monotonic()
+                    yield ': keep-alive\n\n'
+
+                time.sleep(0.5)
+
+        response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
+        response['Cache-Control'] = 'no-cache'
+        response['X-Accel-Buffering'] = 'no'
+        return response
+
+    @action(detail=True, methods=['post'], url_path=r'interactive_sessions/(?P<session_id>[^/.]+)/answer')
+    def answer_interactive_session(self, request, pk=None, session_id=None):
+        """Envia a resposta para o prompt atual da sessao interativa."""
+        app = self.get_object()
+        session = self._get_interactive_session(app, session_id, request.user)
+        if not session:
+            return Response({'error': 'Sessao interativa nao encontrada.'}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = InteractiveSessionAnswerSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            submit_interactive_session_answer(
+                str(session.id),
+                serializer.validated_data['prompt_id'],
+                serializer.validated_data['value'],
+            )
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_409_CONFLICT)
+
+        session.refresh_from_db()
+        return Response(_serialize_interactive_session(session, app_id=app.id))
+
+    @action(detail=True, methods=['post'], url_path=r'interactive_sessions/(?P<session_id>[^/.]+)/cancel')
+    def cancel_interactive_session(self, request, pk=None, session_id=None):
+        """Solicita o cancelamento de uma sessao interativa ativa."""
+        app = self.get_object()
+        session = self._get_interactive_session(app, session_id, request.user)
+        if not session:
+            return Response({'error': 'Sessao interativa nao encontrada.'}, status=status.HTTP_404_NOT_FOUND)
+
+        request_interactive_session_cancel(str(session.id))
+        session.refresh_from_db()
+        return Response(_serialize_interactive_session(session, app_id=app.id))
 
     @action(detail=True, methods=['get'])
     def allowed_commands(self, request, pk=None):

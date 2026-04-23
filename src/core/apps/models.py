@@ -126,3 +126,88 @@ class AppRunArtifact(models.Model):
             models.Index(fields=['app', 'kind'], name='idx_run_art_app_kind'),
             models.Index(fields=['created_by', 'created_at'], name='idx_run_art_user_created'),
         ]
+
+
+class InteractiveRunCommandKind(models.TextChoices):
+    DJANGO_CREATESUPERUSER = 'django_createsuperuser', 'Django Createsuperuser'
+
+
+class InteractiveRunSessionStatus(models.TextChoices):
+    PENDING = 'pending', 'Pending'
+    RUNNING = 'running', 'Running'
+    AWAITING_INPUT = 'awaiting_input', 'Awaiting Input'
+    COMPLETED = 'completed', 'Completed'
+    FAILED = 'failed', 'Failed'
+    CANCELLED = 'cancelled', 'Cancelled'
+    EXPIRED = 'expired', 'Expired'
+
+
+class InteractiveRunEventType(models.TextChoices):
+    STATUS = 'status', 'Status'
+    OUTPUT = 'output', 'Output'
+    PROMPT = 'prompt', 'Prompt'
+    COMPLETE = 'complete', 'Complete'
+    ERROR = 'error', 'Error'
+
+
+class InteractiveRunSession(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    app = models.ForeignKey(App, on_delete=models.CASCADE, related_name='interactive_sessions')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='interactive_run_sessions',
+    )
+    command_kind = models.CharField(max_length=64, choices=InteractiveRunCommandKind.choices)
+    status = models.CharField(
+        max_length=32,
+        choices=InteractiveRunSessionStatus.choices,
+        default=InteractiveRunSessionStatus.PENDING,
+    )
+    manage_path = models.CharField(max_length=255, default='manage.py')
+    task_id = models.CharField(max_length=255, null=True, blank=True, db_index=True)
+    cancel_requested = models.BooleanField(default=False)
+    prompt_counter = models.PositiveIntegerField(default=0)
+    awaiting_prompt_id = models.CharField(max_length=64, null=True, blank=True)
+    awaiting_prompt_text = models.CharField(max_length=255, null=True, blank=True)
+    awaiting_prompt_secret = models.BooleanField(default=False)
+    pending_answer_prompt_id = models.CharField(max_length=64, null=True, blank=True)
+    pending_answer_ciphertext = models.BinaryField(null=True, blank=True)
+    pending_answer_received_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(db_index=True)
+    last_activity_at = models.DateTimeField(db_index=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f'{self.command_kind}:{self.app.name}'
+
+    class Meta:
+        db_table = 'interactive_run_sessions'
+        verbose_name = 'Interactive Run Session'
+        verbose_name_plural = 'Interactive Run Sessions'
+        indexes = [
+            models.Index(fields=['app', 'status'], name='idx_irs_app_status'),
+            models.Index(fields=['created_by', 'created_at'], name='idx_irs_user_created'),
+        ]
+
+
+class InteractiveRunEvent(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    session = models.ForeignKey(InteractiveRunSession, on_delete=models.CASCADE, related_name='events')
+    event_type = models.CharField(max_length=32, choices=InteractiveRunEventType.choices)
+    payload = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    def __str__(self):
+        return f'{self.event_type}:{self.session_id}:{self.id}'
+
+    class Meta:
+        db_table = 'interactive_run_events'
+        verbose_name = 'Interactive Run Event'
+        verbose_name_plural = 'Interactive Run Events'
+        indexes = [
+            models.Index(fields=['session', 'id'], name='idx_ire_session_id'),
+        ]
