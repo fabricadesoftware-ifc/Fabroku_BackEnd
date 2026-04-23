@@ -1,4 +1,7 @@
+import hashlib
+
 from django.conf import settings
+from django.core.cache import cache
 from django.db.models import Count
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
@@ -12,6 +15,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from core.adapters.utils.git_callback import set_auth_cookies
+from core.cache_versioning import ADMIN_USERS_LIST_CACHE_NAMESPACE, build_versioned_cache_key
 
 from .models import User
 from .serializers import UserAdminSerializer, UserRetrieveSerializer, UserSerializer
@@ -46,6 +50,21 @@ class UserViewSet(ModelViewSet):
             annotated_services_count=Count('projects__service__id', distinct=True),
         )
 
+    def _admin_list_cache_ttl(self) -> int:
+        return max(0, int(getattr(settings, 'ADMIN_USERS_LIST_CACHE_TTL', 30)))
+
+    def _admin_list_cache_suffix(self, request) -> str:
+        query_parts = []
+
+        for key in sorted(request.query_params.keys()):
+            if key == 'refresh':
+                continue
+            for value in request.query_params.getlist(key):
+                query_parts.append(f'{key}={value}')
+
+        raw_suffix = '&'.join(query_parts) or 'default'
+        return hashlib.sha256(raw_suffix.encode('utf-8')).hexdigest()[:16]
+
     @action(detail=False, methods=['get'], url_path='admin_list')
     def admin_list(self, request):
         """Lista todos os usuários (somente admin)."""
@@ -54,9 +73,27 @@ class UserViewSet(ModelViewSet):
                 {'error': 'Permissão negada'},
                 status=status.HTTP_403_FORBIDDEN,
             )
+
+        force_refresh = request.query_params.get('refresh') in {'1', 'true', 'True'}
+        cache_ttl = self._admin_list_cache_ttl()
+        cache_key = build_versioned_cache_key(
+            ADMIN_USERS_LIST_CACHE_NAMESPACE,
+            suffix=self._admin_list_cache_suffix(request),
+        )
+
+        if cache_ttl and not force_refresh:
+            cached_payload = cache.get(cache_key)
+            if cached_payload is not None:
+                return Response(cached_payload)
+
         queryset = self.filter_queryset(self._get_admin_queryset())
         serializer = UserAdminSerializer(queryset, many=True)
-        return Response(serializer.data)
+        payload = serializer.data
+
+        if cache_ttl:
+            cache.set(cache_key, payload, cache_ttl)
+
+        return Response(payload)
 
     @action(detail=True, methods=['post'], url_path='toggle_active')
     def toggle_active(self, request, pk=None):

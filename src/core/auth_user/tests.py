@@ -1,3 +1,6 @@
+from unittest.mock import patch
+
+from django.core.cache import cache
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rest_framework.test import APIClient, APITestCase
@@ -18,6 +21,7 @@ class UserAdminListTests(APITestCase):
             is_staff=True,
         )
         self.client.force_authenticate(user=self.superuser)
+        cache.clear()
 
     def test_admin_list_avoids_n_plus_one_on_quota_counts(self):
         tracked_users = []
@@ -96,3 +100,41 @@ class UserAdminListTests(APITestCase):
         self.superuser.refresh_from_db()
         self.assertTrue(self.superuser.is_superuser)
         self.assertTrue(self.superuser.is_staff)
+
+    def test_admin_list_uses_cache_when_nothing_changes(self):
+        User.objects.create_user(
+            email='cached-user@example.com',
+            password='senha123',
+            name='Cached User',
+        )
+
+        first_response = self.client.get('/api/auth/users/admin_list/')
+
+        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(len(first_response.data), 2)
+
+        with patch(
+            'core.auth_user.views.UserViewSet._get_admin_queryset',
+            side_effect=AssertionError('cache should satisfy the second request'),
+        ):
+            cached_response = self.client.get('/api/auth/users/admin_list/')
+
+        self.assertEqual(cached_response.status_code, 200)
+        self.assertEqual(len(cached_response.data), 2)
+
+    def test_admin_list_cache_is_invalidated_when_user_changes(self):
+        initial_response = self.client.get('/api/auth/users/admin_list/')
+
+        self.assertEqual(initial_response.status_code, 200)
+        self.assertEqual(len(initial_response.data), 1)
+
+        User.objects.create_user(
+            email='new-user-after-cache@example.com',
+            password='senha123',
+            name='New User After Cache',
+        )
+
+        refreshed_response = self.client.get('/api/auth/users/admin_list/')
+
+        self.assertEqual(refreshed_response.status_code, 200)
+        self.assertEqual(len(refreshed_response.data), 2)

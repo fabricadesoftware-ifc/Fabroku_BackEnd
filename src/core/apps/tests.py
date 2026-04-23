@@ -1,6 +1,7 @@
 import socket
 from unittest.mock import ANY, Mock, patch
 
+from django.core.cache import cache
 from django.db import connection
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
@@ -657,12 +658,15 @@ class StorageUsageTests(APITestCase):
             is_staff=True,
         )
         self.client.force_authenticate(user=self.superuser)
+        cache.clear()
 
     @patch('core.apps.admin_views.DokkuAdapter')
     def test_storage_usage_avoids_n_plus_one_when_resolving_apps(self, mock_dokku_cls):
         mock_dokku = Mock()
         mock_dokku.get_database_size.return_value = 1024
-        mock_dokku.app_links_for_service.side_effect = [f'app-storage-{index}' for index in range(5)]
+        mock_dokku.app_links_for_service.side_effect = (
+            lambda container_name: container_name.replace('db-', 'app-')
+        )
         mock_dokku_cls.return_value = mock_dokku
 
         for index in range(5):
@@ -700,6 +704,107 @@ class StorageUsageTests(APITestCase):
         self.assertEqual(len(response.data['services']), 5)
         self.assertTrue(all(service['app_name'].startswith('app-storage-') for service in response.data['services']))
         self.assertLessEqual(len(queries), 4)
+
+    @patch('core.apps.admin_views.DokkuAdapter')
+    def test_storage_usage_uses_cache_until_force_refresh(self, mock_dokku_cls):
+        mock_dokku = Mock()
+        mock_dokku.get_database_size.return_value = 2048
+        mock_dokku.app_links_for_service.return_value = 'app-storage-cache'
+        mock_dokku_cls.return_value = mock_dokku
+
+        owner = User.objects.create_user(
+            email='owner-storage-cache@example.com',
+            password='senha123',
+            name='Owner Storage Cache',
+        )
+        project = Project.objects.create(name='Projeto Storage Cache')
+        project.users.add(owner)
+        App.objects.create(
+            name='app-storage-cache',
+            name_dokku='app-storage-cache',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=project,
+            status='RUNNING',
+        )
+        Service.objects.create(
+            name='db-storage-cache',
+            user='postgres',
+            password='secret',
+            host='localhost',
+            port=5432,
+            app=None,
+            project=project,
+            service_type='postgres',
+            container_name='db-storage-cache',
+        )
+
+        first_response = self.client.get('/api/admin-api/storage-usage/')
+        second_response = self.client.get('/api/admin-api/storage-usage/')
+        refreshed_response = self.client.get('/api/admin-api/storage-usage/?refresh=1')
+
+        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(second_response.status_code, 200)
+        self.assertEqual(refreshed_response.status_code, 200)
+        self.assertEqual(mock_dokku_cls.call_count, 2)
+
+    @patch('core.apps.admin_views.DokkuAdapter')
+    def test_storage_usage_cache_is_invalidated_when_services_change(self, mock_dokku_cls):
+        mock_dokku = Mock()
+        mock_dokku.get_database_size.return_value = 4096
+        mock_dokku.app_links_for_service.side_effect = (
+            lambda container_name: container_name.replace('db-', 'app-')
+        )
+        mock_dokku_cls.return_value = mock_dokku
+
+        owner = User.objects.create_user(
+            email='owner-storage-invalid@example.com',
+            password='senha123',
+            name='Owner Storage Invalid',
+        )
+        project = Project.objects.create(name='Projeto Storage Invalid')
+        project.users.add(owner)
+        App.objects.create(
+            name='app-storage-invalid',
+            name_dokku='app-storage-invalid',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=project,
+            status='RUNNING',
+        )
+        Service.objects.create(
+            name='db-storage-invalid',
+            user='postgres',
+            password='secret',
+            host='localhost',
+            port=5432,
+            app=None,
+            project=project,
+            service_type='postgres',
+            container_name='db-storage-invalid',
+        )
+
+        first_response = self.client.get('/api/admin-api/storage-usage/')
+
+        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(len(first_response.data['services']), 1)
+
+        Service.objects.create(
+            name='db-storage-invalid-2',
+            user='postgres',
+            password='secret',
+            host='localhost',
+            port=5432,
+            app=None,
+            project=project,
+            service_type='postgres',
+            container_name='db-storage-invalid-2',
+        )
+
+        refreshed_response = self.client.get('/api/admin-api/storage-usage/')
+
+        self.assertEqual(refreshed_response.status_code, 200)
+        self.assertEqual(len(refreshed_response.data['services']), 2)
 
 
 @override_settings(BACKEND_URL='https://backend.example.com')

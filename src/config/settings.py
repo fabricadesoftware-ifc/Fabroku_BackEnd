@@ -219,7 +219,7 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 GITHUB_CLIENT_ID = os.getenv('GITHUB_CLIENT_ID')
 GITHUB_CLIENT_SECRET = os.getenv('GITHUB_CLIENT_SECRET')
 GITHUB_WEBHOOK_SECRET = os.getenv('GITHUB_WEBHOOK_SECRET')  # Opcional: para validar assinatura dos webhooks
-# TODO: Adicionar outras configurações conforme necessário falar com o eduardo amanhã
+
 DOKKU_SSH_KEY = os.getenv('DOKKU_SSH_KEY')
 DOKKU_SSH_USERNAME = os.getenv('DOKKU_SSH_USERNAME', 'dokku')
 DOKKU_SSH_HOST = os.getenv('DOKKU_SSH_HOST', '127.0.0.1')
@@ -227,11 +227,12 @@ DOKKU_SSH_PORT = int(os.getenv('DOKKU_SSH_PORT', 22))  # noqa: PLW1508
 GITHUB_REDIRECT_URI = os.getenv('GITHUB_REDIRECT_URI', 'http://localhost:8000/api/auth/github/callback')
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')  # noqa: PLW1508
 BACKEND_URL = os.getenv('BACKEND_URL', 'http://localhost:8000')  # URL pública do backend para webhooks
+ADMIN_STORAGE_USAGE_CACHE_TTL = int(os.getenv('ADMIN_STORAGE_USAGE_CACHE_TTL', 30))
+ADMIN_STORAGE_USAGE_MAX_WORKERS = int(os.getenv('ADMIN_STORAGE_USAGE_MAX_WORKERS', 6))
+ADMIN_USERS_LIST_CACHE_TTL = int(os.getenv('ADMIN_USERS_LIST_CACHE_TTL', 30))
 
 CELERY_TIMEZONE = 'America/Sao_Paulo'
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30 * 60
 CELERY_RESULT_BACKEND = 'django-db'
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
-
-print(DATABASES)
