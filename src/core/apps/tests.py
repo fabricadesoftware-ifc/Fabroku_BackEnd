@@ -10,6 +10,7 @@ from rest_framework.test import APIClient, APITestCase
 from core.adapters.dokku_mixins.dokku_apps import DokkuAppsMixin
 from core.adapters.dokku_mixins.dokku_config import DokkuConfigMixin
 from core.adapters.ssh import SSHAdapter
+from core.cache_versioning import APP_LAST_COMMIT_CACHE_NAMESPACE, get_cache_ttl
 from core.apps.mixins import AppMixin
 from core.apps.mixins.apps.create_app import CreateAppMixin
 from core.apps.mixins.apps.redeploy_app import RedeployAppMixin
@@ -107,6 +108,21 @@ class FakeRedeployDokkuAdapter:
 
     def enable_letsencrypt(self, app_name: str) -> str:
         return 'OK'
+
+
+class CacheVersioningTests(SimpleTestCase):
+    @override_settings(CACHE_TTL_DEFAULT=45)
+    def test_get_cache_ttl_uses_global_default_for_new_namespaces(self):
+        self.assertEqual(get_cache_ttl('future-cache-namespace'), 45)
+
+    @override_settings(CACHE_TTL_DEFAULT=45)
+    def test_get_cache_ttl_uses_inline_default_when_provided(self):
+        self.assertEqual(get_cache_ttl(APP_LAST_COMMIT_CACHE_NAMESPACE, default=300), 300)
+
+    @override_settings(CACHE_TTL_DEFAULT=45)
+    def test_get_cache_ttl_allows_namespace_env_override(self):
+        with patch.dict('os.environ', {'CACHE_TTL_APP_LAST_COMMIT': '120'}):
+            self.assertEqual(get_cache_ttl(APP_LAST_COMMIT_CACHE_NAMESPACE, default=300), 120)
 
 
 class DokkuConfigMixinTests(SimpleTestCase):
@@ -481,6 +497,84 @@ class RunCommandStatusEndpointTests(APITestCase):
         self.assertEqual(response.data['output'], 'No migrations to apply.')
         self.assertEqual(response.data['lines'], 1)
         self.assertEqual(response.data['current'], 100)
+
+
+class LastCommitEndpointTests(APITestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email='last-commit@example.com',
+            password='senha123',
+            name='Last Commit User',
+            git_token='token-last-commit',
+        )
+        self.project = Project.objects.create(name='Projeto Last Commit')
+        self.project.users.add(self.user)
+        self.app = App.objects.create(
+            name='app-last-commit',
+            name_dokku='app-last-commit',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=self.project,
+            status='RUNNING',
+            last_commit_sha='abc123def456',
+        )
+        self.client.force_authenticate(user=self.user)
+        cache.clear()
+
+    @patch('github.Github')
+    def test_last_commit_uses_cache_until_force_refresh(self, mock_github_cls):
+        commit_author = Mock(name='Commit Author')
+        commit_author.name = 'Fabroku Bot'
+        commit_author.date = Mock(isoformat=Mock(return_value='2026-04-22T12:00:00+00:00'))
+        commit = Mock()
+        commit.commit.message = 'feat: deploy app'
+        commit.commit.author = commit_author
+        commit.html_url = 'https://github.com/org/repo/commit/abc123def456'
+
+        repo = Mock()
+        repo.get_commit.return_value = commit
+        mock_github_cls.return_value.get_repo.return_value = repo
+
+        first_response = self.client.get(f'/api/apps/apps/{self.app.id}/last_commit/')
+        second_response = self.client.get(f'/api/apps/apps/{self.app.id}/last_commit/')
+        refreshed_response = self.client.get(f'/api/apps/apps/{self.app.id}/last_commit/?refresh=1')
+
+        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(second_response.status_code, 200)
+        self.assertEqual(refreshed_response.status_code, 200)
+        self.assertEqual(first_response.data['sha'], 'abc123def456')
+        self.assertEqual(repo.get_commit.call_count, 2)
+        self.assertEqual(mock_github_cls.call_count, 2)
+
+    @patch('github.Github')
+    def test_last_commit_cache_is_invalidated_when_sha_changes(self, mock_github_cls):
+        def make_commit(sha, message):
+            commit_author = Mock(name=f'Author {sha}')
+            commit_author.name = 'Fabroku Bot'
+            commit_author.date = Mock(isoformat=Mock(return_value='2026-04-22T12:00:00+00:00'))
+            commit = Mock()
+            commit.commit.message = message
+            commit.commit.author = commit_author
+            commit.html_url = f'https://github.com/org/repo/commit/{sha}'
+            return commit
+
+        repo = Mock()
+        repo.get_commit.side_effect = lambda sha: make_commit(sha, f'commit {sha}')
+        mock_github_cls.return_value.get_repo.return_value = repo
+
+        first_response = self.client.get(f'/api/apps/apps/{self.app.id}/last_commit/')
+
+        self.app.last_commit_sha = 'def789ghi012'
+        self.app.save(update_fields=['last_commit_sha'])
+
+        second_response = self.client.get(f'/api/apps/apps/{self.app.id}/last_commit/')
+
+        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(second_response.status_code, 200)
+        self.assertEqual(first_response.data['sha'], 'abc123def456')
+        self.assertEqual(second_response.data['sha'], 'def789ghi012')
+        self.assertEqual(repo.get_commit.call_count, 2)
 
 
 class AppVisibilityTests(APITestCase):

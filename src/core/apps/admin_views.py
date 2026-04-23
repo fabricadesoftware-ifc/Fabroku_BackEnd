@@ -11,7 +11,11 @@ from rest_framework.response import Response
 
 from core.adapters import DokkuAdapter
 from core.apps.models import App, Service
-from core.cache_versioning import ADMIN_STORAGE_USAGE_CACHE_NAMESPACE, build_versioned_cache_key
+from core.cache_versioning import (
+    ADMIN_STORAGE_USAGE_CACHE_NAMESPACE,
+    build_versioned_cache_key,
+    get_cache_ttl,
+)
 
 
 def _format_size(bytes_val: int) -> str:
@@ -23,11 +27,6 @@ def _format_size(bytes_val: int) -> str:
             return f'{bytes_val:.1f} {unit}'
         bytes_val /= 1024
     return f'{bytes_val:.1f} PB'
-
-
-def _storage_usage_cache_ttl() -> int:
-    return max(0, int(getattr(settings, 'ADMIN_STORAGE_USAGE_CACHE_TTL', 30)))
-
 
 def _storage_usage_max_workers(total_services: int) -> int:
     configured = max(1, int(getattr(settings, 'ADMIN_STORAGE_USAGE_MAX_WORKERS', 6)))
@@ -83,7 +82,7 @@ def storage_usage(request):
         return Response({'error': 'Sem permissao'}, status=403)
 
     force_refresh = request.query_params.get('refresh') in {'1', 'true', 'True'}
-    cache_ttl = _storage_usage_cache_ttl()
+    cache_ttl = get_cache_ttl(ADMIN_STORAGE_USAGE_CACHE_NAMESPACE)
     cache_key = build_versioned_cache_key(ADMIN_STORAGE_USAGE_CACHE_NAMESPACE)
 
     if cache_ttl and not force_refresh:

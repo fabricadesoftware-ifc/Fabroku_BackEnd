@@ -2,6 +2,7 @@ import logging
 
 from celery.result import AsyncResult
 from django.conf import settings
+from django.core.cache import cache
 from django.db.models import Prefetch, Q
 from drf_spectacular.utils import extend_schema
 from rest_framework import serializers as drf_serializers
@@ -15,6 +16,7 @@ from core.adapters import GitHubAdapter
 from core.apps.mixins import AppMixin
 from core.apps.mixins.apps.run_command import ALLOWED_COMMANDS, ALLOWED_PREFIXES, is_command_allowed
 from core.auth_user.models import User
+from core.cache_versioning import APP_LAST_COMMIT_CACHE_NAMESPACE, build_versioned_cache_key, get_cache_ttl
 from core.logs.models import AppLogManager, LogCategory
 
 from .models import App, Service
@@ -732,38 +734,59 @@ class AppViewSet(ModelViewSet):
         if not app.last_commit_sha:
             return Response({'error': 'Nenhum commit deployado ainda.'}, status=status.HTTP_404_NOT_FOUND)
 
+        force_refresh = request.query_params.get('refresh') in {'1', 'true', 'True'}
+        cache_ttl = get_cache_ttl(APP_LAST_COMMIT_CACHE_NAMESPACE, default=300)
+        cache_key = build_versioned_cache_key(
+            APP_LAST_COMMIT_CACHE_NAMESPACE,
+            suffix=f'app-{app.id}-sha-{app.last_commit_sha}',
+        )
+
+        if cache_ttl and not force_refresh:
+            cached_payload = cache.get(cache_key)
+            if cached_payload is not None:
+                return Response(cached_payload)
+
         user = app.project.users.exclude(git_token__isnull=True).exclude(git_token='').first()
         if not user:
-            return Response(
-                {'sha': app.last_commit_sha[:7], 'message': 'Sem token GitHub disponível para detalhes.'},
-                status=status.HTTP_200_OK,
-            )
+            payload = {'sha': app.last_commit_sha[:7], 'message': 'Sem token GitHub disponível para detalhes.'}
+            if cache_ttl:
+                cache.set(cache_key, payload, cache_ttl)
+            return Response(payload, status=status.HTTP_200_OK)
 
         try:
             from github import Github  # noqa: PLC0415
 
             repo_name = app.git.rsplit('.com/', maxsplit=1)[-1].replace('.git', '') if '.com/' in app.git else None
             if not repo_name:
-                return Response({'sha': app.last_commit_sha[:7], 'error': 'Não foi possível extrair repo da URL.'})
+                payload = {'sha': app.last_commit_sha[:7], 'error': 'Não foi possível extrair repo da URL.'}
+                if cache_ttl:
+                    cache.set(cache_key, payload, cache_ttl)
+                return Response(payload)
 
             gh = Github(user.git_token)
             repo = gh.get_repo(repo_name)
             commit = repo.get_commit(app.last_commit_sha)
 
-            return Response({
+            payload = {
                 'sha': app.last_commit_sha,
                 'sha_short': app.last_commit_sha[:7],
                 'message': commit.commit.message,
                 'author': commit.commit.author.name or 'Unknown',
                 'date': commit.commit.author.date.isoformat() if commit.commit.author.date else None,
                 'url': commit.html_url,
-            })
+            }
+            if cache_ttl:
+                cache.set(cache_key, payload, cache_ttl)
+            return Response(payload)
         except Exception as e:
-            return Response({
+            payload = {
                 'sha': app.last_commit_sha,
                 'sha_short': app.last_commit_sha[:7],
                 'error': str(e),
-            })
+            }
+            if cache_ttl:
+                cache.set(cache_key, payload, cache_ttl)
+            return Response(payload)
 
 
 @extend_schema(tags=['services'])

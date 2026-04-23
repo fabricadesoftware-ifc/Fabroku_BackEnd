@@ -227,9 +227,9 @@ DOKKU_SSH_PORT = int(os.getenv('DOKKU_SSH_PORT', 22))  # noqa: PLW1508
 GITHUB_REDIRECT_URI = os.getenv('GITHUB_REDIRECT_URI', 'http://localhost:8000/api/auth/github/callback')
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')  # noqa: PLW1508
 BACKEND_URL = os.getenv('BACKEND_URL', 'http://localhost:8000')  # URL pública do backend para webhooks
-ADMIN_STORAGE_USAGE_CACHE_TTL = int(os.getenv('ADMIN_STORAGE_USAGE_CACHE_TTL', 30))
+CACHE_TTL_DEFAULT = int(os.getenv('CACHE_TTL_DEFAULT', 60))
+# Caches especificos podem sobrescrever esse valor com env vars no formato CACHE_TTL_<NAMESPACE>.
 ADMIN_STORAGE_USAGE_MAX_WORKERS = int(os.getenv('ADMIN_STORAGE_USAGE_MAX_WORKERS', 6))
-ADMIN_USERS_LIST_CACHE_TTL = int(os.getenv('ADMIN_USERS_LIST_CACHE_TTL', 30))
 
 CELERY_TIMEZONE = 'America/Sao_Paulo'
 CELERY_TASK_TRACK_STARTED = True

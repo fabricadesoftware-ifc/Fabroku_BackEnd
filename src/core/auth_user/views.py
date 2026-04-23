@@ -15,7 +15,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from core.adapters.utils.git_callback import set_auth_cookies
-from core.cache_versioning import ADMIN_USERS_LIST_CACHE_NAMESPACE, build_versioned_cache_key
+from core.cache_versioning import ADMIN_USERS_LIST_CACHE_NAMESPACE, build_versioned_cache_key, get_cache_ttl
 
 from .models import User
 from .serializers import UserAdminSerializer, UserRetrieveSerializer, UserSerializer
@@ -50,9 +50,6 @@ class UserViewSet(ModelViewSet):
             annotated_services_count=Count('projects__service__id', distinct=True),
         )
 
-    def _admin_list_cache_ttl(self) -> int:
-        return max(0, int(getattr(settings, 'ADMIN_USERS_LIST_CACHE_TTL', 30)))
-
     def _admin_list_cache_suffix(self, request) -> str:
         query_parts = []
 
@@ -75,7 +72,7 @@ class UserViewSet(ModelViewSet):
             )
 
         force_refresh = request.query_params.get('refresh') in {'1', 'true', 'True'}
-        cache_ttl = self._admin_list_cache_ttl()
+        cache_ttl = get_cache_ttl(ADMIN_USERS_LIST_CACHE_NAMESPACE)
         cache_key = build_versioned_cache_key(
             ADMIN_USERS_LIST_CACHE_NAMESPACE,
             suffix=self._admin_list_cache_suffix(request),
