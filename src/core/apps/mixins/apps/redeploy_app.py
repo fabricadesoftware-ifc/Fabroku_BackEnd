@@ -34,6 +34,25 @@ def https_to_auth_url(url: str, token: str) -> str:
         return f'https://x-access-token:{token}@github.com/{match.group(1)}'
     return url
 
+
+def _dokku_output_failed(output: str) -> bool:
+    output_lower = (output or '').lower()
+    return any(
+        marker in output_lower
+        for marker in (
+            'failed',
+            'failed to execute command',
+            'ssh command timeout',
+            'ssh connection error',
+        )
+    )
+
+
+def _raise_for_dokku_output(output: str, operation: str):
+    if _dokku_output_failed(output):
+        raise RuntimeError(f'{operation} falhou: {output}')
+
+
 class RedeployAppMixin:
     """Mixin para redeploy de aplicações via webhook."""
 
@@ -101,12 +120,25 @@ class RedeployAppMixin:
             for svc in Service.objects.filter(app=app):
                 if svc.container_name and svc.service_type == 'postgres':
                     try:
-                        dokku_adapter.start_database(svc.container_name)
+                        start_output = dokku_adapter.start_database(svc.container_name)
+                        logger.dokku(
+                            start_output,
+                            command=f'dokku postgres:start {svc.container_name}',
+                            category=LogCategory.DATABASE,
+                            progress=3,
+                        )
                     except Exception:
                         pass
 
             # Verifica se o app existe no Dokku
-            if not dokku_adapter.exists_app(dokku_app_name):
+            app_exists = dokku_adapter.exists_app(dokku_app_name)
+            logger.dokku(
+                'App encontrado no Dokku.' if app_exists else 'App nao encontrado no Dokku.',
+                command='dokku apps:list',
+                category=LogCategory.DEPLOY,
+                progress=4,
+            )
+            if not app_exists:
                 logger.error(f'App {dokku_app_name} não existe no Dokku', category=LogCategory.DEPLOY)
                 app.status = 'ERROR'
                 app.save(update_fields=['status'])
@@ -119,7 +151,17 @@ class RedeployAppMixin:
                     meta={'current': 5, 'total': 100, 'status': 'Sincronizando variáveis de ambiente...'},
                 )
                 logger.info('Aplicando variáveis de ambiente atualizadas...', category=LogCategory.CONFIG, progress=5)
-                dokku_adapter.set_config(app_name=dokku_app_name, env_vars=app.variables, no_restart=True)
+                config_output = dokku_adapter.set_config(app_name=dokku_app_name, env_vars=app.variables, no_restart=True)
+                logger.dokku(
+                    config_output,
+                    command=(
+                        f'dokku config:set --no-restart {dokku_app_name} '
+                        f'[vars: {", ".join(app.variables.keys())}]'
+                    ),
+                    category=LogCategory.CONFIG,
+                    progress=5,
+                )
+                _raise_for_dokku_output(config_output, 'config:set')
 
             task.update_state(
                 state='PROGRESS',

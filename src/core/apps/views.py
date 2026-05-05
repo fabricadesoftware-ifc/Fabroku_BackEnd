@@ -389,46 +389,6 @@ class AppViewSet(ModelViewSet):
             return Response({'state': 'UNKNOWN', 'status': 'Nenhuma task vinculada.'})
 
         task_result = AsyncResult(app.task_id)
-
-        response_data = {
-            'task_id': app.task_id,
-            'state': task_result.state,  # PENDING, PROGRESS, SUCCESS, FAILURE
-        }
-
-        if task_result.state == 'PROGRESS':
-            response_data.update(task_result.info)
-
-        elif task_result.state == 'SUCCESS':
-            response_data['status'] = 'Aplicação criada com sucesso!'
-            response_data['current'] = 100
-
-        elif task_result.state == 'FAILURE':
-            # Retorna erro persistido no App
-            response_data['status'] = app.error_details or str(task_result.result)
-            if app.error_type:
-                response_data['error_type'] = app.error_type
-            if app.error_details:
-                response_data['error_details'] = app.error_details
-            if app.help_url:
-                response_data['help_url'] = app.help_url
-            # Compatibilidade: deploy_keys_disabled legacy
-            if app.error_type == 'DeployKeysDisabled':
-                response_data['deploy_keys_disabled'] = True
-
-        elif task_result.state == 'REVOKED':
-            response_data['status'] = 'OperaÃ§Ã£o cancelada pelo usuÃ¡rio.'
-            response_data['current'] = 100
-
-        return Response(response_data)
-
-    @action(detail=True, methods=['get'])
-    def get_app_status(self, request, pk=None):
-        app = self.get_object()
-
-        if not app.task_id:
-            return Response({'state': 'UNKNOWN', 'status': 'Nenhuma task vinculada.'})
-
-        task_result = AsyncResult(app.task_id)
         response_data = {
             'task_id': app.task_id,
             'state': task_result.state,

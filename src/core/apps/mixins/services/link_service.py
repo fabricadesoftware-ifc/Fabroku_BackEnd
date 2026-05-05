@@ -4,7 +4,7 @@ from typing import cast
 from celery import Task, shared_task
 
 from core.adapters import DokkuAdapter
-from core.apps.mixins.apps.manage_app import ManageAppMixin
+from core.apps.mixins.services.database_url import sync_database_url_from_dokku
 from core.apps.models import App, Service
 from core.logs.models import AppLogManager, LogCategory
 
@@ -80,9 +80,6 @@ class LinkServiceMixin:
                 progress=50,
             )
 
-            restart_output = ManageAppMixin.manage_app_task.delay(app_id=app.pk, action='restart').get()
-            logger.dokku(restart_output, category=LogCategory.DEPLOY, progress=60)
-
             if 'already linked' not in link_output.lower():
                 _check_dokku_output(link_output, 'postgres:link')
 
@@ -91,22 +88,29 @@ class LinkServiceMixin:
                 meta={'current': 70, 'total': 100, 'status': 'Sincronizando variaveis...'},
             )
 
-            database_url = dokku_adapter.get_config(app.name_dokku, 'DATABASE_URL')
-            if database_url and 'failed' not in database_url.lower():
-                app.variables = dict(app.variables or {})
-                app.variables['DATABASE_URL'] = database_url
-                app.save(update_fields=['variables'])
-                logger.info(
-                    'DATABASE_URL adicionada as variaveis do app',
-                    category=LogCategory.CONFIG,
-                    progress=80,
-                )
-
+            sync_database_url_from_dokku(
+                app=app,
+                dokku_adapter=dokku_adapter,
+                logger=logger,
+                progress=80,
+            )
             service.app = app
             service.save(update_fields=['app'])
 
             dokku_adapter.start_database(dokku_service_name)
             time.sleep(2)
+
+            task.update_state(
+                state='PROGRESS',
+                meta={'current': 90, 'total': 100, 'status': 'Reiniciando app para aplicar DATABASE_URL...'},
+            )
+            restart_output = dokku_adapter.restart_app(app.name_dokku)
+            logger.dokku(
+                restart_output,
+                command=f'ps:restart {app.name_dokku}',
+                category=LogCategory.DEPLOY,
+                progress=90,
+            )
 
             logger.success(
                 f'Servico vinculado ao app {app.name} com sucesso!',

@@ -112,6 +112,9 @@ class FakeRedeployDokkuAdapter:
     def get_apps(self) -> str:
         return self.app_list_output
 
+    def exists_app(self, app_name: str) -> bool:
+        return True
+
     def set_config(self, **kwargs):
         self.set_config_calls.append(kwargs)
         return self.set_config_output
@@ -670,9 +673,8 @@ class EnvVarFlowTests(TestCase):
 
 
 class LinkServiceMixinTests(TestCase):
-    @patch('core.apps.mixins.services.link_service.ManageAppMixin.manage_app_task.delay')
     @patch('core.apps.mixins.services.link_service.DokkuAdapter')
-    def test_link_service_allows_unlinked_service_without_none_id_error(self, mock_dokku_cls, mock_restart_delay):
+    def test_link_service_allows_unlinked_service_without_none_id_error(self, mock_dokku_cls):
         user = User.objects.create_user(email='link@example.com', password='senha123', name='Link User')
         project = Project.objects.create(name='Projeto Link')
         project.users.add(user)
@@ -700,8 +702,8 @@ class LinkServiceMixinTests(TestCase):
         mock_dokku.link_database.return_value = 'already linked'
         mock_dokku.get_config.return_value = 'postgres://db-link-teste'
         mock_dokku.start_database.return_value = 'OK'
+        mock_dokku.restart_app.return_value = 'restart ok'
         mock_dokku_cls.return_value = mock_dokku
-        mock_restart_delay.return_value.get.return_value = 'restart ok'
 
         task = AppMixin.link_service
         with patch.object(task, 'update_state'):
@@ -713,6 +715,8 @@ class LinkServiceMixinTests(TestCase):
         app.refresh_from_db()
         self.assertEqual(service.app_id, app.id)
         self.assertEqual(app.variables['DATABASE_URL'], 'postgres://db-link-teste')
+        self.assertEqual(app.task_id, 'task-link-123')
+        mock_dokku.restart_app.assert_called_once_with(app.name_dokku)
 
 
 class RunCommandTests(TestCase):
