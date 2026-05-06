@@ -170,6 +170,16 @@ class InteractiveRunValidationTests(SimpleTestCase):
             ('Name: ', 'name', False),
             ('Password: ', 'password', True),
             ('Password (again): ', 'password_confirmation', True),
+            (
+                'Bypass password validation and create user anyway? [y/N]: ',
+                'password_validation_bypass',
+                False,
+            ),
+            (
+                'Ignorar validação de senha e criar usuário mesmo assim? [s/N]: ',
+                'password_validation_bypass',
+                False,
+            ),
         ]
 
         for prompt_text, prompt_key, is_secret in samples:

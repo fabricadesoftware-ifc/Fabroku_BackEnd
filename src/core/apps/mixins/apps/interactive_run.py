@@ -17,7 +17,6 @@ from django.db import transaction
 from django.utils import timezone
 
 from core.adapters import DokkuAdapter
-from core.apps.mixins.apps.run_data import _start_linked_postgres
 from core.apps.models import (
     App,
     InteractiveRunCommandKind,
@@ -78,6 +77,18 @@ class DjangoCreatesuperuserDriver:
             label='Name',
             secret=False,
             pattern=re.compile(r'((?:name|nome)\s*:\s*)$', re.IGNORECASE),
+        ),
+        InteractivePromptSpec(
+            key='password_validation_bypass',
+            label='Bypass password validation',
+            secret=False,
+            pattern=re.compile(
+                r'((?=[^\n]*(?:bypass|ignorar|desconsiderar))'
+                r'(?=[^\n]*(?:password|senha))'
+                r'(?=[^\n]*(?:validation|valida(?:ç|c)[aã]o))'
+                r'(?=[^\n]*\[(?:y|s)/N\])[^\n]*:\s*)$',
+                re.IGNORECASE,
+            ),
         ),
         InteractivePromptSpec(
             key='password_confirmation',
@@ -505,7 +516,6 @@ class InteractiveRunMixin:
         )
 
         try:
-            _start_linked_postgres(app, dokku_adapter, logger)
             exit_status = _run_interactive_command_loop(session, driver, dokku_adapter, logger)
             if exit_status != 0:
                 raise RuntimeError(f'Comando interativo finalizado com codigo {exit_status}.')

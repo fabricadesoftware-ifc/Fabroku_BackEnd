@@ -1,5 +1,4 @@
 import shlex
-import time
 from datetime import timedelta
 from pathlib import PurePosixPath
 from typing import cast
@@ -9,7 +8,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from core.adapters import DokkuAdapter
-from core.apps.models import App, AppRunArtifact, AppRunArtifactKind, Service
+from core.apps.models import App, AppRunArtifact, AppRunArtifactKind
 from core.logs.models import AppLogManager, LogCategory
 
 ARTIFACT_TTL_HOURS = 24
@@ -91,39 +90,6 @@ def command_output_failed(output: str) -> bool:
     )
 
 
-def _start_linked_postgres(app: App, dokku_adapter: DokkuAdapter, logger: AppLogManager):
-    linked_services = list(Service.objects.filter(app=app))
-    for svc in linked_services:
-        if svc.container_name and svc.service_type == 'postgres':
-            out = dokku_adapter.start_database(svc.container_name)
-            if 'failed' in out.lower():
-                if 'sethostname' in out.lower() or 'invalid argument' in out.lower():
-                    logger.info(
-                        'Container travado por hostname invalido (runc), removendo...',
-                        category=LogCategory.SYSTEM,
-                        progress=5,
-                    )
-                    dokku_adapter.remove_postgres_container(svc.container_name)
-                    time.sleep(2)
-                    out = dokku_adapter.start_database(svc.container_name)
-                elif 'already in use' in out.lower() or 'conflict' in out.lower():
-                    logger.info(
-                        'Container em conflito, tentando postgres:stop antes de start...',
-                        category=LogCategory.SYSTEM,
-                        progress=5,
-                    )
-                    dokku_adapter.stop_database(svc.container_name)
-                    time.sleep(2)
-                    out = dokku_adapter.start_database(svc.container_name)
-                if 'failed' in out.lower():
-                    logger.warning(
-                        f'postgres:start {svc.container_name} retornou erro: {out}',
-                        category=LogCategory.SYSTEM,
-                        progress=5,
-                    )
-            time.sleep(3)
-
-
 class RunDataMixin:
     """Tasks para import/export de dados Django via CLI."""
 
@@ -155,7 +121,6 @@ class RunDataMixin:
 
         try:
             fixture_text = bytes(artifact.content).decode('utf-8')
-            _start_linked_postgres(app, dokku_adapter, logger)
 
             task.update_state(
                 state='PROGRESS',
@@ -238,7 +203,6 @@ class RunDataMixin:
         command = build_dumpdata_command(manage_path, dump_args)
 
         try:
-            _start_linked_postgres(app, dokku_adapter, logger)
             task.update_state(
                 state='PROGRESS',
                 meta={'current': 10, 'total': 100, 'status': 'Gerando dumpdata no container'},
