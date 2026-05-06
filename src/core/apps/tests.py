@@ -378,6 +378,31 @@ class InteractiveRunEndpointTests(APITestCase):
         self.assertIn('event: complete', streamed_content)
         self.assertIn('Superusuario criado com sucesso.', streamed_content)
 
+    def test_events_endpoint_accepts_sse_accept_header(self):
+        session = InteractiveRunSession.objects.create(
+            app=self.app,
+            created_by=self.user,
+            command_kind=InteractiveRunCommandKind.DJANGO_CREATESUPERUSER,
+            status=InteractiveRunSessionStatus.COMPLETED,
+            manage_path='manage.py',
+            completed_at=timezone.now(),
+            expires_at=timezone.now() + timedelta(minutes=5),
+            last_activity_at=timezone.now(),
+        )
+        InteractiveRunEvent.objects.create(
+            session=session,
+            event_type=InteractiveRunEventType.COMPLETE,
+            payload={'message': 'Superusuario criado com sucesso.'},
+        )
+
+        response = self.client.get(
+            f'/api/apps/apps/{self.app.id}/interactive_sessions/{session.id}/events/',
+            HTTP_ACCEPT='text/event-stream',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'text/event-stream')
+
     def test_other_user_cannot_access_foreign_session(self):
         session = InteractiveRunSession.objects.create(
             app=self.app,

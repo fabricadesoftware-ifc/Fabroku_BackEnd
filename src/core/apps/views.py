@@ -16,6 +16,7 @@ from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.renderers import BaseRenderer, JSONRenderer
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
@@ -54,6 +55,21 @@ from .models import (
 from .serializers import AppSerializer, ServiceSerializer
 
 logger = logging.getLogger(__name__)
+
+
+class ServerSentEventRenderer(BaseRenderer):
+    """Renderer usado apenas para liberar content negotiation de streams SSE."""
+
+    media_type = 'text/event-stream'
+    format = 'event-stream'
+    charset = 'utf-8'
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        if data is None:
+            return b''
+        if isinstance(data, bytes):
+            return data
+        return json.dumps(data).encode(self.charset)
 
 
 def _has_global_access(user) -> bool:
@@ -620,7 +636,12 @@ class AppViewSet(ModelViewSet):
         payload['task_id'] = task_result.id
         return Response(payload, status=status.HTTP_202_ACCEPTED)
 
-    @action(detail=True, methods=['get'], url_path=r'interactive_sessions/(?P<session_id>[^/.]+)/events')
+    @action(
+        detail=True,
+        methods=['get'],
+        url_path=r'interactive_sessions/(?P<session_id>[^/.]+)/events',
+        renderer_classes=[ServerSentEventRenderer, JSONRenderer],
+    )
     def interactive_session_events(self, request, pk=None, session_id=None):
         """Stream SSE com eventos da sessao interativa."""
         app = self.get_object()
