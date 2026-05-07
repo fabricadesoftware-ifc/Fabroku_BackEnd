@@ -512,6 +512,33 @@ class InteractiveRunTaskTests(TestCase):
         self.assertTrue(session.events.filter(event_type=InteractiveRunEventType.COMPLETE).exists())
         self.assertFalse(any('123123Admin' in str(event.payload) for event in session.events.all()))
 
+    def test_run_interactive_session_suppresses_echoes_and_redacts_sensitive_output(self):
+        result, session, channel = self._run_task_with_script(
+            [
+                'Email address: ',
+                'admin@example.com\nName: ',
+                'Admin\nPassword: ',
+                'pass: 123123Admin and userrrr: admin@example.com\nPassword (again): ',
+                'Superuser created successfully.\n',
+            ],
+            ['admin@example.com', 'Admin', '123123Admin', '123123Admin'],
+        )
+
+        self.assertEqual(result['status'], 'success')
+        self.assertEqual(channel.written_inputs, ['admin@example.com', 'Admin', '123123Admin', '123123Admin'])
+
+        output_messages = [
+            event.payload['message']
+            for event in session.events.filter(event_type=InteractiveRunEventType.OUTPUT).order_by('id')
+        ]
+        self.assertNotIn('admin@example.com', output_messages)
+        self.assertNotIn('Admin', output_messages)
+        self.assertIn('[conteudo sensivel ocultado]', output_messages)
+        self.assertFalse(any('123123Admin' in message for message in output_messages))
+
+        complete_event = session.events.get(event_type=InteractiveRunEventType.COMPLETE)
+        self.assertTrue(complete_event.payload['silent'])
+
     def test_run_interactive_session_handles_validation_message_and_reprompt(self):
         result, session, channel = self._run_task_with_script(
             [

@@ -29,6 +29,12 @@ from core.logs.models import AppLogManager, LogCategory
 
 INTERACTIVE_RUN_POLL_INTERVAL = 0.2
 INTERACTIVE_RUN_OUTPUT_CHUNK_SIZE = 4096
+INTERACTIVE_SUCCESS_MARKERS = (
+    'superuser created successfully',
+    'superusuario criado com sucesso',
+    'superusuário criado com sucesso',
+)
+SENSITIVE_OUTPUT_REDACTION = '[conteudo sensivel ocultado]'
 TERMINAL_SESSION_STATUSES = {
     InteractiveRunSessionStatus.COMPLETED,
     InteractiveRunSessionStatus.FAILED,
@@ -352,17 +358,40 @@ def _normalize_terminal_output(text: str) -> str:
     return text.replace('\r\n', '\n').replace('\r', '\n')
 
 
-def _emit_output_lines(session: InteractiveRunSession, text: str, logger: AppLogManager, *, category: str):
+def _emit_output_lines(
+    session: InteractiveRunSession,
+    text: str,
+    logger: AppLogManager,
+    *,
+    category: str,
+    suppressed_echoes: set[str] | None = None,
+    sensitive_values: set[str] | None = None,
+    output_state: dict | None = None,
+):
+    suppressed_echoes = suppressed_echoes or set()
+    sensitive_values = sensitive_values or set()
+
     for line in text.split('\n'):
         normalized_line = line.strip()
         if not normalized_line:
             continue
+
+        if normalized_line in suppressed_echoes:
+            continue
+
+        safe_line = normalized_line
+        if any(secret and secret in normalized_line for secret in sensitive_values):
+            safe_line = SENSITIVE_OUTPUT_REDACTION
+
+        if output_state is not None and any(marker in safe_line.lower() for marker in INTERACTIVE_SUCCESS_MARKERS):
+            output_state['saw_success_output'] = True
+
         _create_session_event(
             session,
             InteractiveRunEventType.OUTPUT,
-            {'message': normalized_line},
+            {'message': safe_line},
         )
-        logger.dokku(normalized_line, category=category)
+        logger.dokku(safe_line, category=category)
 
 
 def _flush_output_buffer(
@@ -370,12 +399,24 @@ def _flush_output_buffer(
     buffer: str,
     driver,
     logger: AppLogManager,
+    *,
+    suppressed_echoes: set[str],
+    sensitive_values: set[str],
+    output_state: dict,
 ) -> str:
     prompt_match = driver.match_prompt(buffer)
     if prompt_match is not None:
         output_before_prompt = buffer[:prompt_match.start]
         if output_before_prompt:
-            _emit_output_lines(session, output_before_prompt, logger, category=driver.log_category)
+            _emit_output_lines(
+                session,
+                output_before_prompt,
+                logger,
+                category=driver.log_category,
+                suppressed_echoes=suppressed_echoes,
+                sensitive_values=sensitive_values,
+                output_state=output_state,
+            )
         _set_session_prompt(str(session.id), prompt_match)
         return buffer[prompt_match.end :]
 
@@ -384,7 +425,15 @@ def _flush_output_buffer(
 
     lines = buffer.split('\n')
     trailing_fragment = lines.pop()
-    _emit_output_lines(session, '\n'.join(lines), logger, category=driver.log_category)
+    _emit_output_lines(
+        session,
+        '\n'.join(lines),
+        logger,
+        category=driver.log_category,
+        suppressed_echoes=suppressed_echoes,
+        sensitive_values=sensitive_values,
+        output_state=output_state,
+    )
     return trailing_fragment
 
 
@@ -426,6 +475,9 @@ def _run_interactive_command_loop(
     full_command = f'run {session.app.name_dokku} {command}'
     client, stdin, stdout, _stderr = _open_interactive_command(dokku_adapter, full_command)
     buffer = ''
+    output_state = {'saw_success_output': False}
+    sensitive_values: set[str] = set()
+    suppressed_echoes: set[str] = set()
 
     try:
         while True:
@@ -442,11 +494,24 @@ def _run_interactive_command_loop(
 
             if output:
                 buffer = _normalize_terminal_output(buffer + output)
-                buffer = _flush_output_buffer(session, buffer, driver, logger)
+                buffer = _flush_output_buffer(
+                    session,
+                    buffer,
+                    driver,
+                    logger,
+                    suppressed_echoes=suppressed_echoes,
+                    sensitive_values=sensitive_values,
+                    output_state=output_state,
+                )
 
             if control_state.status == InteractiveRunSessionStatus.AWAITING_INPUT:
                 answer = _consume_interactive_session_answer(str(session.id))
                 if answer is not None:
+                    stripped_answer = answer.strip()
+                    if stripped_answer:
+                        suppressed_echoes.add(stripped_answer)
+                        if control_state.awaiting_prompt_secret:
+                            sensitive_values.add(stripped_answer)
                     stdin.write(answer + '\n')
                     stdin.flush()
 
@@ -454,16 +519,32 @@ def _run_interactive_command_loop(
                 trailing_output = _read_channel_output(stdout.channel)
                 if trailing_output:
                     buffer = _normalize_terminal_output(buffer + trailing_output)
-                    buffer = _flush_output_buffer(session, buffer, driver, logger)
+                    buffer = _flush_output_buffer(
+                        session,
+                        buffer,
+                        driver,
+                        logger,
+                        suppressed_echoes=suppressed_echoes,
+                        sensitive_values=sensitive_values,
+                        output_state=output_state,
+                    )
 
                 if buffer.strip():
-                    _emit_output_lines(session, buffer, logger, category=driver.log_category)
+                    _emit_output_lines(
+                        session,
+                        buffer,
+                        logger,
+                        category=driver.log_category,
+                        suppressed_echoes=suppressed_echoes,
+                        sensitive_values=sensitive_values,
+                        output_state=output_state,
+                    )
                     buffer = ''
                 break
 
             time.sleep(INTERACTIVE_RUN_POLL_INTERVAL)
 
-        return stdout.channel.recv_exit_status()
+        return stdout.channel.recv_exit_status(), output_state
     finally:
         try:
             stdin.close()
@@ -516,7 +597,7 @@ class InteractiveRunMixin:
         )
 
         try:
-            exit_status = _run_interactive_command_loop(session, driver, dokku_adapter, logger)
+            exit_status, output_state = _run_interactive_command_loop(session, driver, dokku_adapter, logger)
             if exit_status != 0:
                 raise RuntimeError(f'Comando interativo finalizado com codigo {exit_status}.')
 
@@ -524,7 +605,10 @@ class InteractiveRunMixin:
                 str(session.id),
                 InteractiveRunSessionStatus.COMPLETED,
                 InteractiveRunEventType.COMPLETE,
-                {'message': 'Superusuario criado com sucesso.'},
+                {
+                    'message': 'Superusuario criado com sucesso.',
+                    'silent': bool(output_state.get('saw_success_output')),
+                },
             )
             logger.success(
                 'Sessao interativa concluida com sucesso.',
