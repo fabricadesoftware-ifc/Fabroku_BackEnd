@@ -1089,8 +1089,8 @@ class ServiceViewSet(ModelViewSet):
     def get_queryset(self):
         """Superusers veem todos os serviços, usuários normais só os seus."""
         if _has_global_access(self.request.user):
-            return Service.objects.all()
-        return Service.objects.filter(project__users=self.request.user)
+            return Service.objects.all().order_by('-created_at', '-id')
+        return Service.objects.filter(project__users=self.request.user).order_by('-created_at', '-id')
 
     def destroy(self, request, *args, **kwargs):
         """Dispara task de deleção do serviço no Dokku."""
@@ -1124,17 +1124,44 @@ class ServiceViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        app = App.objects.filter(id=app_id).first()
+        if not app:
+            return Response(
+                {'error': 'App nao encontrado'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if service.project_id != app.project_id:
+            return Response(
+                {'error': 'Servico e app devem pertencer ao mesmo projeto'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not service.container_name:
+            return Response(
+                {
+                    'error': (
+                        'Servico ainda nao foi provisionado. Aguarde finalizar a criacao antes de vincular.'
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        if not app.name_dokku:
+            return Response(
+                {'error': 'App ainda nao foi provisionado no Dokku'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
         task_result = AppMixin.link_service.delay(service_id=service.id, app_id=int(app_id))  # type: ignore
 
-        app = App.objects.filter(id=app_id).first()
-        if app:
-            app.task_id = task_result.id
-            app.save(update_fields=['task_id'])
+        app.task_id = task_result.id
+        app.save(update_fields=['task_id'])
 
         return Response(
             {
                 'status': 'LINKING',
-                'message': f'Vinculando serviço ao app...',
+                'message': 'Vinculando serviço ao app...',
                 'task_id': task_result.id,
             },
             status=status.HTTP_202_ACCEPTED,
