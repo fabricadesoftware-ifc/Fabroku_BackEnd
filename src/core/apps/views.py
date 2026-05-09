@@ -20,7 +20,7 @@ from rest_framework.renderers import BaseRenderer, JSONRenderer
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
-from core.adapters import GitHubAdapter
+from core.adapters import DokkuAdapter, GitHubAdapter
 from core.apps.mixins import AppMixin, ServiceMixin
 from core.apps.mixins.apps.interactive_run import (
     TERMINAL_SESSION_STATUSES,
@@ -37,12 +37,18 @@ from core.apps.mixins.apps.run_data import (
     validate_dump_args,
     validate_manage_path,
 )
+from core.apps.process_scale import (
+    get_process_max_instances,
+    sync_app_process_scales_from_dokku,
+    validate_process_quantities,
+)
 from core.auth_user.models import User
 from core.cache_versioning import APP_LAST_COMMIT_CACHE_NAMESPACE, build_versioned_cache_key, get_cache_ttl
 from core.logs.models import AppLogManager, LogCategory
 
 from .models import (
     App,
+    AppProcessScale,
     AppRunArtifact,
     AppRunArtifactKind,
     InteractiveRunCommandKind,
@@ -52,7 +58,7 @@ from .models import (
     InteractiveRunSessionStatus,
     Service,
 )
-from .serializers import AppSerializer, ServiceSerializer
+from .serializers import AppProcessScaleSerializer, AppSerializer, ServiceSerializer
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +130,16 @@ class InteractiveSessionCreateSerializer(drf_serializers.Serializer):
 class InteractiveSessionAnswerSerializer(drf_serializers.Serializer):
     prompt_id = drf_serializers.CharField()
     value = drf_serializers.CharField(allow_blank=True)
+
+
+class ScaleProcessesSerializer(drf_serializers.Serializer):
+    processes = drf_serializers.DictField()
+
+    def validate_processes(self, value):
+        try:
+            return validate_process_quantities(value)
+        except ValueError as exc:
+            raise drf_serializers.ValidationError(str(exc)) from exc
 
 
 def _iter_project_users_with_git_token(app: App, preferred_user=None):
@@ -360,6 +376,89 @@ class AppViewSet(ModelViewSet):
             {
                 'status': 'RESTARTING',
                 'message': f'Reiniciando aplicação {app.name}...',
+                'task_id': task_result.id,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+    @action(detail=True, methods=['get'])
+    def processes(self, request, pk=None):
+        """Retorna a escala de processos persistentes do app no Dokku."""
+        app = self.get_object()
+
+        if not app.name_dokku:
+            return Response(
+                {'error': 'App nao tem name_dokku configurado'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        refresh = str(request.query_params.get('refresh', '')).lower() in {'1', 'true', 'yes'}
+        if refresh:
+            try:
+                sync_app_process_scales_from_dokku(app, DokkuAdapter())
+            except Exception as exc:
+                return Response(
+                    {'error': f'Nao foi possivel sincronizar processos: {exc}'},
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
+
+        queryset = AppProcessScale.objects.filter(app=app).order_by('process_name')
+        serializer = AppProcessScaleSerializer(queryset, many=True)
+        return Response({
+            'processes': serializer.data,
+            'max_instances': get_process_max_instances(),
+        })
+
+    @action(detail=True, methods=['post'])
+    def scale_processes(self, request, pk=None):
+        """Aplica escala nos processos persistentes do app sem expor shell livre."""
+        app = self.get_object()
+
+        if not app.name_dokku:
+            return Response(
+                {'error': 'App nao tem name_dokku configurado'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if app.status in {'DEPLOYING', 'STARTING', 'DELETING'}:
+            return Response(
+                {'error': f'App esta em estado {app.status}. Aguarde a operacao atual terminar.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        serializer = ScaleProcessesSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        processes = serializer.validated_data['processes']
+
+        try:
+            sync_app_process_scales_from_dokku(app, DokkuAdapter())
+        except Exception as exc:
+            return Response(
+                {'error': f'Nao foi possivel sincronizar processos antes de escalar: {exc}'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        known_process_names = set(
+            AppProcessScale.objects.filter(app=app).values_list('process_name', flat=True)
+        )
+        unknown_processes = sorted(set(processes) - known_process_names)
+        if unknown_processes:
+            return Response(
+                {
+                    'error': 'Processo nao detectado no app. Atualize o Procfile e faca redeploy antes de escalar.',
+                    'processes': unknown_processes,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        task_result = AppMixin.scale_app_processes.delay(app_id=app.id, processes=processes)  # type: ignore
+        app.task_id = task_result.id
+        app.save(update_fields=['task_id'])
+
+        return Response(
+            {
+                'status': 'SCALING',
+                'message': f'Aplicando escala de processos em {app.name}...',
                 'task_id': task_result.id,
             },
             status=status.HTTP_202_ACCEPTED,

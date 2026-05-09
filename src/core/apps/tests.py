@@ -13,15 +13,15 @@ from rest_framework.test import APIClient, APITestCase
 from core.adapters.dokku_mixins.dokku_apps import DokkuAppsMixin
 from core.adapters.dokku_mixins.dokku_config import DokkuConfigMixin
 from core.adapters.ssh import SSHAdapter
-from core.cache_versioning import APP_LAST_COMMIT_CACHE_NAMESPACE, get_cache_ttl
 from core.apps.mixins import AppMixin, ServiceMixin
 from core.apps.mixins.apps import interactive_run
-from core.apps.mixins.apps.interactive_run import get_interactive_driver, submit_interactive_session_answer
-from core.apps.mixins.apps.run_data import validate_dump_args, validate_manage_path
 from core.apps.mixins.apps.create_app import CreateAppMixin
+from core.apps.mixins.apps.interactive_run import get_interactive_driver, submit_interactive_session_answer
 from core.apps.mixins.apps.redeploy_app import RedeployAppMixin
+from core.apps.mixins.apps.run_data import validate_dump_args, validate_manage_path
 from core.apps.models import (
     App,
+    AppProcessScale,
     AppRunArtifact,
     AppRunArtifactKind,
     InteractiveRunCommandKind,
@@ -31,7 +31,9 @@ from core.apps.models import (
     InteractiveRunSessionStatus,
     Service,
 )
+from core.apps.process_scale import parse_ps_scale_output, validate_process_quantities
 from core.auth_user.models import User
+from core.cache_versioning import APP_LAST_COMMIT_CACHE_NAMESPACE, get_cache_ttl
 from core.project.models import Project
 
 
@@ -921,8 +923,125 @@ class ManageAppEndpointTests(APITestCase):
         self.app.refresh_from_db()
         self.assertEqual(self.app.status, 'RUNNING')
 
+
+class AppProcessScaleTests(SimpleTestCase):
+    def test_parse_ps_scale_output_ignores_release(self):
+        output = """
+-----> Scaling for minha-api
+proctype: qty
+--------: ---
+release: 1
+web: 1
+worker: 0
+        """
+
+        self.assertEqual(parse_ps_scale_output(output), {'web': 1, 'worker': 0})
+
+    @override_settings(APP_PROCESS_MAX_INSTANCES=5)
+    def test_validate_process_quantities_rejects_web_zero(self):
+        with self.assertRaises(ValueError):
+            validate_process_quantities({'web': 0})
+
+    def test_validate_process_quantities_rejects_release(self):
+        with self.assertRaises(ValueError):
+            validate_process_quantities({'release': 1})
+
+
+class AppProcessScaleEndpointTests(APITestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email='scale@example.com',
+            password='senha123',
+            name='Scale User',
+        )
+        self.other_user = User.objects.create_user(
+            email='outsider-scale@example.com',
+            password='senha123',
+            name='Outsider User',
+        )
+        self.project = Project.objects.create(name='Projeto Scale')
+        self.project.users.add(self.user)
+        self.app = App.objects.create(
+            name='app-scale-teste',
+            name_dokku='app-scale-teste',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=self.project,
+            status='RUNNING',
+        )
+
+    @patch('core.apps.views.DokkuAdapter')
+    def test_processes_endpoint_syncs_manageable_processes(self, mock_dokku_cls):
+        self.client.force_authenticate(user=self.user)
+        mock_dokku = Mock()
+        mock_dokku.ps_scale_report.return_value = 'release: 1\nweb: 1\nworker: 0\n'
+        mock_dokku_cls.return_value = mock_dokku
+
+        response = self.client.get(f'/api/apps/apps/{self.app.id}/processes/?refresh=true')
+
+        self.assertEqual(response.status_code, 200)
+        process_names = [process['process_name'] for process in response.data['processes']]
+        self.assertEqual(process_names, ['web', 'worker'])
+        self.assertFalse(AppProcessScale.objects.filter(app=self.app, process_name='release').exists())
+
+    def test_non_member_cannot_view_processes(self):
+        self.client.force_authenticate(user=self.other_user)
+
+        response = self.client.get(f'/api/apps/apps/{self.app.id}/processes/')
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_scale_endpoint_rejects_web_zero(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(
+            f'/api/apps/apps/{self.app.id}/scale_processes/',
+            {'processes': {'web': 0}},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    @patch('core.apps.views.AppMixin.scale_app_processes.delay')
+    @patch('core.apps.views.DokkuAdapter')
+    def test_scale_endpoint_dispatches_task_for_detected_processes(self, mock_dokku_cls, mock_delay):
+        self.client.force_authenticate(user=self.user)
+        mock_dokku = Mock()
+        mock_dokku.ps_scale_report.return_value = 'web: 1\nworker: 0\n'
+        mock_dokku_cls.return_value = mock_dokku
+        mock_delay.return_value = Mock(id='task-scale-123')
+
+        response = self.client.post(
+            f'/api/apps/apps/{self.app.id}/scale_processes/',
+            {'processes': {'web': 1, 'worker': 1}},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.data['task_id'], 'task-scale-123')
+        mock_delay.assert_called_once_with(app_id=self.app.id, processes={'web': 1, 'worker': 1})
+
+    @patch('core.apps.mixins.apps.process_scale.DokkuAdapter')
+    def test_scale_task_calls_ps_scale_only_with_manageable_processes(self, mock_dokku_cls):
+        mock_dokku = Mock()
+        mock_dokku.ps_scale.return_value = 'web: 1\nworker: 1\n'
+        mock_dokku_cls.return_value = mock_dokku
+
+        task = AppMixin.scale_app_processes
+        with patch.object(task, 'update_state'):
+            task.request.id = 'task-scale-run-123'
+            result = task.run(app_id=self.app.id, processes={'web': 1, 'worker': 1})
+
+        self.assertEqual(result['status'], 'success')
+        mock_dokku.ps_scale.assert_called_once_with(self.app.name_dokku, {'web': 1, 'worker': 1})
+        worker_scale = AppProcessScale.objects.get(app=self.app, process_name='worker')
+        self.assertEqual(worker_scale.desired_quantity, 1)
+        self.assertEqual(worker_scale.current_quantity, 1)
+
     @patch('core.apps.views.AsyncResult')
     def test_get_app_status_returns_cancelled_message_for_revoked_task(self, mock_async_result_cls):
+        self.client.force_authenticate(user=self.user)
         self.app.task_id = 'task-redeploy-123'
         self.app.save(update_fields=['task_id'])
 
@@ -934,7 +1053,7 @@ class ManageAppEndpointTests(APITestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['state'], 'REVOKED')
-        self.assertEqual(response.data['status'], 'OperaÃ§Ã£o cancelada pelo usuÃ¡rio.')
+        self.assertEqual(response.data['status'], 'Operacao cancelada pelo usuario.')
         self.assertEqual(response.data['current'], 100)
 
 

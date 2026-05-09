@@ -7,6 +7,7 @@ from celery import Task, shared_task
 
 from core.adapters import DokkuAdapter, GitHubAdapter
 from core.apps.models import App
+from core.apps.process_scale import reapply_saved_process_scales
 from core.auth_user.models import User
 from core.logs.models import AppLogManager, LogCategory
 
@@ -245,6 +246,21 @@ class RedeployAppMixin:
             # Sucesso
             app.status = 'RUNNING'
             app.save(update_fields=['status'])
+
+            try:
+                applied_processes = reapply_saved_process_scales(app, dokku_adapter, logger, progress=90)
+                if applied_processes:
+                    logger.success(
+                        'Escala de processos reaplicada apos o redeploy.',
+                        category=LogCategory.DEPLOY,
+                        progress=90,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    f'Redeploy concluido, mas nao foi possivel reaplicar escala de processos: {exc}',
+                    category=LogCategory.DEPLOY,
+                    progress=90,
+                )
 
             # Garante Let's Encrypt e domínio (caso tenha falhado na criação)
             if not app.domain or not dokku_adapter.get_app_domain(dokku_app_name):

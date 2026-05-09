@@ -68,6 +68,13 @@ class DokkuPsMixin:
         command += f' {app_name} {proc_args}'
         return self._run_command(command)
 
+    def ps_scale_report(self, app_name: str) -> str:
+        """
+        Exibe a escala atual dos processos.
+        dokku ps:scale <app>
+        """
+        return self._run_command(f'ps:scale {app_name}')
+
     def ps_set(self, app_name: str, key: str, value: str | None = None) -> str:
         """
         Define ou limpa uma propriedade de ps.

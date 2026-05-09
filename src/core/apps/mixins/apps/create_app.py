@@ -5,6 +5,7 @@ from celery import Task, shared_task
 
 from core.adapters import DokkuAdapter, GitHubAdapter
 from core.apps.models import App
+from core.apps.process_scale import reapply_saved_process_scales
 from core.apps.utils import slugify_dokku
 from core.auth_user.models import User
 from core.logs.models import AppLogManager, LogCategory
@@ -96,6 +97,15 @@ class CreateAppMixin:
                 github_adapter.set_deploy_pending(user.git_token, app.git, head_sha, app.name)
 
             CreateAppMixin._configure_git(task, dokku_adapter, dokku_app_name, git_url, app.branch, logger)
+
+            try:
+                reapply_saved_process_scales(app, dokku_adapter, logger, progress=86)
+            except Exception as exc:
+                logger.warning(
+                    f'Nao foi possivel sincronizar escala de processos: {exc}',
+                    category=LogCategory.DEPLOY,
+                    progress=86,
+                )
 
             # Configura webhook para deploy automático
             CreateAppMixin._setup_webhook(github_adapter, user, app, logger)

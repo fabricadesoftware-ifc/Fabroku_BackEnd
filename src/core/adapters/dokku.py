@@ -8,6 +8,7 @@ from core.adapters.dokku_mixins import (
     DokkuLetsencryptMixin,
     DokkuPortsMixin,
     DokkuPostgresMixin,
+    DokkuPsMixin,
     DokkuRedisMixin,
     DokkuRunMixin,
 )
@@ -21,6 +22,7 @@ class DokkuAdapter(
     DokkuGitMixin,
     DokkuPostgresMixin,
     DokkuRedisMixin,
+    DokkuPsMixin,
     DokkuPortsMixin,
     DokkuLetsencryptMixin,
     DokkuDomainsMixin,

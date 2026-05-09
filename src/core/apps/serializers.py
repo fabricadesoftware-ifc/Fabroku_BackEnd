@@ -3,7 +3,7 @@ import uuid
 from rest_framework import serializers
 
 from core.apps.mixins import AppMixin, ServiceMixin
-from core.apps.models import App, Service, ServiceType
+from core.apps.models import App, AppProcessScale, Service, ServiceType
 from core.apps.service_types import get_service_runtime, is_supported_service_type
 
 
@@ -213,6 +213,24 @@ class AppSerializer(serializers.ModelSerializer):
         instance.save()
 
         return instance
+
+
+class AppProcessScaleSerializer(serializers.ModelSerializer):
+    quantity = serializers.IntegerField(source='desired_quantity', read_only=True)
+
+    class Meta:
+        model = AppProcessScale
+        fields = [
+            'id',
+            'process_name',
+            'quantity',
+            'desired_quantity',
+            'current_quantity',
+            'detected_at',
+            'last_synced_at',
+            'updated_at',
+        ]
+        read_only_fields = fields
 
     def update(self, instance, validated_data):
         AppMixin.update_app.delay(

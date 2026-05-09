@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import App, AppRunArtifact, InteractiveRunEvent, InteractiveRunSession, Service
+from .models import App, AppProcessScale, AppRunArtifact, InteractiveRunEvent, InteractiveRunSession, Service
 
 
 class ReadOnlyAdminMixin:
@@ -43,6 +43,21 @@ class ServiceAdmin(admin.ModelAdmin):
     list_filter = ('created_at', 'updated_at')
     search_fields = ('name', 'app__name', 'user', 'host')
     readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(AppProcessScale)
+class AppProcessScaleAdmin(admin.ModelAdmin):
+    list_display = (
+        'app',
+        'process_name',
+        'desired_quantity',
+        'current_quantity',
+        'last_synced_at',
+        'updated_at',
+    )
+    list_filter = ('process_name', 'last_synced_at', 'updated_at')
+    search_fields = ('app__name', 'app__name_dokku', 'process_name')
+    readonly_fields = ('detected_at', 'last_synced_at', 'updated_at')
 
 
 @admin.register(AppRunArtifact)

@@ -128,6 +128,30 @@ class AppRunArtifact(models.Model):
         ]
 
 
+class AppProcessScale(models.Model):
+    app = models.ForeignKey(App, on_delete=models.CASCADE, related_name='process_scales')
+    process_name = models.CharField(max_length=64)
+    desired_quantity = models.PositiveSmallIntegerField(default=0)
+    current_quantity = models.PositiveSmallIntegerField(default=0)
+    detected_at = models.DateTimeField(auto_now_add=True)
+    last_synced_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f'{self.app.name}:{self.process_name}={self.desired_quantity}'
+
+    class Meta:
+        db_table = 'app_process_scales'
+        verbose_name = 'App Process Scale'
+        verbose_name_plural = 'App Process Scales'
+        constraints = [
+            models.UniqueConstraint(fields=['app', 'process_name'], name='unique_app_process_scale'),
+        ]
+        indexes = [
+            models.Index(fields=['app', 'process_name'], name='idx_app_process_name'),
+        ]
+
+
 class InteractiveRunCommandKind(models.TextChoices):
     DJANGO_CREATESUPERUSER = 'django_createsuperuser', 'Django Createsuperuser'
 
