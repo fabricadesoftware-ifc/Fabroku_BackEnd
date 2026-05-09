@@ -14,7 +14,7 @@ from core.adapters.dokku_mixins.dokku_apps import DokkuAppsMixin
 from core.adapters.dokku_mixins.dokku_config import DokkuConfigMixin
 from core.adapters.ssh import SSHAdapter
 from core.cache_versioning import APP_LAST_COMMIT_CACHE_NAMESPACE, get_cache_ttl
-from core.apps.mixins import AppMixin
+from core.apps.mixins import AppMixin, ServiceMixin
 from core.apps.mixins.apps import interactive_run
 from core.apps.mixins.apps.interactive_run import get_interactive_driver, submit_interactive_session_answer
 from core.apps.mixins.apps.run_data import validate_dump_args, validate_manage_path
@@ -767,7 +767,7 @@ class LinkServiceMixinTests(TestCase):
         mock_dokku.restart_app.return_value = 'restart ok'
         mock_dokku_cls.return_value = mock_dokku
 
-        task = AppMixin.link_service
+        task = ServiceMixin.link_service
         with patch.object(task, 'update_state'):
             task.request.id = 'task-link-123'
             result = task.run(service_id=service.id, app_id=app.id)
@@ -811,7 +811,7 @@ class LinkServiceMixinTests(TestCase):
         mock_dokku.restart_app.return_value = 'restart ok'
         mock_dokku_cls.return_value = mock_dokku
 
-        task = AppMixin.link_service
+        task = ServiceMixin.link_service
         with patch.object(task, 'update_state'):
             task.request.id = 'task-redis-link-123'
             result = task.run(service_id=service.id, app_id=app.id)

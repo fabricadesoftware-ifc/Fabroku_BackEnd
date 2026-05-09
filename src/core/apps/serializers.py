@@ -2,7 +2,7 @@ import uuid
 
 from rest_framework import serializers
 
-from core.apps.mixins import AppMixin
+from core.apps.mixins import AppMixin, ServiceMixin
 from core.apps.models import App, Service, ServiceType
 from core.apps.service_types import get_service_runtime, is_supported_service_type
 
@@ -81,7 +81,7 @@ class ServiceSerializer(serializers.ModelSerializer):
         service_type = runtime.service_type
 
         if app:
-            task_result = AppMixin.create_service.delay(
+            task_result = ServiceMixin.create_service.delay(
                 app_id=app.id,
                 service_type=service_type,
             )  # type: ignore
@@ -110,7 +110,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             container_name=None,
             task_id=None,
         )
-        task_result = AppMixin.create_service_standalone.delay(
+        task_result = ServiceMixin.create_service_standalone.delay(
             project_id=project.id,
             service_type=service_type,
             name=name,

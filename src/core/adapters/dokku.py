@@ -8,6 +8,7 @@ from core.adapters.dokku_mixins import (
     DokkuLetsencryptMixin,
     DokkuPortsMixin,
     DokkuPostgresMixin,
+    DokkuRedisMixin,
     DokkuRunMixin,
 )
 from core.adapters.ssh import SSHAdapter
@@ -19,6 +20,7 @@ class DokkuAdapter(
     DokkuConfigMixin,
     DokkuGitMixin,
     DokkuPostgresMixin,
+    DokkuRedisMixin,
     DokkuPortsMixin,
     DokkuLetsencryptMixin,
     DokkuDomainsMixin,

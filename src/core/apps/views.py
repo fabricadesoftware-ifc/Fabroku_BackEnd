@@ -21,7 +21,7 @@ from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
 from core.adapters import GitHubAdapter
-from core.apps.mixins import AppMixin
+from core.apps.mixins import AppMixin, ServiceMixin
 from core.apps.mixins.apps.interactive_run import (
     TERMINAL_SESSION_STATUSES,
     cleanup_expired_interactive_sessions,
@@ -1096,7 +1096,7 @@ class ServiceViewSet(ModelViewSet):
         """Dispara task de deleção do serviço no Dokku."""
         instance = self.get_object()
 
-        task_result = AppMixin.delete_service.delay(service_id=instance.id)  # type: ignore
+        task_result = ServiceMixin.delete_service.delay(service_id=instance.id)  # type: ignore
 
         return Response(
             {
@@ -1153,7 +1153,7 @@ class ServiceViewSet(ModelViewSet):
                 status=status.HTTP_409_CONFLICT,
             )
 
-        task_result = AppMixin.link_service.delay(service_id=service.id, app_id=int(app_id))  # type: ignore
+        task_result = ServiceMixin.link_service.delay(service_id=service.id, app_id=int(app_id))  # type: ignore
 
         app.task_id = task_result.id
         app.save(update_fields=['task_id'])
@@ -1178,7 +1178,7 @@ class ServiceViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        task_result = AppMixin.unlink_service.delay(service_id=service.id)  # type: ignore
+        task_result = ServiceMixin.unlink_service.delay(service_id=service.id)  # type: ignore
 
         app = service.app
         app.task_id = task_result.id
