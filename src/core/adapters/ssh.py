@@ -1,6 +1,5 @@
 import io
 import os
-import tempfile
 from collections.abc import Generator
 
 import paramiko
@@ -16,6 +15,13 @@ class SSHAdapter:
         self.port = port
         self._temp_key_file = None
 
+    @staticmethod
+    def _successful_command_output(output: str, error_output: str) -> str:
+        """Use stderr as Dokku progress output when stdout is empty."""
+        if output.strip():
+            return output
+        return error_output
+
     def _get_pkey(self) -> paramiko.PKey:
         """
         Obtém a chave privada SSH.
@@ -24,7 +30,7 @@ class SSHAdapter:
         key_data = self.ssh_key_path
 
         if os.path.isfile(key_data):
-            with open(key_data) as f:
+            with open(key_data, encoding='utf-8') as f:
                 key_data = f.read()
 
         if '\\n' in key_data:
@@ -54,7 +60,7 @@ class SSHAdapter:
             if exit_status != 0:
                 detail = error_output.strip() or output.strip() or '(sem detalhes)'
                 return f'Failed to execute command: {command}\n{detail}'
-            return output
+            return self._successful_command_output(output, error_output)
         except Exception as e:
             return f'SSH Connection Error: {e}'
         finally:
@@ -76,7 +82,7 @@ class SSHAdapter:
             if exit_status != 0:
                 detail = error_output.strip() or output.strip() or '(sem detalhes)'
                 return f'Failed to execute command: {command}\n{detail}'
-            return output
+            return self._successful_command_output(output, error_output)
         except Exception as e:
             return f'SSH Connection Error: {e}'
         finally:

@@ -14,9 +14,11 @@ def dokku_output_failed(output: str) -> bool:
     return 'failed' in output_lower or 'ssh connection error' in output_lower
 
 
-def check_dokku_output(output: str, operation: str):
-    if not output:
+def check_dokku_output(output: str, operation: str, *, allow_empty: bool = False):
+    if not output and not allow_empty:
         raise RuntimeError(f'{operation}: nenhuma resposta do servidor')
+    if not output:
+        return
     if dokku_output_failed(output):
         raise RuntimeError(f'{operation} falhou: {output}')
 

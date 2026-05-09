@@ -128,20 +128,22 @@ class CreateServiceStandaloneMixin:
             else:
                 check_dokku_output(output, operation)
 
+            service.container_name = dokku_service_name
+            service.host = f'{runtime.host_prefix}{dokku_service_name}'
+            service.port = runtime.port
+            service.save(update_fields=['container_name', 'host', 'port'])
+
             task.update_state(
                 state='PROGRESS',
                 meta={'current': 60, 'total': 100, 'status': 'Iniciando servico...'},
             )
             start_output = start_dokku_service(dokku_adapter, runtime, dokku_service_name)
-            check_dokku_output(start_output, f'{runtime.default_prefix}:start')
+            check_dokku_output(start_output, f'{runtime.default_prefix}:start', allow_empty=True)
             if runtime.service_type == ServiceType.POSTGRES.value:
                 time.sleep(2)
 
-            service.container_name = dokku_service_name
-            service.host = f'{runtime.host_prefix}{dokku_service_name}'
-            service.port = runtime.port
             service.task_id = None
-            service.save(update_fields=['container_name', 'host', 'port', 'task_id'])
+            service.save(update_fields=['task_id'])
 
             task.update_state(
                 state='PROGRESS',
@@ -158,5 +160,4 @@ class CreateServiceStandaloneMixin:
 
         except Exception as e:
             logger.exception('Erro ao criar servico: %s', e)
-            service.delete()
             raise
