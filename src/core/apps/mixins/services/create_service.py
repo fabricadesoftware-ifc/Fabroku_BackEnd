@@ -1,24 +1,155 @@
 import time
 import uuid
+from dataclasses import dataclass
 from typing import cast
 
 from celery import Task, shared_task
 
 from core.adapters import DokkuAdapter
-from core.apps.mixins.services.database_url import sync_database_url_from_dokku
+from core.apps.mixins.services.service_dokku import (
+    check_dokku_output,
+    create_dokku_service,
+    dokku_output_failed,
+    link_dokku_service,
+    start_dokku_service,
+    sync_service_url_from_dokku,
+)
 from core.apps.models import App, Service, ServiceType
+from core.apps.service_types import ServiceRuntime, get_service_runtime
 from core.apps.utils import slugify_dokku
 from core.logs.models import AppLogManager, LogCategory
 
 
-def _check_dokku_output(output: str, operation: str):
-    """Raise when Dokku returned an operational error."""
-    if not output:
-        raise RuntimeError(f'{operation}: nenhuma resposta do servidor')
+@dataclass
+class CreateServiceContext:
+    task: Task
+    logger: AppLogManager
+    dokku_adapter: DokkuAdapter
+    app: App
+    runtime: ServiceRuntime
+    service_name: str
+    dokku_service_name: str
+    password: str
 
-    output_lower = output.lower()
-    if 'failed to execute command' in output_lower or 'ssh connection error' in output_lower:
-        raise RuntimeError(f'{operation} falhou: {output}')
+
+def _create_remote_service(ctx: CreateServiceContext):
+    ctx.task.update_state(
+        state='PROGRESS',
+        meta={
+            'current': 10,
+            'total': 100,
+            'status': f'Criando servico {ctx.runtime.label} {ctx.dokku_service_name}...',
+        },
+    )
+    ctx.logger.info(
+        f'Criando servico {ctx.runtime.label}: {ctx.dokku_service_name}...',
+        category=LogCategory.DATABASE,
+        progress=10,
+    )
+
+    output, command, operation = create_dokku_service(
+        ctx.dokku_adapter,
+        ctx.runtime,
+        ctx.dokku_service_name,
+        ctx.password,
+    )
+    ctx.logger.dokku(output, command=command, category=LogCategory.DATABASE, progress=40)
+    if 'already exists' in output.lower():
+        ctx.logger.info(
+            f'Servico {ctx.dokku_service_name} ja existe, reutilizando...',
+            category=LogCategory.DATABASE,
+            progress=40,
+        )
+        return
+
+    check_dokku_output(output, operation)
+
+
+def _link_remote_service(ctx: CreateServiceContext):
+    ctx.task.update_state(
+        state='PROGRESS',
+        meta={'current': 50, 'total': 100, 'status': 'Vinculando servico ao app...'},
+    )
+    ctx.logger.info(
+        f'Vinculando servico {ctx.dokku_service_name} ao app {ctx.app.name_dokku}...',
+        category=LogCategory.DATABASE,
+        progress=50,
+    )
+
+    output, command, operation = link_dokku_service(
+        ctx.dokku_adapter,
+        ctx.runtime,
+        ctx.dokku_service_name,
+        ctx.app.name_dokku,
+        no_restart=True,
+    )
+    ctx.logger.dokku(output, command=command, category=LogCategory.DATABASE, progress=70)
+    if 'already linked' in output.lower():
+        ctx.logger.info(
+            'Servico ja estava vinculado ao app, continuando...',
+            category=LogCategory.DATABASE,
+            progress=70,
+        )
+    else:
+        check_dokku_output(output, operation)
+
+    sync_service_url_from_dokku(
+        app=ctx.app,
+        dokku_adapter=ctx.dokku_adapter,
+        logger=ctx.logger,
+        runtime=ctx.runtime,
+        progress=72,
+    )
+
+
+def _start_remote_service(ctx: CreateServiceContext):
+    ctx.task.update_state(
+        state='PROGRESS',
+        meta={'current': 80, 'total': 100, 'status': 'Iniciando servico...'},
+    )
+    output = start_dokku_service(ctx.dokku_adapter, ctx.runtime, ctx.dokku_service_name, logger=ctx.logger)
+    if dokku_output_failed(output):
+        ctx.logger.warning(
+            f'{ctx.runtime.default_prefix}:start retornou: {output}',
+            category=LogCategory.DATABASE,
+            progress=82,
+        )
+    else:
+        ctx.logger.info(
+            f'Servico {ctx.runtime.label} {ctx.dokku_service_name} iniciado',
+            category=LogCategory.DATABASE,
+            progress=82,
+        )
+    if ctx.runtime.service_type == ServiceType.POSTGRES.value:
+        time.sleep(3)
+
+
+def _create_local_service(ctx: CreateServiceContext) -> Service:
+    return Service.objects.create(
+        name=ctx.service_name,
+        service_type=ctx.runtime.service_type,
+        user=ctx.runtime.user,
+        password=ctx.password,
+        host=f'{ctx.runtime.host_prefix}{ctx.dokku_service_name}',
+        port=ctx.runtime.port,
+        app=ctx.app,
+        project=ctx.app.project,
+        container_name=ctx.dokku_service_name,
+    )
+
+
+def _restart_app(ctx: CreateServiceContext):
+    ctx.task.update_state(
+        state='PROGRESS',
+        meta={'current': 94, 'total': 100, 'status': f'Reiniciando app para aplicar {ctx.runtime.env_key}...'},
+    )
+    restart_output = ctx.dokku_adapter.restart_app(ctx.app.name_dokku)
+    ctx.logger.dokku(
+        restart_output,
+        command=f'ps:restart {ctx.app.name_dokku}',
+        category=LogCategory.DEPLOY,
+        progress=94,
+    )
 
 
 class CreateServiceMixin:
@@ -31,11 +162,11 @@ class CreateServiceMixin:
         service_type: str,
     ) -> dict:
         """
-        Cria um servico no Dokku, vincula ao app e espelha a DATABASE_URL.
+        Cria um servico no Dokku, vincula ao app e espelha a URL de conexao.
 
         O link com --no-restart evita restart automatico no meio do fluxo. Depois
-        que a DATABASE_URL foi sincronizada no banco local, reiniciamos o app uma
-        unica vez para que o runtime enxergue a nova variavel.
+        que a variavel foi sincronizada no banco local, reiniciamos o app uma vez
+        para que o runtime enxergue a nova configuracao.
         """
         task = cast(Task, self)
         task_id = task.request.id
@@ -45,165 +176,48 @@ class CreateServiceMixin:
         except App.DoesNotExist:
             return {'status': 'error', 'message': f'App {app_id} not found'}
 
+        try:
+            runtime = get_service_runtime(service_type)
+        except ValueError as exc:
+            return {'status': 'error', 'message': str(exc)}
+
         app.task_id = task_id
         app.save(update_fields=['task_id'])
 
         logger = AppLogManager(app, task_id)
         dokku_adapter = DokkuAdapter()
-
-        service_name = f'{app.name}-db'
+        service_name = f'{app.name}-{runtime.attached_suffix}'
         dokku_service_name = slugify_dokku(f'{service_name}-{app.id}')
-        dokku_service_password = uuid.uuid4().hex
+        dokku_service_password = uuid.uuid4().hex if runtime.service_type == ServiceType.POSTGRES.value else ''
 
         if not app.name_dokku:
             logger.error('App sem name_dokku configurado', category=LogCategory.DATABASE)
             return {'status': 'error', 'message': 'App sem name_dokku'}
 
         try:
-            task.update_state(
-                state='PROGRESS',
-                meta={'current': 10, 'total': 100, 'status': f'Criando banco {dokku_service_name}...'},
+            context = CreateServiceContext(
+                task=task,
+                logger=logger,
+                dokku_adapter=dokku_adapter,
+                app=app,
+                runtime=runtime,
+                service_name=service_name,
+                dokku_service_name=dokku_service_name,
+                password=dokku_service_password,
             )
-            logger.info(
-                f'Criando banco de dados PostgreSQL: {dokku_service_name}...',
-                category=LogCategory.DATABASE,
-                progress=10,
-            )
-
-            if service_type == ServiceType.POSTGRES:
-                output = dokku_adapter.create_database(db_name=dokku_service_name, password=dokku_service_password)
-                logger.dokku(
-                    output,
-                    command=f'postgres:create {dokku_service_name}',
-                    category=LogCategory.DATABASE,
-                    progress=40,
-                )
-                if 'already exists' in output.lower():
-                    logger.info(
-                        f'Banco {dokku_service_name} ja existe, reutilizando...',
-                        category=LogCategory.DATABASE,
-                        progress=40,
-                    )
-                else:
-                    _check_dokku_output(output, 'postgres:create')
-
-            task.update_state(
-                state='PROGRESS',
-                meta={'current': 50, 'total': 100, 'status': 'Vinculando banco ao app...'},
-            )
-            logger.info(
-                f'Vinculando banco {dokku_service_name} ao app {app.name_dokku}...',
-                category=LogCategory.DATABASE,
-                progress=50,
-            )
-
-            if service_type == ServiceType.POSTGRES:
-                link_output = dokku_adapter.link_database(
-                    db_name=dokku_service_name,
-                    app_name=app.name_dokku,
-                    no_restart=True,
-                )
-                logger.dokku(
-                    link_output,
-                    command=f'postgres:link --no-restart {dokku_service_name} {app.name_dokku}',
-                    category=LogCategory.DATABASE,
-                    progress=70,
-                )
-                if 'already linked' in link_output.lower():
-                    logger.info(
-                        'Banco ja estava vinculado ao app, continuando...',
-                        category=LogCategory.DATABASE,
-                        progress=70,
-                    )
-                else:
-                    _check_dokku_output(link_output, 'postgres:link')
-
-                sync_database_url_from_dokku(
-                    app=app,
-                    dokku_adapter=dokku_adapter,
-                    logger=logger,
-                    progress=72,
-                )
-
-            task.update_state(
-                state='PROGRESS',
-                meta={'current': 80, 'total': 100, 'status': 'Iniciando servico...'},
-            )
-
-            if service_type == ServiceType.POSTGRES:
-                start_output = dokku_adapter.start_database(dokku_service_name)
-                if 'failed' in start_output.lower():
-                    if 'sethostname' in start_output.lower() or 'invalid argument' in start_output.lower():
-                        logger.info(
-                            'Container travado por hostname invalido, removendo...',
-                            category=LogCategory.DATABASE,
-                            progress=82,
-                        )
-                        dokku_adapter.remove_postgres_container(dokku_service_name)
-                        time.sleep(2)
-                        start_output = dokku_adapter.start_database(dokku_service_name)
-                    elif 'already in use' in start_output.lower() or 'conflict' in start_output.lower():
-                        logger.info(
-                            'Container em conflito, tentando postgres:stop antes de start...',
-                            category=LogCategory.DATABASE,
-                            progress=82,
-                        )
-                        dokku_adapter.stop_database(dokku_service_name)
-                        time.sleep(2)
-                        start_output = dokku_adapter.start_database(dokku_service_name)
-
-                    if 'failed' in start_output.lower():
-                        logger.warning(
-                            f'postgres:start retornou: {start_output}',
-                            category=LogCategory.DATABASE,
-                            progress=82,
-                        )
-                    else:
-                        logger.info(
-                            f'Servico Postgres {dokku_service_name} iniciado',
-                            category=LogCategory.DATABASE,
-                            progress=82,
-                        )
-                else:
-                    logger.info(
-                        f'Servico Postgres {dokku_service_name} iniciado',
-                        category=LogCategory.DATABASE,
-                        progress=82,
-                    )
-                time.sleep(3)
+            _create_remote_service(context)
+            _link_remote_service(context)
+            _start_remote_service(context)
 
             task.update_state(
                 state='PROGRESS',
                 meta={'current': 90, 'total': 100, 'status': 'Salvando informacoes do servico...'},
             )
-
-            service = Service.objects.create(
-                name=service_name,
-                service_type=service_type,
-                user='postgres' if service_type == ServiceType.POSTGRES else service_type,
-                password=dokku_service_password,
-                host=f'dokku-postgres-{dokku_service_name}',
-                port=5432 if service_type == ServiceType.POSTGRES else 0,
-                app=app,
-                project=app.project,
-                container_name=dokku_service_name,
-            )
-
-            if service_type == ServiceType.POSTGRES:
-                task.update_state(
-                    state='PROGRESS',
-                    meta={'current': 94, 'total': 100, 'status': 'Reiniciando app para aplicar DATABASE_URL...'},
-                )
-                restart_output = dokku_adapter.restart_app(app.name_dokku)
-                logger.dokku(
-                    restart_output,
-                    command=f'ps:restart {app.name_dokku}',
-                    category=LogCategory.DEPLOY,
-                    progress=94,
-                )
+            service = _create_local_service(context)
+            _restart_app(context)
 
             logger.success(
-                'Banco de dados criado e vinculado com sucesso. DATABASE_URL sincronizada.',
+                f'Servico {runtime.label} criado e vinculado com sucesso. {runtime.env_key} sincronizada.',
                 category=LogCategory.DATABASE,
                 progress=100,
             )
@@ -212,7 +226,7 @@ class CreateServiceMixin:
                 'status': 'created',
                 'service_id': service.id,  # type: ignore
                 'service_name': dokku_service_name,
-                'service_type': service_type,
+                'service_type': runtime.service_type,
             }
 
         except Exception as e:

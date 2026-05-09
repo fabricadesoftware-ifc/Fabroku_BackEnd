@@ -3,18 +3,101 @@ from typing import cast
 from celery import Task, shared_task
 
 from core.adapters import DokkuAdapter
-from core.apps.models import App, Service, ServiceType
+from core.apps.mixins.services.service_dokku import delete_dokku_service, unlink_dokku_service
+from core.apps.models import Service
+from core.apps.service_types import get_service_runtime
 from core.logs.models import AppLogManager, LogCategory
 
 
+def _remove_app_env_key(app, env_key: str):
+    if app.variables and isinstance(app.variables, dict) and env_key in app.variables:
+        app.variables = dict(app.variables)
+        del app.variables[env_key]
+        app.save(update_fields=['variables'])
+
+
+def _prepare_task_context(service: Service, task_id: str) -> AppLogManager | None:
+    if not service.app:
+        service.task_id = task_id
+        service.save(update_fields=['task_id'])
+        return None
+
+    service.app.task_id = task_id
+    service.app.save(update_fields=['task_id'])
+    return AppLogManager(service.app, task_id)
+
+
+def _unlink_remote_service_if_needed(
+    task: Task,
+    dokku_adapter,
+    service: Service,
+    runtime,
+    logger: AppLogManager | None,
+):
+    app = service.app
+    dokku_service_name = service.container_name or service.name
+    if not app or not app.name_dokku or not dokku_service_name:
+        return
+
+    task.update_state(
+        state='PROGRESS',
+        meta={'current': 20, 'total': 100, 'status': 'Desvinculando servico do app...'},
+    )
+    if logger:
+        logger.info(
+            f'Desvinculando {runtime.label} {dokku_service_name} do app {app.name_dokku}...',
+            category=LogCategory.DATABASE,
+            progress=20,
+        )
+
+    try:
+        output, command = unlink_dokku_service(dokku_adapter, runtime, dokku_service_name, app.name_dokku)
+        if logger:
+            logger.dokku(output, command=command, category=LogCategory.DATABASE, progress=40)
+        _remove_app_env_key(app, runtime.env_key)
+    except Exception as e:
+        if logger:
+            logger.warning(
+                f'Erro ao desvincular (pode ja estar desvinculado): {str(e)}',
+                category=LogCategory.DATABASE,
+                progress=40,
+            )
+
+
+def _delete_remote_service(task: Task, dokku_adapter, service: Service, runtime, logger: AppLogManager | None):
+    dokku_service_name = service.container_name or service.name
+    task.update_state(
+        state='PROGRESS',
+        meta={'current': 50, 'total': 100, 'status': f'Deletando servico {dokku_service_name}...'},
+    )
+    if logger:
+        logger.info(
+            f'Deletando {runtime.label} {dokku_service_name} do Dokku...',
+            category=LogCategory.DATABASE,
+            progress=50,
+        )
+
+    try:
+        output, command = delete_dokku_service(dokku_adapter, runtime, dokku_service_name)
+        if logger:
+            logger.dokku(output, command=command, category=LogCategory.DATABASE, progress=80)
+    except Exception as e:
+        if logger:
+            logger.warning(
+                f'Erro ao deletar no Dokku (continuando...): {str(e)}',
+                category=LogCategory.DATABASE,
+                progress=80,
+            )
+
+
 class DeleteServiceMixin:
-    """Mixin para exclusão de serviços (banco de dados, redis, etc.) via Celery."""
+    """Mixin para exclusao de servicos via Celery."""
 
     @shared_task(bind=True)
     def delete_service(self, service_id: int) -> dict:
         """
-        Desvincula o serviço do app no Dokku, deleta o serviço,
-        e remove o registro do banco local.
+        Desvincula o servico do app no Dokku, deleta o servico remoto e remove
+        o registro do banco local.
         """
         task = cast(Task, self)
         task_id = task.request.id
@@ -24,96 +107,24 @@ class DeleteServiceMixin:
         except Service.DoesNotExist:
             return {'status': 'deleted', 'message': 'Service already deleted'}
 
-        app = service.app
-        dokku_adapter = DokkuAdapter()
-        dokku_service_name = service.container_name or service.name
+        try:
+            runtime = get_service_runtime(service.service_type)
+        except ValueError as exc:
+            return {'status': 'error', 'message': str(exc)}
 
-        if app:
-            app.task_id = task_id
-            app.save(update_fields=['task_id'])
-            logger = AppLogManager(app, task_id)
-        else:
-            service.task_id = task_id
-            service.save(update_fields=['task_id'])
-            logger = None
+        dokku_adapter = DokkuAdapter()
+        logger = _prepare_task_context(service, task_id)
 
         try:
-            # === 1. Desvincular do app (se estiver vinculado) ===
-            if app and app.name_dokku and dokku_service_name:
-                task.update_state(
-                    state='PROGRESS',
-                    meta={'current': 20, 'total': 100, 'status': 'Desvinculando banco do app...'},
-                )
-                if logger:
-                    logger.info(
-                        f'Desvinculando banco {dokku_service_name} do app {app.name_dokku}...',
-                        category=LogCategory.DATABASE,
-                        progress=20,
-                    )
+            _unlink_remote_service_if_needed(task, dokku_adapter, service, runtime, logger)
+            _delete_remote_service(task, dokku_adapter, service, runtime, logger)
 
-                try:
-                    if service.service_type == ServiceType.POSTGRES:
-                        output = dokku_adapter.unlink_database(
-                            db_name=dokku_service_name,
-                            app_name=app.name_dokku,
-                        )
-                        if logger:
-                            logger.dokku(
-                                output,
-                                command=f'postgres:unlink {dokku_service_name} {app.name_dokku}',
-                                category=LogCategory.DATABASE,
-                                progress=40,
-                            )
-                        if app.variables and isinstance(app.variables, dict) and 'DATABASE_URL' in app.variables:
-                            app.variables = dict(app.variables)
-                            del app.variables['DATABASE_URL']
-                            app.save(update_fields=['variables'])
-                except Exception as e:
-                    if logger:
-                        logger.warning(
-                            f'Erro ao desvincular (pode já estar desvinculado): {str(e)}',
-                            category=LogCategory.DATABASE,
-                            progress=40,
-                        )
-
-            # === 2. Deletar o serviço no Dokku ===
-            task.update_state(
-                state='PROGRESS',
-                meta={'current': 50, 'total': 100, 'status': f'Deletando banco {dokku_service_name}...'},
-            )
-            if logger:
-                logger.info(
-                    f'Deletando banco {dokku_service_name} do Dokku...',
-                    category=LogCategory.DATABASE,
-                    progress=50,
-                )
-
-            try:
-                if service.service_type == ServiceType.POSTGRES:
-                    dokku_adapter.remove_postgres_container(dokku_service_name)
-                    output = dokku_adapter.delete_database(db_name=dokku_service_name)
-                    if logger:
-                        logger.dokku(
-                            output,
-                            command=f'postgres:destroy {dokku_service_name} --force',
-                            category=LogCategory.DATABASE,
-                            progress=80,
-                        )
-            except Exception as e:
-                if logger:
-                    logger.warning(
-                        f'Erro ao deletar no Dokku (continuando...): {str(e)}',
-                        category=LogCategory.DATABASE,
-                        progress=80,
-                    )
-
-            # === 3. Remover registro local ===
             service_id_saved = service.id
             service.delete()
 
             if logger:
                 logger.success(
-                    'Banco de dados removido com sucesso!',
+                    f'Servico {runtime.label} removido com sucesso!',
                     category=LogCategory.DATABASE,
                     progress=100,
                 )
@@ -126,7 +137,7 @@ class DeleteServiceMixin:
         except Exception as e:
             if logger:
                 logger.error(
-                    f'Erro ao deletar serviço: {str(e)}',
+                    f'Erro ao deletar servico: {str(e)}',
                     category=LogCategory.DATABASE,
                     metadata={'error_type': type(e).__name__, 'error_details': str(e)},
                 )

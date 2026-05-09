@@ -780,6 +780,55 @@ class LinkServiceMixinTests(TestCase):
         self.assertEqual(app.task_id, 'task-link-123')
         mock_dokku.restart_app.assert_called_once_with(app.name_dokku)
 
+    @patch('core.apps.mixins.services.link_service.DokkuAdapter')
+    def test_link_service_syncs_redis_url(self, mock_dokku_cls):
+        user = User.objects.create_user(email='redis-link@example.com', password='senha123', name='Redis Link User')
+        project = Project.objects.create(name='Projeto Redis Link')
+        project.users.add(user)
+        app = App.objects.create(
+            name='app-redis-link-teste',
+            name_dokku='app-redis-link-teste',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=project,
+            variables={},
+        )
+        service = Service.objects.create(
+            name='redis-link-teste',
+            user='redis',
+            password='',
+            host='localhost',
+            port=6379,
+            app=None,
+            project=project,
+            service_type='redis',
+            container_name='redis-link-teste',
+        )
+
+        mock_dokku = Mock()
+        mock_dokku.link_redis.return_value = 'linked'
+        mock_dokku.get_config.return_value = 'redis://redis-link-teste:6379'
+        mock_dokku.restart_app.return_value = 'restart ok'
+        mock_dokku_cls.return_value = mock_dokku
+
+        task = AppMixin.link_service
+        with patch.object(task, 'update_state'):
+            task.request.id = 'task-redis-link-123'
+            result = task.run(service_id=service.id, app_id=app.id)
+
+        self.assertEqual(result['status'], 'linked')
+        service.refresh_from_db()
+        app.refresh_from_db()
+        self.assertEqual(service.app_id, app.id)
+        self.assertEqual(app.variables['REDIS_URL'], 'redis://redis-link-teste:6379')
+        self.assertEqual(app.task_id, 'task-redis-link-123')
+        mock_dokku.link_redis.assert_called_once_with(
+            service_name='redis-link-teste',
+            app_name=app.name_dokku,
+            no_restart=True,
+        )
+        mock_dokku.restart_app.assert_called_once_with(app.name_dokku)
+
 
 class RunCommandTests(TestCase):
     @patch('core.apps.mixins.apps.run_command.DokkuAdapter')

@@ -4,6 +4,7 @@ from rest_framework import serializers
 
 from core.apps.mixins import AppMixin
 from core.apps.models import App, Service, ServiceType
+from core.apps.service_types import get_service_runtime, is_supported_service_type
 
 
 class ServiceSerializer(serializers.ModelSerializer):
@@ -43,6 +44,9 @@ class ServiceSerializer(serializers.ModelSerializer):
         project = attrs.get('project')
         service_type = attrs.get('service_type')
 
+        if service_type and not is_supported_service_type(service_type):
+            raise serializers.ValidationError('Apenas Postgres e Redis estao habilitados no momento.')
+
         if app:
             if not project:
                 attrs['project'] = app.project
@@ -53,8 +57,6 @@ class ServiceSerializer(serializers.ModelSerializer):
                 'Para criar servico standalone, informe project e service_type. '
                 'Para vincular a um app, informe app e service_type.'
             )
-        if service_type != ServiceType.POSTGRES:
-            raise serializers.ValidationError('Apenas Postgres esta habilitado no momento.')
         return attrs
 
     def create(self, validated_data):
@@ -75,6 +77,8 @@ class ServiceSerializer(serializers.ModelSerializer):
         project = validated_data.get('project')
         service_type = validated_data['service_type']
         name = validated_data.get('name')
+        runtime = get_service_runtime(service_type)
+        service_type = runtime.service_type
 
         if app:
             task_result = AppMixin.create_service.delay(
@@ -84,23 +88,23 @@ class ServiceSerializer(serializers.ModelSerializer):
             app.task_id = task_result.id
             app.save(update_fields=['task_id'])
             return Service(
-                name=f'{app.name}-db',
+                name=f'{app.name}-{runtime.attached_suffix}',
                 service_type=service_type,
                 app=app,
                 project=app.project,
                 host='provisionando...',
-                port=0,
+                port=runtime.port,
             )
 
-        password = uuid.uuid4().hex
+        password = uuid.uuid4().hex if service_type == ServiceType.POSTGRES.value else ''
         service_name = name or 'provisionando...'
         placeholder = Service.objects.create(
             name=service_name,
             service_type=service_type,
-            user='postgres',
+            user=runtime.user,
             password=password,
             host='provisionando...',
-            port=5432,
+            port=runtime.port,
             app=None,
             project=project,
             container_name=None,
