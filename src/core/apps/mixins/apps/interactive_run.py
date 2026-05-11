@@ -1,24 +1,22 @@
-import base64
-import hashlib
 import re
 import shlex
 import socket
 import time
 from dataclasses import dataclass
 from datetime import timedelta
-from functools import lru_cache
 from typing import cast
 
 import paramiko
 from celery import Task, shared_task
-from cryptography.fernet import Fernet
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
 from core.adapters import DokkuAdapter
+from core.apps.interactive_crypto import decrypt_interactive_text, encrypt_interactive_text
 from core.apps.models import (
-    App,
+    InteractiveRunAuditChunk,
+    InteractiveRunAuditDirection,
     InteractiveRunCommandKind,
     InteractiveRunEvent,
     InteractiveRunEventType,
@@ -127,8 +125,18 @@ class DjangoCreatesuperuserDriver:
         return None
 
 
+class PostgresConnectDriver:
+    command_kind = InteractiveRunCommandKind.POSTGRES_CONNECT
+    display_name = 'Postgres connect'
+    log_category = LogCategory.DATABASE
+
+    def build_command(self, service_name: str) -> str:
+        return f'postgres:connect {shlex.quote(service_name)}'
+
+
 INTERACTIVE_COMMAND_DRIVERS = {
     InteractiveRunCommandKind.DJANGO_CREATESUPERUSER: DjangoCreatesuperuserDriver(),
+    InteractiveRunCommandKind.POSTGRES_CONNECT: PostgresConnectDriver(),
 }
 
 
@@ -168,20 +176,12 @@ def cleanup_expired_interactive_sessions():
     )
 
 
-@lru_cache(maxsize=1)
-def _interactive_answer_fernet() -> Fernet:
-    key_material = hashlib.sha256(settings.SECRET_KEY.encode('utf-8')).digest()
-    key = base64.urlsafe_b64encode(key_material)
-    return Fernet(key)
-
-
 def encrypt_interactive_answer(value: str) -> bytes:
-    return _interactive_answer_fernet().encrypt(value.encode('utf-8'))
+    return encrypt_interactive_text(value)
 
 
 def decrypt_interactive_answer(value: bytes | memoryview) -> str:
-    raw_value = bytes(value)
-    return _interactive_answer_fernet().decrypt(raw_value).decode('utf-8')
+    return decrypt_interactive_text(value)
 
 
 def _touch_locked_session(session: InteractiveRunSession, *, now=None):
@@ -202,6 +202,83 @@ def _create_session_event(
         _touch_locked_session(session)
         session.save(update_fields=['last_activity_at', 'expires_at'])
     return event
+
+
+def create_interactive_audit_chunk(
+    session_id: str,
+    direction: str,
+    content: str,
+    *,
+    consumed_at=None,
+    metadata: dict | None = None,
+) -> InteractiveRunAuditChunk:
+    with transaction.atomic():
+        session = InteractiveRunSession.objects.select_for_update().get(id=session_id)
+        now = timezone.now()
+        session.audit_sequence += 1
+        if session.status not in TERMINAL_SESSION_STATUSES:
+            _touch_locked_session(session, now=now)
+            session.save(update_fields=['audit_sequence', 'last_activity_at', 'expires_at'])
+        else:
+            session.save(update_fields=['audit_sequence'])
+
+        return InteractiveRunAuditChunk.objects.create(
+            session=session,
+            direction=direction,
+            sequence=session.audit_sequence,
+            size=len(content.encode('utf-8')),
+            content_ciphertext=encrypt_interactive_text(content),
+            consumed_at=consumed_at,
+            metadata=metadata or {},
+        )
+
+
+def queue_interactive_terminal_input(session_id: str, value: str) -> InteractiveRunAuditChunk:
+    if not value:
+        raise ValueError('Entrada vazia.')
+
+    with transaction.atomic():
+        session = InteractiveRunSession.objects.select_for_update().get(id=session_id)
+        if session.command_kind != InteractiveRunCommandKind.POSTGRES_CONNECT:
+            raise ValueError('Esta sessao nao aceita input de terminal.')
+        if session.status not in {InteractiveRunSessionStatus.PENDING, InteractiveRunSessionStatus.RUNNING}:
+            raise ValueError('A sessao nao esta aceitando entrada neste momento.')
+
+    return create_interactive_audit_chunk(
+        session_id,
+        InteractiveRunAuditDirection.INPUT,
+        value,
+    )
+
+
+def _consume_terminal_input_chunks(session_id: str) -> list[str]:
+    with transaction.atomic():
+        chunks = list(
+            InteractiveRunAuditChunk.objects.select_for_update()
+            .filter(
+                session_id=session_id,
+                direction=InteractiveRunAuditDirection.INPUT,
+                consumed_at__isnull=True,
+            )
+            .order_by('sequence')[:100]
+        )
+        if not chunks:
+            return []
+
+        now = timezone.now()
+        values = [decrypt_interactive_text(chunk.content_ciphertext) for chunk in chunks]
+        InteractiveRunAuditChunk.objects.filter(id__in=[chunk.id for chunk in chunks]).update(consumed_at=now)
+        return values
+
+
+def _record_terminal_output(session_id: str, value: str):
+    if not value:
+        return None
+    return create_interactive_audit_chunk(
+        session_id,
+        InteractiveRunAuditDirection.OUTPUT,
+        value,
+    )
 
 
 def submit_interactive_session_answer(session_id: str, prompt_id: str, value: str):
@@ -553,6 +630,55 @@ def _run_interactive_command_loop(
         client.close()
 
 
+def _run_postgres_connect_loop(
+    session: InteractiveRunSession,
+    driver: PostgresConnectDriver,
+    dokku_adapter: DokkuAdapter,
+) -> int:
+    service = session.service
+    if not service or not service.container_name:
+        raise RuntimeError('Servico Postgres sem container_name configurado.')
+
+    command = driver.build_command(service.container_name)
+    client, stdin, stdout, _stderr = _open_interactive_command(dokku_adapter, command)
+
+    try:
+        while True:
+            control_state = _get_session_control_state(str(session.id))
+            if control_state.cancel_requested:
+                raise InteractiveRunCancelled('Sessao Postgres cancelada pelo usuario.')
+            if control_state.expires_at <= timezone.now():
+                raise InteractiveRunExpired('Sessao Postgres expirada por inatividade.')
+
+            try:
+                output = _read_channel_output(stdout.channel)
+            except socket.timeout:
+                output = ''
+
+            if output:
+                _record_terminal_output(str(session.id), output)
+
+            for input_value in _consume_terminal_input_chunks(str(session.id)):
+                stdin.write(input_value)
+                stdin.flush()
+
+            if stdout.channel.exit_status_ready():
+                trailing_output = _read_channel_output(stdout.channel)
+                if trailing_output:
+                    _record_terminal_output(str(session.id), trailing_output)
+                break
+
+            time.sleep(INTERACTIVE_RUN_POLL_INTERVAL)
+
+        return stdout.channel.recv_exit_status()
+    finally:
+        try:
+            stdin.close()
+        except Exception:
+            pass
+        client.close()
+
+
 class InteractiveRunMixin:
     """Infraestrutura generica para sessoes interativas executadas via Dokku."""
 
@@ -562,12 +688,12 @@ class InteractiveRunMixin:
         task_id = task.request.id
 
         try:
-            session = InteractiveRunSession.objects.select_related('app').get(id=session_id)
+            session = InteractiveRunSession.objects.select_related('app', 'service').get(id=session_id)
         except InteractiveRunSession.DoesNotExist as e:
             raise RuntimeError('Sessao interativa nao encontrada.') from e
 
         app = session.app
-        if not app.name_dokku:
+        if session.command_kind != InteractiveRunCommandKind.POSTGRES_CONNECT and not app.name_dokku:
             raise RuntimeError('App sem name_dokku configurado.')
 
         driver = get_interactive_driver(session.command_kind)
@@ -590,14 +716,27 @@ class InteractiveRunMixin:
             },
             touch=False,
         )
+        log_metadata = {
+            'command_kind': session.command_kind,
+            'manage_path': session.manage_path,
+            'service_id': session.service_id,
+            'client_ip': session.client_ip,
+        }
         logger.info(
             f'Iniciando sessao interativa: {driver.display_name}',
             category=driver.log_category,
-            metadata={'command_kind': session.command_kind, 'manage_path': session.manage_path},
+            metadata=log_metadata,
         )
 
         try:
-            exit_status, output_state = _run_interactive_command_loop(session, driver, dokku_adapter, logger)
+            if session.command_kind == InteractiveRunCommandKind.POSTGRES_CONNECT:
+                exit_status = _run_postgres_connect_loop(session, driver, dokku_adapter)
+                output_state = {'saw_success_output': False}
+                complete_message = 'Sessao Postgres finalizada.'
+            else:
+                exit_status, output_state = _run_interactive_command_loop(session, driver, dokku_adapter, logger)
+                complete_message = 'Superusuario criado com sucesso.'
+
             if exit_status != 0:
                 raise RuntimeError(f'Comando interativo finalizado com codigo {exit_status}.')
 
@@ -606,14 +745,14 @@ class InteractiveRunMixin:
                 InteractiveRunSessionStatus.COMPLETED,
                 InteractiveRunEventType.COMPLETE,
                 {
-                    'message': 'Superusuario criado com sucesso.',
+                    'message': complete_message,
                     'silent': bool(output_state.get('saw_success_output')),
                 },
             )
             logger.success(
                 'Sessao interativa concluida com sucesso.',
                 category=driver.log_category,
-                metadata={'command_kind': session.command_kind},
+                metadata=log_metadata,
             )
             return {
                 'status': 'success',

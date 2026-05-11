@@ -13,10 +13,15 @@ from rest_framework.test import APIClient, APITestCase
 from core.adapters.dokku_mixins.dokku_apps import DokkuAppsMixin
 from core.adapters.dokku_mixins.dokku_config import DokkuConfigMixin
 from core.adapters.ssh import SSHAdapter
+from core.apps.interactive_crypto import decrypt_interactive_text
 from core.apps.mixins import AppMixin, ServiceMixin
 from core.apps.mixins.apps import interactive_run
 from core.apps.mixins.apps.create_app import CreateAppMixin
-from core.apps.mixins.apps.interactive_run import get_interactive_driver, submit_interactive_session_answer
+from core.apps.mixins.apps.interactive_run import (
+    create_interactive_audit_chunk,
+    get_interactive_driver,
+    submit_interactive_session_answer,
+)
 from core.apps.mixins.apps.redeploy_app import RedeployAppMixin
 from core.apps.mixins.apps.run_data import validate_dump_args, validate_manage_path
 from core.apps.models import (
@@ -24,6 +29,8 @@ from core.apps.models import (
     AppProcessScale,
     AppRunArtifact,
     AppRunArtifactKind,
+    InteractiveRunAuditChunk,
+    InteractiveRunAuditDirection,
     InteractiveRunCommandKind,
     InteractiveRunEvent,
     InteractiveRunEventType,
@@ -296,6 +303,58 @@ class InteractiveRunEndpointTests(APITestCase):
         self.assertEqual(session.task_id, 'task-interactive-123')
         mock_delay.assert_called_once_with(session_id=str(session.id))
 
+    @patch('core.apps.views.AppMixin.run_interactive_session.delay')
+    def test_create_postgres_connect_session_uses_linked_postgres_service(self, mock_delay):
+        mock_delay.return_value = Mock(id='task-postgres-connect-123')
+        service = Service.objects.create(
+            name='db-interactive',
+            user='postgres',
+            password='secret',
+            host='localhost',
+            port=5432,
+            app=self.app,
+            project=self.project,
+            service_type='postgres',
+            container_name='db-interactive',
+        )
+
+        response = self.client.post(
+            f'/api/apps/apps/{self.app.id}/interactive_sessions/',
+            {'command_kind': 'postgres_connect', 'service_id': service.id},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.data['task_id'], 'task-postgres-connect-123')
+        self.assertIn('terminal_events', response.data['stream_url'])
+        session = InteractiveRunSession.objects.get(id=response.data['session_id'])
+        self.assertEqual(session.command_kind, InteractiveRunCommandKind.POSTGRES_CONNECT)
+        self.assertEqual(session.service_id, service.id)
+        mock_delay.assert_called_once_with(session_id=str(session.id))
+
+    @patch('core.apps.views.AppMixin.run_interactive_session.delay')
+    def test_create_postgres_connect_session_rejects_non_postgres_service(self, mock_delay):
+        service = Service.objects.create(
+            name='redis-interactive',
+            user='redis',
+            password='',
+            host='localhost',
+            port=6379,
+            app=self.app,
+            project=self.project,
+            service_type='redis',
+            container_name='redis-interactive',
+        )
+
+        response = self.client.post(
+            f'/api/apps/apps/{self.app.id}/interactive_sessions/',
+            {'command_kind': 'postgres_connect', 'service_id': service.id},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(mock_delay.called)
+
     def test_answer_endpoint_encrypts_pending_answer_without_storing_plaintext(self):
         session = InteractiveRunSession.objects.create(
             app=self.app,
@@ -438,6 +497,83 @@ class InteractiveRunEndpointTests(APITestCase):
 
         self.assertEqual(response.status_code, 404)
 
+    def test_terminal_input_endpoint_stores_encrypted_audit_chunk(self):
+        service = Service.objects.create(
+            name='db-terminal-input',
+            user='postgres',
+            password='secret',
+            host='localhost',
+            port=5432,
+            app=self.app,
+            project=self.project,
+            service_type='postgres',
+            container_name='db-terminal-input',
+        )
+        session = InteractiveRunSession.objects.create(
+            app=self.app,
+            service=service,
+            created_by=self.user,
+            command_kind=InteractiveRunCommandKind.POSTGRES_CONNECT,
+            status=InteractiveRunSessionStatus.RUNNING,
+            manage_path='manage.py',
+            expires_at=timezone.now() + timedelta(minutes=5),
+            last_activity_at=timezone.now(),
+        )
+
+        response = self.client.post(
+            f'/api/apps/apps/{self.app.id}/interactive_sessions/{session.id}/input/',
+            {'data': 'SELECT 1;\n'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        chunk = InteractiveRunAuditChunk.objects.get(session=session)
+        self.assertEqual(chunk.direction, InteractiveRunAuditDirection.INPUT)
+        self.assertNotIn(b'SELECT 1', bytes(chunk.content_ciphertext))
+        self.assertEqual(decrypt_interactive_text(chunk.content_ciphertext), 'SELECT 1;\n')
+
+    def test_terminal_events_streams_audit_output_without_interactive_output_event(self):
+        service = Service.objects.create(
+            name='db-terminal-output',
+            user='postgres',
+            password='secret',
+            host='localhost',
+            port=5432,
+            app=self.app,
+            project=self.project,
+            service_type='postgres',
+            container_name='db-terminal-output',
+        )
+        session = InteractiveRunSession.objects.create(
+            app=self.app,
+            service=service,
+            created_by=self.user,
+            command_kind=InteractiveRunCommandKind.POSTGRES_CONNECT,
+            status=InteractiveRunSessionStatus.COMPLETED,
+            manage_path='manage.py',
+            completed_at=timezone.now(),
+            expires_at=timezone.now() + timedelta(minutes=5),
+            last_activity_at=timezone.now(),
+        )
+        create_interactive_audit_chunk(
+            str(session.id),
+            InteractiveRunAuditDirection.OUTPUT,
+            'postgres=# SELECT 1;\n',
+        )
+
+        response = self.client.get(
+            f'/api/apps/apps/{self.app.id}/interactive_sessions/{session.id}/terminal_events/'
+        )
+
+        self.assertEqual(response.status_code, 200)
+        streamed_content = b''.join(
+            chunk if isinstance(chunk, bytes) else chunk.encode('utf-8')
+            for chunk in response.streaming_content
+        ).decode('utf-8')
+        self.assertIn('event: output', streamed_content)
+        self.assertIn('postgres=# SELECT 1;', streamed_content)
+        self.assertFalse(session.events.filter(event_type=InteractiveRunEventType.OUTPUT).exists())
+
 
 class InteractiveRunTaskTests(TestCase):
     def setUp(self):
@@ -513,6 +649,52 @@ class InteractiveRunTaskTests(TestCase):
         self.assertEqual(session.events.filter(event_type=InteractiveRunEventType.PROMPT).count(), 4)
         self.assertTrue(session.events.filter(event_type=InteractiveRunEventType.COMPLETE).exists())
         self.assertFalse(any('123123Admin' in str(event.payload) for event in session.events.all()))
+
+    def test_run_interactive_session_uses_postgres_connect_and_audits_output(self):
+        service = Service.objects.create(
+            name='db-task-terminal',
+            user='postgres',
+            password='secret',
+            host='localhost',
+            port=5432,
+            app=self.app,
+            project=self.project,
+            service_type='postgres',
+            container_name='db-task-terminal',
+        )
+        session = InteractiveRunSession.objects.create(
+            app=self.app,
+            service=service,
+            created_by=self.user,
+            command_kind=InteractiveRunCommandKind.POSTGRES_CONNECT,
+            status=InteractiveRunSessionStatus.PENDING,
+            manage_path='manage.py',
+            expires_at=timezone.now() + timedelta(minutes=5),
+            last_activity_at=timezone.now(),
+        )
+        channel = FakeInteractiveChannel(['postgres=# '])
+        stdin = FakeInteractiveStdin(channel)
+        stdout = FakeInteractiveStdStream(channel)
+        stderr = FakeInteractiveStdStream(channel)
+
+        task = AppMixin.run_interactive_session
+        with (
+            patch(
+                'core.apps.mixins.apps.interactive_run._open_interactive_command',
+                return_value=(FakeInteractiveClient(), stdin, stdout, stderr),
+            ) as mock_open,
+            patch('core.apps.mixins.apps.interactive_run.time.sleep', return_value=None),
+        ):
+            task.request.id = 'task-postgres-connect-session'
+            result = task.run(session_id=str(session.id))
+
+        session.refresh_from_db()
+        self.assertEqual(result['status'], 'success')
+        self.assertEqual(session.status, InteractiveRunSessionStatus.COMPLETED)
+        self.assertEqual(mock_open.call_args.args[1], 'postgres:connect db-task-terminal')
+        chunk = session.audit_chunks.get(direction=InteractiveRunAuditDirection.OUTPUT)
+        self.assertEqual(decrypt_interactive_text(chunk.content_ciphertext), 'postgres=# ')
+        self.assertFalse(session.events.filter(event_type=InteractiveRunEventType.OUTPUT).exists())
 
     def test_run_interactive_session_suppresses_echoes_and_redacts_sensitive_output(self):
         result, session, channel = self._run_task_with_script(

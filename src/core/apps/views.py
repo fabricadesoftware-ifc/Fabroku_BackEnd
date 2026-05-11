@@ -22,12 +22,14 @@ from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
 from core.adapters import DokkuAdapter, GitHubAdapter
+from core.apps.interactive_crypto import decrypt_interactive_text
 from core.apps.mixins import AppMixin, ServiceMixin
 from core.apps.mixins.apps.interactive_run import (
     TERMINAL_SESSION_STATUSES,
     cleanup_expired_interactive_sessions,
     get_interactive_driver,
     get_interactive_session_expires_at,
+    queue_interactive_terminal_input,
     request_interactive_session_cancel,
     submit_interactive_session_answer,
 )
@@ -53,11 +55,14 @@ from .models import (
     AppProcessScale,
     AppRunArtifact,
     AppRunArtifactKind,
+    InteractiveRunAuditChunk,
+    InteractiveRunAuditDirection,
     InteractiveRunCommandKind,
     InteractiveRunEvent,
     InteractiveRunSession,
     InteractiveRunSessionStatus,
     Service,
+    ServiceType,
 )
 from .serializers import AppProcessScaleSerializer, AppSerializer, ServiceSerializer
 
@@ -66,6 +71,7 @@ ENV_VAR_KEY_PATTERN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 ENV_VAR_MAX_ITEMS = 100
 ENV_VAR_MAX_KEY_LENGTH = 128
 ENV_VAR_MAX_VALUE_LENGTH = 8192
+SSE_KEEPALIVE_SECONDS = 5
 
 
 class ServerSentEventRenderer(BaseRenderer):
@@ -118,12 +124,18 @@ def _safe_json_filename(filename: str | None, *, default: str = 'dump.json') -> 
 
 
 def _serialize_interactive_session(session: InteractiveRunSession, *, app_id) -> dict:
+    if session.command_kind == InteractiveRunCommandKind.POSTGRES_CONNECT:
+        stream_url = f'/api/apps/apps/{app_id}/interactive_sessions/{session.id}/terminal_events/'
+    else:
+        stream_url = f'/api/apps/apps/{app_id}/interactive_sessions/{session.id}/events/'
+
     return {
         'session_id': str(session.id),
         'status': session.status,
         'command_kind': session.command_kind,
+        'service_id': session.service_id,
         'expires_at': session.expires_at.isoformat() if session.expires_at else None,
-        'stream_url': f'/api/apps/apps/{app_id}/interactive_sessions/{session.id}/events/',
+        'stream_url': stream_url,
     }
 
 
@@ -132,14 +144,43 @@ def _format_sse_event(event: InteractiveRunEvent) -> str:
     return f'id: {event.id}\nevent: {event.event_type}\ndata: {payload}\n\n'
 
 
+def _format_terminal_output_event(chunk: InteractiveRunAuditChunk) -> str:
+    payload = json.dumps(
+        {
+            'id': chunk.id,
+            'sequence': chunk.sequence,
+            'content': decrypt_interactive_text(chunk.content_ciphertext),
+        },
+        ensure_ascii=True,
+    )
+    return f'id: output-{chunk.id}\nevent: output\ndata: {payload}\n\n'
+
+
+def _format_terminal_session_event(event: InteractiveRunEvent) -> str:
+    payload = json.dumps({'id': event.id, **event.payload}, ensure_ascii=True)
+    return f'id: event-{event.id}\nevent: {event.event_type}\ndata: {payload}\n\n'
+
+
+def _get_request_ip(request) -> str:
+    forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR', '')
+    if forwarded_for:
+        return forwarded_for.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR', '') or ''
+
+
 class InteractiveSessionCreateSerializer(drf_serializers.Serializer):
     command_kind = drf_serializers.ChoiceField(choices=InteractiveRunCommandKind.choices)
     manage_path = drf_serializers.CharField(required=False, allow_blank=False, default='manage.py')
+    service_id = drf_serializers.IntegerField(required=False)
 
 
 class InteractiveSessionAnswerSerializer(drf_serializers.Serializer):
     prompt_id = drf_serializers.CharField()
     value = drf_serializers.CharField(allow_blank=True)
+
+
+class InteractiveSessionInputSerializer(drf_serializers.Serializer):
+    data = drf_serializers.CharField(allow_blank=True, trim_whitespace=False)
 
 
 class ScaleProcessesSerializer(drf_serializers.Serializer):
@@ -180,6 +221,32 @@ class EnvVarsUpdateSerializer(drf_serializers.Serializer):
             normalized[key] = env_value
 
         return normalized
+
+
+def _resolve_postgres_connect_service(app: App, service_id: int | None) -> Service:
+    queryset = Service.objects.filter(
+        app=app,
+        project=app.project,
+        service_type=ServiceType.POSTGRES,
+        deleted_at__isnull=True,
+    )
+
+    if service_id is not None:
+        service = queryset.filter(id=service_id).first()
+        if not service:
+            raise ValueError('Servico Postgres nao encontrado para este app.')
+    else:
+        services = list(queryset.order_by('name', 'id')[:2])
+        if not services:
+            raise ValueError('Este app nao tem um servico Postgres vinculado.')
+        if len(services) > 1:
+            raise ValueError('Este app tem mais de um Postgres. Informe --service para escolher.')
+        service = services[0]
+
+    if not service.container_name:
+        raise ValueError('Servico Postgres ainda nao foi provisionado no Dokku.')
+
+    return service
 
 
 def _iter_project_users_with_git_token(app: App, preferred_user=None):
@@ -817,26 +884,34 @@ class AppViewSet(ModelViewSet):
     def create_interactive_session(self, request, pk=None):
         """Inicia uma sessao interativa controlada pela CLI para comandos registrados."""
         app = self.get_object()
-        if not app.name_dokku:
-            return Response({'error': 'App nao tem name_dokku configurado'}, status=status.HTTP_400_BAD_REQUEST)
 
         serializer = InteractiveSessionCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         command_kind = serializer.validated_data['command_kind']
+        service = None
+        manage_path = 'manage.py'
         try:
-            manage_path = validate_manage_path(serializer.validated_data.get('manage_path'))
             get_interactive_driver(command_kind)
+            if command_kind == InteractiveRunCommandKind.POSTGRES_CONNECT:
+                service = _resolve_postgres_connect_service(app, serializer.validated_data.get('service_id'))
+            else:
+                if not app.name_dokku:
+                    return Response({'error': 'App nao tem name_dokku configurado'}, status=status.HTTP_400_BAD_REQUEST)
+                manage_path = validate_manage_path(serializer.validated_data.get('manage_path'))
         except ValueError as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         cleanup_expired_interactive_sessions()
         session = InteractiveRunSession.objects.create(
             app=app,
+            service=service,
             created_by=request.user,
             command_kind=command_kind,
             status=InteractiveRunSessionStatus.PENDING,
             manage_path=manage_path,
+            client_ip=_get_request_ip(request),
+            user_agent=request.META.get('HTTP_USER_AGENT', '')[:1000],
             expires_at=get_interactive_session_expires_at(),
             last_activity_at=timezone.now(),
         )
@@ -892,11 +967,94 @@ class AppViewSet(ModelViewSet):
                 ):
                     break
 
-                if time.monotonic() - keepalive_at >= 5:
+                if time.monotonic() - keepalive_at >= SSE_KEEPALIVE_SECONDS:
                     keepalive_at = time.monotonic()
                     yield ': keep-alive\n\n'
 
                 time.sleep(0.5)
+
+        response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
+        response['Cache-Control'] = 'no-cache'
+        response['X-Accel-Buffering'] = 'no'
+        return response
+
+    @action(
+        detail=True,
+        methods=['get'],
+        url_path=r'interactive_sessions/(?P<session_id>[^/.]+)/terminal_events',
+        renderer_classes=[ServerSentEventRenderer, JSONRenderer],
+    )
+    def interactive_terminal_events(self, request, pk=None, session_id=None):
+        """Stream SSE de terminal para sessoes Postgres sem plaintext em InteractiveRunEvent."""
+        app = self.get_object()
+        session = self._get_interactive_session(app, session_id, request.user)
+        if not session:
+            return Response({'error': 'Sessao interativa nao encontrada.'}, status=status.HTTP_404_NOT_FOUND)
+        if session.command_kind != InteractiveRunCommandKind.POSTGRES_CONNECT:
+            return Response({'error': 'Sessao nao e um terminal Postgres.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            after_output_id = int(request.query_params.get('after_output', '0') or 0)
+            after_event_id = int(request.query_params.get('after_event', '0') or 0)
+        except ValueError:
+            after_output_id = 0
+            after_event_id = 0
+
+        def event_stream():
+            nonlocal after_output_id, after_event_id
+            keepalive_at = time.monotonic()
+
+            while True:
+                output_chunks = list(
+                    InteractiveRunAuditChunk.objects.filter(
+                        session=session,
+                        direction=InteractiveRunAuditDirection.OUTPUT,
+                        id__gt=after_output_id,
+                    ).order_by('id')[:50]
+                )
+                session_events = list(
+                    InteractiveRunEvent.objects.filter(
+                        session=session,
+                        id__gt=after_event_id,
+                    ).order_by('id')[:50]
+                )
+
+                if output_chunks or session_events:
+                    for chunk in output_chunks:
+                        after_output_id = chunk.id
+                        yield _format_terminal_output_event(chunk)
+                    for interactive_event in session_events:
+                        after_event_id = interactive_event.id
+                        yield _format_terminal_session_event(interactive_event)
+                    keepalive_at = time.monotonic()
+                    continue
+
+                current_session = self._get_interactive_session(app, session_id, request.user)
+                if not current_session:
+                    break
+
+                has_pending_output = InteractiveRunAuditChunk.objects.filter(
+                    session=current_session,
+                    direction=InteractiveRunAuditDirection.OUTPUT,
+                    id__gt=after_output_id,
+                ).exists()
+                has_pending_events = InteractiveRunEvent.objects.filter(
+                    session=current_session,
+                    id__gt=after_event_id,
+                ).exists()
+                has_finished_streaming = (
+                    current_session.status in TERMINAL_SESSION_STATUSES
+                    and not has_pending_output
+                    and not has_pending_events
+                )
+                if has_finished_streaming:
+                    break
+
+                if time.monotonic() - keepalive_at >= SSE_KEEPALIVE_SECONDS:
+                    keepalive_at = time.monotonic()
+                    yield ': keep-alive\n\n'
+
+                time.sleep(0.2)
 
         response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
         response['Cache-Control'] = 'no-cache'
@@ -925,6 +1083,27 @@ class AppViewSet(ModelViewSet):
 
         session.refresh_from_db()
         return Response(_serialize_interactive_session(session, app_id=app.id))
+
+    @action(detail=True, methods=['post'], url_path=r'interactive_sessions/(?P<session_id>[^/.]+)/input')
+    def input_interactive_session(self, request, pk=None, session_id=None):
+        """Enfileira input bruto para uma sessao terminal Postgres."""
+        app = self.get_object()
+        session = self._get_interactive_session(app, session_id, request.user)
+        if not session:
+            return Response({'error': 'Sessao interativa nao encontrada.'}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = InteractiveSessionInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        input_data = serializer.validated_data['data']
+        if not input_data:
+            return Response({'queued': False, 'reason': 'empty'})
+
+        try:
+            chunk = queue_interactive_terminal_input(str(session.id), input_data)
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_409_CONFLICT)
+
+        return Response({'queued': True, 'chunk_id': chunk.id, 'sequence': chunk.sequence})
 
     @action(detail=True, methods=['post'], url_path=r'interactive_sessions/(?P<session_id>[^/.]+)/cancel')
     def cancel_interactive_session(self, request, pk=None, session_id=None):
