@@ -954,6 +954,12 @@ class AppProcessScaleEndpointTests(APITestCase):
             email='scale@example.com',
             password='senha123',
             name='Scale User',
+            is_fabric=True,
+        )
+        self.member_user = User.objects.create_user(
+            email='member-scale@example.com',
+            password='senha123',
+            name='Member User',
         )
         self.other_user = User.objects.create_user(
             email='outsider-scale@example.com',
@@ -962,6 +968,7 @@ class AppProcessScaleEndpointTests(APITestCase):
         )
         self.project = Project.objects.create(name='Projeto Scale')
         self.project.users.add(self.user)
+        self.project.users.add(self.member_user)
         self.app = App.objects.create(
             name='app-scale-teste',
             name_dokku='app-scale-teste',
@@ -991,6 +998,24 @@ class AppProcessScaleEndpointTests(APITestCase):
         response = self.client.get(f'/api/apps/apps/{self.app.id}/processes/')
 
         self.assertEqual(response.status_code, 404)
+
+    def test_regular_member_cannot_view_processes(self):
+        self.client.force_authenticate(user=self.member_user)
+
+        response = self.client.get(f'/api/apps/apps/{self.app.id}/processes/')
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_regular_member_cannot_scale_processes(self):
+        self.client.force_authenticate(user=self.member_user)
+
+        response = self.client.post(
+            f'/api/apps/apps/{self.app.id}/scale_processes/',
+            {'processes': {'web': 1}},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 403)
 
     def test_scale_endpoint_rejects_web_zero(self):
         self.client.force_authenticate(user=self.user)

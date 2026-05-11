@@ -83,6 +83,11 @@ def _has_global_access(user) -> bool:
     return bool(getattr(user, 'is_superuser', False))
 
 
+def _can_manage_process_scale(user) -> bool:
+    """Process scaling is restricted to admins and Fabrica members."""
+    return bool(getattr(user, 'is_superuser', False) or getattr(user, 'is_fabric', False))
+
+
 def _display_user(user) -> str:
     """Retorna um identificador amigÃ¡vel do usuÃ¡rio para logs e diagnÃ³sticos."""
     return user.name or user.email or f'user#{user.id}'
@@ -386,6 +391,12 @@ class AppViewSet(ModelViewSet):
         """Retorna a escala de processos persistentes do app no Dokku."""
         app = self.get_object()
 
+        if not _can_manage_process_scale(request.user):
+            return Response(
+                {'error': 'Apenas membros da Fabrica ou administradores podem gerenciar processos.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         if not app.name_dokku:
             return Response(
                 {'error': 'App nao tem name_dokku configurado'},
@@ -413,6 +424,12 @@ class AppViewSet(ModelViewSet):
     def scale_processes(self, request, pk=None):
         """Aplica escala nos processos persistentes do app sem expor shell livre."""
         app = self.get_object()
+
+        if not _can_manage_process_scale(request.user):
+            return Response(
+                {'error': 'Apenas membros da Fabrica ou administradores podem gerenciar processos.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         if not app.name_dokku:
             return Response(
