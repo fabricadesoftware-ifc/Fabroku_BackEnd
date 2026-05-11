@@ -1,3 +1,4 @@
+import shlex
 from abc import abstractmethod
 from typing import Dict
 
@@ -10,20 +11,21 @@ class DokkuConfigMixin:
 
     def set_config(self, app_name: str, env_vars: Dict[str, str], no_restart: bool = False) -> str:
         """Configura variáveis de ambiente para uma aplicação."""
-        outputs = []
-        flags = ' --no-restart' if no_restart else ''
-        for key, value in env_vars.items():
-            output = self._run_command(f'config:set{flags} {app_name} {key}="{value}"')
-            outputs.append(f'{key}: {output}')
-        return '\n'.join(outputs)
+        if not env_vars:
+            return ''
 
-    def unset_config(self, app_name: str, keys: list[str]) -> str:
+        flags = ' --no-restart' if no_restart else ''
+        assignments = ' '.join(shlex.quote(f'{key}={value}') for key, value in env_vars.items())
+        return self._run_command(f'config:set{flags} {shlex.quote(app_name)} {assignments}')
+
+    def unset_config(self, app_name: str, keys: list[str], no_restart: bool = False) -> str:
         """Remove variáveis de ambiente de uma aplicação."""
-        outputs = []
-        for key in keys:
-            output = self._run_command(f'config:unset {app_name} {key}')
-            outputs.append(f'{key}: {output}')
-        return '\n'.join(outputs)
+        if not keys:
+            return ''
+
+        flags = ' --no-restart' if no_restart else ''
+        keys_arg = ' '.join(shlex.quote(key) for key in keys)
+        return self._run_command(f'config:unset{flags} {shlex.quote(app_name)} {keys_arg}')
 
     def show_config(self, app_name: str) -> str:
         """Exibe todas as configurações de uma aplicação."""

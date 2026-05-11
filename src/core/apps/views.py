@@ -1,13 +1,14 @@
-import logging
 import json
+import logging
+import re
 import time
 from pathlib import PurePosixPath
 
 from celery.result import AsyncResult
 from django.conf import settings
 from django.core.cache import cache
-from django.http import HttpResponse, StreamingHttpResponse
 from django.db.models import Prefetch, Q
+from django.http import HttpResponse, StreamingHttpResponse
 from django.utils import timezone
 from django.utils.http import content_disposition_header
 from drf_spectacular.utils import extend_schema
@@ -37,6 +38,7 @@ from core.apps.mixins.apps.run_data import (
     validate_dump_args,
     validate_manage_path,
 )
+from core.apps.mixins.services.service_dokku import dokku_output_failed
 from core.apps.process_scale import (
     get_process_max_instances,
     sync_app_process_scales_from_dokku,
@@ -53,7 +55,6 @@ from .models import (
     AppRunArtifactKind,
     InteractiveRunCommandKind,
     InteractiveRunEvent,
-    InteractiveRunEventType,
     InteractiveRunSession,
     InteractiveRunSessionStatus,
     Service,
@@ -61,6 +62,10 @@ from .models import (
 from .serializers import AppProcessScaleSerializer, AppSerializer, ServiceSerializer
 
 logger = logging.getLogger(__name__)
+ENV_VAR_KEY_PATTERN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+ENV_VAR_MAX_ITEMS = 100
+ENV_VAR_MAX_KEY_LENGTH = 128
+ENV_VAR_MAX_VALUE_LENGTH = 8192
 
 
 class ServerSentEventRenderer(BaseRenderer):
@@ -145,6 +150,36 @@ class ScaleProcessesSerializer(drf_serializers.Serializer):
             return validate_process_quantities(value)
         except ValueError as exc:
             raise drf_serializers.ValidationError(str(exc)) from exc
+
+
+class EnvVarsUpdateSerializer(drf_serializers.Serializer):
+    variables = drf_serializers.DictField(
+        child=drf_serializers.CharField(allow_blank=True, trim_whitespace=False),
+        allow_empty=True,
+    )
+    restart = drf_serializers.BooleanField(required=False, default=True)
+
+    def validate_variables(self, value):
+        if len(value) > ENV_VAR_MAX_ITEMS:
+            raise drf_serializers.ValidationError(f'Informe no maximo {ENV_VAR_MAX_ITEMS} variaveis.')
+
+        normalized = {}
+        for raw_key, raw_value in value.items():
+            key = str(raw_key).strip()
+            env_value = '' if raw_value is None else str(raw_value)
+
+            if not key:
+                raise drf_serializers.ValidationError('Variavel sem chave.')
+            if len(key) > ENV_VAR_MAX_KEY_LENGTH:
+                raise drf_serializers.ValidationError(f'{key} excede {ENV_VAR_MAX_KEY_LENGTH} caracteres.')
+            if not ENV_VAR_KEY_PATTERN.match(key):
+                raise drf_serializers.ValidationError(f'Nome de variavel invalido: {key}')
+            if len(env_value) > ENV_VAR_MAX_VALUE_LENGTH:
+                raise drf_serializers.ValidationError(f'{key} excede {ENV_VAR_MAX_VALUE_LENGTH} caracteres.')
+
+            normalized[key] = env_value
+
+        return normalized
 
 
 def _iter_project_users_with_git_token(app: App, preferred_user=None):
@@ -256,8 +291,6 @@ class AppViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         # Valida formato: apenas letras minúsculas, números e hífens
-        import re
-
         if not re.match(r'^[a-z0-9][a-z0-9\-]*[a-z0-9]$', name) and len(name) > 1:
             return Response({'available': False, 'reason': 'Use apenas letras minúsculas, números e hífens.'})
         if len(name) < 2:
@@ -287,31 +320,6 @@ class AppViewSet(ModelViewSet):
             {
                 'status': 'STARTING',
                 'message': f'Iniciando aplicação {app.name}...',
-                'task_id': task_result.id,
-            },
-            status=status.HTTP_202_ACCEPTED,
-        )
-
-    @action(detail=True, methods=['post'])
-    def stop(self, request, pk=None):
-        """Para uma aplicação em execução."""
-        app = self.get_object()
-
-        if not app.name_dokku:
-            return Response(
-                {'error': 'App não tem name_dokku configurado'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        app.status = 'STOPPING'
-        app.save(update_fields=['status'])
-
-        task_result = AppMixin.manage_app_task.delay(app_id=app.id, action='stop')  # type: ignore
-
-        return Response(
-            {
-                'status': 'STOPPING',
-                'message': f'Parando aplicação {app.name}...',
                 'task_id': task_result.id,
             },
             status=status.HTTP_202_ACCEPTED,
@@ -390,6 +398,90 @@ class AppViewSet(ModelViewSet):
             },
             status=status.HTTP_202_ACCEPTED,
         )
+
+    @action(detail=True, methods=['patch', 'post'], url_path='env_vars')
+    def update_env_vars(self, request, pk=None):
+        """Atualiza e sincroniza variaveis de ambiente no Dokku."""
+        app = self.get_object()
+
+        if not app.name_dokku:
+            return Response(
+                {'error': 'App nao tem name_dokku configurado'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if app.status in {'DEPLOYING', 'DELETING', 'STARTING'}:
+            return Response(
+                {'error': f'App esta em estado {app.status}. Aguarde a operacao atual terminar.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        serializer = EnvVarsUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        next_variables = serializer.validated_data['variables']
+        should_restart = serializer.validated_data['restart']
+        current_variables = app.variables if isinstance(app.variables, dict) else {}
+        changed_variables = {
+            key: value
+            for key, value in next_variables.items()
+            if current_variables.get(key) != value
+        }
+        removed_keys = sorted(set(current_variables) - set(next_variables))
+
+        if changed_variables or removed_keys:
+            dokku_adapter = DokkuAdapter()
+            command_outputs = []
+            try:
+                if changed_variables:
+                    command_outputs.append(
+                        dokku_adapter.set_config(
+                            app_name=app.name_dokku,
+                            env_vars=changed_variables,
+                            no_restart=should_restart,
+                        )
+                    )
+                if removed_keys:
+                    command_outputs.append(
+                        dokku_adapter.unset_config(
+                            app_name=app.name_dokku,
+                            keys=removed_keys,
+                            no_restart=should_restart,
+                        )
+                    )
+
+                failed_output = next((output for output in command_outputs if dokku_output_failed(output)), None)
+                if failed_output:
+                    return Response(
+                        {'error': 'Falha ao sincronizar variaveis no Dokku.'},
+                        status=status.HTTP_502_BAD_GATEWAY,
+                    )
+
+                app.variables = next_variables
+                app.save(update_fields=['variables', 'updated_at'])
+
+                if should_restart and app.status == 'RUNNING':
+                    restart_output = dokku_adapter.restart_app(app.name_dokku)
+                    if dokku_output_failed(restart_output):
+                        return Response(
+                            {'error': 'Variaveis salvas no Dokku, mas o restart falhou.'},
+                            status=status.HTTP_502_BAD_GATEWAY,
+                        )
+            except Exception as exc:
+                return Response(
+                    {'error': f'Nao foi possivel sincronizar variaveis: {exc}'},
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
+        else:
+            app.variables = next_variables
+            app.save(update_fields=['variables', 'updated_at'])
+
+        return Response({
+            'app': AppSerializer(app, context={'request': request}).data,
+            'updated_keys': sorted(changed_variables.keys()),
+            'removed_keys': removed_keys,
+            'restarted': bool(should_restart and app.status == 'RUNNING' and (changed_variables or removed_keys)),
+        })
 
     @action(detail=True, methods=['get'])
     def processes(self, request, pk=None):

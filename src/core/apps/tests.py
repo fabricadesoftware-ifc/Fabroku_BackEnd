@@ -578,6 +578,21 @@ class DokkuConfigMixinTests(SimpleTestCase):
         self.assertEqual(len(adapter.commands), 1)
         self.assertEqual(adapter.commands[0], 'config:set --no-restart my-app SECRET_KEY=abc DEBUG=false')
 
+    def test_unset_config_batches_keys_with_no_restart(self):
+        adapter = FakeConfigAdapter()
+
+        output = adapter.unset_config(app_name='my-app', keys=['OLD_KEY', 'DEBUG'], no_restart=True)
+
+        self.assertEqual(output, 'OK')
+        self.assertEqual(adapter.commands, ['config:unset --no-restart my-app OLD_KEY DEBUG'])
+
+    def test_set_config_quotes_values_with_spaces(self):
+        adapter = FakeConfigAdapter()
+
+        adapter.set_config(app_name='my-app', env_vars={'DISPLAY_NAME': 'Meu App'}, no_restart=True)
+
+        self.assertEqual(adapter.commands, ["config:set --no-restart my-app 'DISPLAY_NAME=Meu App'"])
+
 
 class DokkuAppsMixinTests(SimpleTestCase):
     def test_exists_app_raises_when_apps_list_fails(self):
@@ -963,6 +978,87 @@ class DeleteAppTaskTests(TestCase):
             status='STOPPED',
         )
         self.assertIsNotNone(recreated.id)
+
+
+class AppEnvVarsEndpointTests(APITestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email='env@example.com',
+            password='senha123',
+            name='Env User',
+        )
+        self.other_user = User.objects.create_user(
+            email='outsider-env@example.com',
+            password='senha123',
+            name='Outsider Env',
+        )
+        self.project = Project.objects.create(name='Projeto Env')
+        self.project.users.add(self.user)
+        self.app = App.objects.create(
+            name='app-env-teste',
+            name_dokku='app-env-teste',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=self.project,
+            status='RUNNING',
+            variables={'OLD_KEY': 'old', 'KEEP': 'same'},
+        )
+
+    @patch('core.apps.views.DokkuAdapter')
+    def test_update_env_vars_sets_changed_unsets_removed_and_restarts_running_app(self, mock_dokku_cls):
+        self.client.force_authenticate(user=self.user)
+        mock_dokku = Mock()
+        mock_dokku.set_config.return_value = 'OK'
+        mock_dokku.unset_config.return_value = 'OK'
+        mock_dokku.restart_app.return_value = 'OK'
+        mock_dokku_cls.return_value = mock_dokku
+
+        response = self.client.patch(
+            f'/api/apps/apps/{self.app.id}/env_vars/',
+            {'variables': {'KEEP': 'changed', 'NEW_KEY': 'new'}},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['updated_keys'], ['KEEP', 'NEW_KEY'])
+        self.assertEqual(response.data['removed_keys'], ['OLD_KEY'])
+        mock_dokku.set_config.assert_called_once_with(
+            app_name='app-env-teste',
+            env_vars={'KEEP': 'changed', 'NEW_KEY': 'new'},
+            no_restart=True,
+        )
+        mock_dokku.unset_config.assert_called_once_with(
+            app_name='app-env-teste',
+            keys=['OLD_KEY'],
+            no_restart=True,
+        )
+        mock_dokku.restart_app.assert_called_once_with('app-env-teste')
+
+        self.app.refresh_from_db()
+        self.assertEqual(self.app.variables, {'KEEP': 'changed', 'NEW_KEY': 'new'})
+
+    def test_update_env_vars_rejects_invalid_key(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            f'/api/apps/apps/{self.app.id}/env_vars/',
+            {'variables': {'INVALID-KEY': 'value'}},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_non_member_cannot_update_env_vars(self):
+        self.client.force_authenticate(user=self.other_user)
+
+        response = self.client.patch(
+            f'/api/apps/apps/{self.app.id}/env_vars/',
+            {'variables': {'SECRET_KEY': 'abc'}},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 404)
 
 
 class AppProcessScaleTests(SimpleTestCase):
