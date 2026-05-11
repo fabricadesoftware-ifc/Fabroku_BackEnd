@@ -161,7 +161,7 @@ class CreateAppMixin:
     def _get_instances(app_id: int, user_id: int) -> tuple[App, User]:
         """Busca App e User no banco de dados."""
         try:
-            app = App.objects.get(id=app_id)
+            app = App.objects.get(id=app_id, deleted_at__isnull=True)
             user = User.objects.get(id=user_id)
             return app, user
         except App.DoesNotExist:

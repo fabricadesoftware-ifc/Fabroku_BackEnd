@@ -90,7 +90,7 @@ def github_webhook(request, app_id: int):
 
     # Busca o app
     try:
-        app = App.objects.get(id=app_id)
+        app = App.objects.get(id=app_id, deleted_at__isnull=True)
     except App.DoesNotExist:
         return JsonResponse({'status': 'error', 'message': f'App {app_id} not found'}, status=404)
 

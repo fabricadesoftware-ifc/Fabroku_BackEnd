@@ -19,8 +19,8 @@ def _load_service_and_app(service_id: int, app_id: int) -> tuple[Service | None,
     error = None
 
     try:
-        service = Service.objects.select_related('project').get(id=service_id)
-        app = App.objects.select_related('project').get(id=app_id)
+        service = Service.objects.select_related('project').get(id=service_id, deleted_at__isnull=True)
+        app = App.objects.select_related('project').get(id=app_id, deleted_at__isnull=True)
     except Service.DoesNotExist:
         error = {'status': 'error', 'message': f'Servico {service_id} nao encontrado'}
     except App.DoesNotExist:

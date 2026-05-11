@@ -67,7 +67,7 @@ class RedeployAppMixin:
         task_id = task.request.id
 
         try:
-            app = App.objects.get(id=app_id)
+            app = App.objects.get(id=app_id, deleted_at__isnull=True)
         except App.DoesNotExist:
             return {'status': 'error', 'message': f'App {app_id} not found'}
 
@@ -118,7 +118,7 @@ class RedeployAppMixin:
             # Garante que serviços linkados estejam rodando antes do redeploy
             from core.apps.models import Service  # noqa: PLC0415
 
-            for svc in Service.objects.filter(app=app):
+            for svc in Service.objects.filter(app=app, deleted_at__isnull=True):
                 if svc.container_name and svc.service_type == 'postgres':
                     try:
                         start_output = dokku_adapter.start_database(svc.container_name)

@@ -17,7 +17,7 @@ class UpdateAppMixin:
         task = cast(Task, self)
 
         try:
-            app = App.objects.get(id=app_id)
+            app = App.objects.get(id=app_id, deleted_at__isnull=True)
         except App.DoesNotExist:
             return {'status': 'error', 'message': 'App not found'}
 

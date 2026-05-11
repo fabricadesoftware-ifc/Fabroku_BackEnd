@@ -89,7 +89,7 @@ class RunCommandMixin:
         task_id = task.request.id
 
         try:
-            app = App.objects.get(id=app_id)
+            app = App.objects.get(id=app_id, deleted_at__isnull=True)
         except App.DoesNotExist:
             return {'status': 'error', 'message': f'App {app_id} not found'}
 
@@ -111,7 +111,7 @@ class RunCommandMixin:
         try:
             from core.apps.models import Service  # noqa: PLC0415
 
-            linked_services = Service.objects.filter(app=app)
+            linked_services = Service.objects.filter(app=app, deleted_at__isnull=True)
             for svc in linked_services:
                 if svc.container_name and svc.service_type == 'postgres':
                     out = dokku_adapter.start_database(svc.container_name)

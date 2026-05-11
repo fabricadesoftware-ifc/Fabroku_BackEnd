@@ -31,18 +31,18 @@ class InteractiveRunEventInline(admin.TabularInline):
 
 @admin.register(App)
 class AppAdmin(admin.ModelAdmin):
-    list_display = ('name', 'project', 'status', 'created_at', 'updated_at')
-    list_filter = ('status', 'created_at', 'updated_at')
+    list_display = ('id', 'name', 'project', 'status', 'deleted_at', 'deleted_by', 'created_at', 'updated_at')
+    list_filter = ('status', 'deleted_at', 'created_at', 'updated_at')
     search_fields = ('name', 'project__name', 'domain')
-    readonly_fields = ('created_at', 'updated_at')
+    readonly_fields = ('created_at', 'updated_at', 'deleted_at', 'deleted_by')
 
 
 @admin.register(Service)
 class ServiceAdmin(admin.ModelAdmin):
-    list_display = ('name', 'app', 'user', 'host', 'port', 'created_at', 'updated_at')
-    list_filter = ('created_at', 'updated_at')
+    list_display = ('id', 'name', 'app', 'user', 'host', 'port', 'deleted_at', 'deleted_by', 'created_at', 'updated_at')
+    list_filter = ('service_type', 'deleted_at', 'created_at', 'updated_at')
     search_fields = ('name', 'app__name', 'user', 'host')
-    readonly_fields = ('created_at', 'updated_at')
+    readonly_fields = ('created_at', 'updated_at', 'deleted_at', 'deleted_by')
 
 
 @admin.register(AppProcessScale)

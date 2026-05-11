@@ -94,10 +94,10 @@ class DeleteServiceMixin:
     """Mixin para exclusao de servicos via Celery."""
 
     @shared_task(bind=True)
-    def delete_service(self, service_id: int) -> dict:
+    def delete_service(self, service_id: int, deleted_by_id: int | None = None) -> dict:
         """
-        Desvincula o servico do app no Dokku, deleta o servico remoto e remove
-        o registro do banco local.
+        Desvincula o servico do app no Dokku, deleta o servico remoto e preserva
+        o registro local como excluido.
         """
         task = cast(Task, self)
         task_id = task.request.id
@@ -106,6 +106,9 @@ class DeleteServiceMixin:
             service = Service.objects.select_related('app', 'project').get(id=service_id)
         except Service.DoesNotExist:
             return {'status': 'deleted', 'message': 'Service already deleted'}
+
+        if service.deleted_at:
+            return {'status': 'deleted', 'message': 'Service already marked as deleted', 'service_id': service_id}
 
         try:
             runtime = get_service_runtime(service.service_type)
@@ -119,8 +122,7 @@ class DeleteServiceMixin:
             _unlink_remote_service_if_needed(task, dokku_adapter, service, runtime, logger)
             _delete_remote_service(task, dokku_adapter, service, runtime, logger)
 
-            service_id_saved = service.id
-            service.delete()
+            service.soft_delete(deleted_by_id=deleted_by_id)
 
             if logger:
                 logger.success(
@@ -131,7 +133,7 @@ class DeleteServiceMixin:
 
             return {
                 'status': 'deleted',
-                'service_id': service_id_saved,
+                'service_id': service.id,
             }
 
         except Exception as e:

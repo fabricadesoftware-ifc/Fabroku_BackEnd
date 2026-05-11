@@ -2,6 +2,7 @@ import uuid
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 from core.project.models import Project
 
@@ -15,6 +16,7 @@ class AppStatus(models.TextChoices):
     ERROR = 'ERROR', 'Error'
     DELETING = 'DELETING', 'Deleting'
     DEPLOYING = 'DEPLOYING', 'Deploying'
+    DELETED = 'DELETED', 'Deleted'
 
 
 class App(models.Model):
@@ -35,6 +37,21 @@ class App(models.Model):
     error_details = models.TextField(null=True, blank=True)
     help_url = models.URLField(null=True, blank=True)
     last_commit_sha = models.CharField(max_length=40, blank=True, default='')
+    deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    deleted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='deleted_apps',
+    )
+
+    def soft_delete(self, *, deleted_by_id: int | None = None):
+        self.status = AppStatus.DELETED
+        self.deleted_at = self.deleted_at or timezone.now()
+        if deleted_by_id:
+            self.deleted_by_id = deleted_by_id
+        self.save(update_fields=['status', 'deleted_at', 'deleted_by', 'updated_at'])
 
     def __str__(self):
         return self.name
@@ -47,7 +64,20 @@ class App(models.Model):
             models.Index(fields=['name'], name='idx_app_name'),
         ]
         constraints = [
-            models.UniqueConstraint(fields=['name'], name='unique_app_name'),
+            models.UniqueConstraint(
+                fields=['name'],
+                condition=models.Q(deleted_at__isnull=True),
+                name='unique_active_app_name',
+            ),
+            models.UniqueConstraint(
+                fields=['name_dokku'],
+                condition=(
+                    models.Q(deleted_at__isnull=True)
+                    & models.Q(name_dokku__isnull=False)
+                    & ~models.Q(name_dokku='')
+                ),
+                name='unique_active_app_name_dokku',
+            ),
         ]
 
 
@@ -70,6 +100,20 @@ class Service(models.Model):
     service_type = models.CharField(max_length=50, choices=ServiceType.choices)
     container_name = models.CharField(max_length=255, null=True, blank=True)
     task_id = models.CharField(max_length=255, null=True, blank=True)
+    deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    deleted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='deleted_services',
+    )
+
+    def soft_delete(self, *, deleted_by_id: int | None = None):
+        self.deleted_at = self.deleted_at or timezone.now()
+        if deleted_by_id:
+            self.deleted_by_id = deleted_by_id
+        self.save(update_fields=['deleted_at', 'deleted_by', 'updated_at'])
 
     def __str__(self):
         return self.name

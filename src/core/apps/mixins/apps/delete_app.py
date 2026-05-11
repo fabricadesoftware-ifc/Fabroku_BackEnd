@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import cast
 
 from celery import Task, shared_task
@@ -9,11 +10,17 @@ from core.apps.service_types import get_service_runtime
 from core.logs.models import AppLogManager, LogCategory
 
 
+@dataclass(frozen=True)
+class DeleteLinkedServiceContext:
+    dokku_adapter: DokkuAdapter
+    logger: AppLogManager
+    dokku_app_name: str | None
+    deleted_by_id: int | None
+
+
 def _delete_linked_service(
     *,
-    dokku_adapter: DokkuAdapter,
-    logger: AppLogManager,
-    dokku_app_name: str | None,
+    context: DeleteLinkedServiceContext,
     service: Service,
     progress: int,
 ):
@@ -22,60 +29,65 @@ def _delete_linked_service(
     try:
         runtime = get_service_runtime(service.service_type)
     except ValueError:
-        service.delete()
+        service.soft_delete(deleted_by_id=context.deleted_by_id)
         return
 
-    if dokku_app_name:
+    if context.dokku_app_name:
         try:
-            unlink_output, _command = unlink_dokku_service(dokku_adapter, runtime, dokku_service_name, dokku_app_name)
+            unlink_output, _command = unlink_dokku_service(
+                context.dokku_adapter,
+                runtime,
+                dokku_service_name,
+                context.dokku_app_name,
+            )
             if dokku_output_failed(unlink_output):
-                logger.warning(
+                context.logger.warning(
                     f'Unlink do servico {dokku_service_name} retornou erro: {unlink_output}',
                     category=LogCategory.DATABASE,
                     progress=progress,
                 )
             else:
-                logger.info(
+                context.logger.info(
                     f'Servico {dokku_service_name} desvinculado do app',
                     category=LogCategory.DATABASE,
                     progress=progress,
                 )
         except Exception as e:
-            logger.warning(
+            context.logger.warning(
                 f'Erro ao desvincular servico {dokku_service_name}: {e}',
                 category=LogCategory.DATABASE,
                 progress=progress,
             )
 
     try:
-        delete_output, _command = delete_dokku_service(dokku_adapter, runtime, dokku_service_name)
+        delete_output, _command = delete_dokku_service(context.dokku_adapter, runtime, dokku_service_name)
         if dokku_output_failed(delete_output):
-            logger.warning(
+            context.logger.warning(
                 f'Delecao do servico {dokku_service_name} retornou erro: {delete_output}',
                 category=LogCategory.DATABASE,
                 progress=progress,
             )
         else:
-            logger.success(
+            context.logger.success(
                 f'Servico {dokku_service_name} removido do Dokku',
                 category=LogCategory.DATABASE,
                 progress=progress,
             )
     except Exception as e:
-        logger.warning(
+        context.logger.warning(
             f'Erro ao deletar servico {dokku_service_name}: {e}',
             category=LogCategory.DATABASE,
             progress=progress,
         )
 
-    service.delete()
+    service.soft_delete(deleted_by_id=context.deleted_by_id)
 
 
 class DeleteAppMixin:
     """Mixin para exclusao de aplicacoes via Celery."""
 
     @shared_task(bind=True)
-    def delete_app(self, app_id: int) -> dict:
+    def delete_app(self, app_id: int, deleted_by_id: int | None = None) -> dict:
         task = cast(Task, self)
         task_id = task.request.id
 
@@ -84,12 +96,21 @@ class DeleteAppMixin:
         except App.DoesNotExist:
             return {'status': 'deleted', 'message': 'App already deleted from DB'}
 
+        if app.deleted_at:
+            return {'status': 'deleted', 'message': 'App already marked as deleted', 'app_id': app_id}
+
         app.task_id = task_id
         app.save(update_fields=['task_id'])
 
         logger = AppLogManager(app, task_id)
         dokku_adapter = DokkuAdapter()
         dokku_app_name = app.name_dokku
+        delete_service_context = DeleteLinkedServiceContext(
+            dokku_adapter=dokku_adapter,
+            logger=logger,
+            dokku_app_name=dokku_app_name,
+            deleted_by_id=deleted_by_id,
+        )
 
         task.update_state(
             state='PROGRESS',
@@ -97,7 +118,7 @@ class DeleteAppMixin:
         )
         logger.info(f'Iniciando remocao da aplicacao {app.name}...', category=LogCategory.DEPLOY, progress=5)
 
-        services = Service.objects.filter(app=app)
+        services = Service.objects.filter(app=app, deleted_at__isnull=True)
         total_services = services.count()
         for idx, service in enumerate(services):
             dokku_service_name = service.container_name or service.name
@@ -107,9 +128,7 @@ class DeleteAppMixin:
                 meta={'current': progress, 'total': 100, 'status': f'Removendo servico {dokku_service_name}...'},
             )
             _delete_linked_service(
-                dokku_adapter=dokku_adapter,
-                logger=logger,
-                dokku_app_name=dokku_app_name,
+                context=delete_service_context,
                 service=service,
                 progress=progress,
             )
@@ -142,11 +161,11 @@ class DeleteAppMixin:
                     progress=80,
                 )
 
-        app.delete()
         logger.success(
             f'Aplicacao {app.name} removida com sucesso!',
             category=LogCategory.DEPLOY,
             progress=100,
         )
+        app.soft_delete(deleted_by_id=deleted_by_id)
 
         return {'status': 'deleted', 'app_id': app_id, 'dokku_app': dokku_app_name}

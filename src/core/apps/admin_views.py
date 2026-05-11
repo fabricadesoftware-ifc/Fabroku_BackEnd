@@ -94,12 +94,13 @@ def storage_usage(request):
         Service.objects.filter(
             service_type='postgres',
             container_name__isnull=False,
+            deleted_at__isnull=True,
         )
         .exclude(container_name='')
         .select_related('project', 'app')
     )
 
-    apps = list(App.objects.only('id', 'name', 'name_dokku'))
+    apps = list(App.objects.filter(deleted_at__isnull=True).only('id', 'name', 'name_dokku'))
     apps_by_name_dokku = {app.name_dokku: app for app in apps if app.name_dokku}
     apps_by_name = {app.name: app for app in apps}
 

@@ -924,6 +924,47 @@ class ManageAppEndpointTests(APITestCase):
         self.assertEqual(self.app.status, 'RUNNING')
 
 
+class DeleteAppTaskTests(TestCase):
+    def test_delete_app_marks_records_deleted_and_allows_name_reuse(self):
+        project = Project.objects.create(name='Projeto Delete')
+        user = User.objects.create_user(email='delete@example.com', password='pass123456')
+        app = App.objects.create(
+            name='app-delete-teste',
+            name_dokku='app-delete-teste',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=project,
+            status='DELETING',
+        )
+
+        task = AppMixin.delete_app
+        with patch('core.apps.mixins.apps.delete_app.DokkuAdapter') as mock_dokku_cls:
+            mock_dokku = Mock()
+            mock_dokku.delete_app.return_value = 'deleted'
+            mock_dokku_cls.return_value = mock_dokku
+
+            with patch.object(task, 'update_state'):
+                task.request.id = 'task-delete-123'
+                result = task.run(app_id=app.id, deleted_by_id=user.id)
+
+        self.assertEqual(result['status'], 'deleted')
+        app.refresh_from_db()
+        self.assertEqual(app.status, 'DELETED')
+        self.assertIsNotNone(app.deleted_at)
+        self.assertEqual(app.deleted_by_id, user.id)
+        mock_dokku.delete_app.assert_called_once_with(app_name='app-delete-teste')
+
+        recreated = App.objects.create(
+            name='app-delete-teste',
+            name_dokku='app-delete-teste',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=project,
+            status='STOPPED',
+        )
+        self.assertIsNotNone(recreated.id)
+
+
 class AppProcessScaleTests(SimpleTestCase):
     def test_parse_ps_scale_output_ignores_release(self):
         output = """

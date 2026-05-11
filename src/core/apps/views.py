@@ -202,7 +202,7 @@ def _find_project_user_for_github_repo(app: App, preferred_user=None, *, require
 
 @extend_schema(tags=['apps'])
 class AppViewSet(ModelViewSet):
-    queryset = App.objects.all()
+    queryset = App.objects.filter(deleted_at__isnull=True)
     serializer_class = AppSerializer
     permission_classes = [IsAuthenticated]
     filterset_fields = ['project', 'status', 'name', 'branch']
@@ -211,9 +211,14 @@ class AppViewSet(ModelViewSet):
         """Superusers veem todos os apps, usuários normais só os seus."""
         queryset = App.objects.select_related('project')
 
+        if getattr(self, 'action', None) == 'get_app_status':
+            queryset = queryset.filter(Q(deleted_at__isnull=True) | Q(status='DELETED'))
+        else:
+            queryset = queryset.filter(deleted_at__isnull=True)
+
         if getattr(self, 'action', None) in {'list', 'retrieve'}:
             queryset = queryset.prefetch_related(
-                Prefetch('services', queryset=Service.objects.all()),
+                Prefetch('services', queryset=Service.objects.filter(deleted_at__isnull=True)),
                 Prefetch('project__users', queryset=User.objects.only('id')),
             )
 
@@ -230,7 +235,7 @@ class AppViewSet(ModelViewSet):
         instance.save(update_fields=['status'])
 
         # Lança a task de deleção
-        task_result = AppMixin.delete_app.delay(app_id=instance.id)  # type: ignore
+        task_result = AppMixin.delete_app.delay(app_id=instance.id, deleted_by_id=request.user.id)  # type: ignore
 
         return Response(
             {
@@ -259,7 +264,7 @@ class AppViewSet(ModelViewSet):
             return Response({'available': False, 'reason': 'Nome deve ter pelo menos 2 caracteres.'})
         if len(name) > 60:
             return Response({'available': False, 'reason': 'Nome deve ter no máximo 60 caracteres.'})
-        exists = App.objects.filter(name__iexact=name).exists()
+        exists = App.objects.filter(name__iexact=name, deleted_at__isnull=True).exists()
         return Response({'available': not exists, 'name': name})
 
     @action(detail=True, methods=['post'])
@@ -1196,7 +1201,7 @@ class AppViewSet(ModelViewSet):
 class ServiceViewSet(ModelViewSet):
     """ViewSet para gerenciamento de serviços (banco de dados, redis, etc.)."""
 
-    queryset = Service.objects.all()
+    queryset = Service.objects.filter(deleted_at__isnull=True)
     serializer_class = ServiceSerializer
     permission_classes = [IsAuthenticated]
     filterset_fields = ['app', 'project', 'service_type']
@@ -1204,15 +1209,16 @@ class ServiceViewSet(ModelViewSet):
 
     def get_queryset(self):
         """Superusers veem todos os serviços, usuários normais só os seus."""
+        queryset = Service.objects.filter(deleted_at__isnull=True)
         if _has_global_access(self.request.user):
-            return Service.objects.all().order_by('-created_at', '-id')
-        return Service.objects.filter(project__users=self.request.user).order_by('-created_at', '-id')
+            return queryset.order_by('-created_at', '-id')
+        return queryset.filter(project__users=self.request.user).order_by('-created_at', '-id')
 
     def destroy(self, request, *args, **kwargs):
         """Dispara task de deleção do serviço no Dokku."""
         instance = self.get_object()
 
-        task_result = ServiceMixin.delete_service.delay(service_id=instance.id)  # type: ignore
+        task_result = ServiceMixin.delete_service.delay(service_id=instance.id, deleted_by_id=request.user.id)  # type: ignore
 
         return Response(
             {
@@ -1240,7 +1246,7 @@ class ServiceViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        app = App.objects.filter(id=app_id).first()
+        app = App.objects.filter(id=app_id, deleted_at__isnull=True).first()
         if not app:
             return Response(
                 {'error': 'App nao encontrado'},

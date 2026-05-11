@@ -50,7 +50,7 @@ def _prepare_service_record(payload: ServiceRecordInput) -> Service:
             task_id=payload.task_id,
         )
 
-    service = Service.objects.get(id=payload.service_id)
+    service = Service.objects.get(id=payload.service_id, deleted_at__isnull=True)
     service.task_id = payload.task_id
     service.name = payload.service_name
     service.service_type = payload.runtime.service_type

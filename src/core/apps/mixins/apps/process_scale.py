@@ -22,7 +22,7 @@ class ProcessScaleMixin:
         task_id = task.request.id
 
         try:
-            app = App.objects.get(id=app_id)
+            app = App.objects.get(id=app_id, deleted_at__isnull=True)
         except App.DoesNotExist:
             return {'status': 'error', 'message': f'App {app_id} not found'}
 

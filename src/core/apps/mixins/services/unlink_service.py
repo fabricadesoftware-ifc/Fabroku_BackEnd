@@ -21,7 +21,7 @@ class UnlinkServiceMixin:
         task_id = task.request.id
 
         try:
-            service = Service.objects.select_related('app', 'project').get(id=service_id)
+            service = Service.objects.select_related('app', 'project').get(id=service_id, deleted_at__isnull=True)
         except Service.DoesNotExist:
             return {'status': 'error', 'message': f'Servico {service_id} nao encontrado'}
 
