@@ -3,7 +3,6 @@ from datetime import timedelta
 from unittest.mock import ANY, Mock, patch
 
 from django.core.cache import cache
-from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
@@ -23,7 +22,12 @@ from core.apps.mixins.apps.interactive_run import (
     submit_interactive_session_answer,
 )
 from core.apps.mixins.apps.redeploy_app import RedeployAppMixin
-from core.apps.mixins.apps.run_data import build_loaddata_command, validate_dump_args, validate_manage_path
+from core.apps.mixins.apps.run_data import (
+    build_loaddata_command,
+    validate_dump_args,
+    validate_loaddata_fixture_path,
+    validate_manage_path,
+)
 from core.apps.models import (
     App,
     AppProcessScale,
@@ -158,7 +162,7 @@ class RunDataValidationTests(SimpleTestCase):
         self.assertEqual(validate_manage_path('src/manage.py'), 'src/manage.py')
 
     def test_validate_manage_path_rejects_unsafe_paths(self):
-        for value in ('/app/manage.py', '../manage.py', 'src/settings.py', 'C:/app/manage.py'):
+        for value in ('/app/manage.py', '../manage.py', 'src/settings.py', 'C:/app/manage.py', 'src dir/manage.py'):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
                     validate_manage_path(value)
@@ -169,12 +173,19 @@ class RunDataValidationTests(SimpleTestCase):
                 with self.assertRaises(ValueError):
                     validate_dump_args(args)
 
-    def test_build_loaddata_command_is_single_line_for_dokku_run_parser(self):
-        command = build_loaddata_command('src/manage.py', '/tmp/fabroku-loaddata-test.json')
+    def test_validate_loaddata_fixture_path_accepts_relative_json(self):
+        self.assertEqual(validate_loaddata_fixture_path('./fixtures/my_data.json'), 'fixtures/my_data.json')
 
-        self.assertNotIn('\n', command)
-        self.assertIn('sh -lc', command)
-        self.assertIn('python src/manage.py loaddata "$tmp"', command)
+    def test_validate_loaddata_fixture_path_rejects_unsafe_paths(self):
+        for value in ('/tmp/data.json', '../data.json', 'fixture.yaml', 'C:/app/data.json', 'fixtures/my data.json'):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    validate_loaddata_fixture_path(value)
+
+    def test_build_loaddata_command_uses_safe_paths_without_shell_script(self):
+        command = build_loaddata_command('src/manage.py', 'fixtures/my_data.json')
+
+        self.assertEqual(command, 'python src/manage.py loaddata fixtures/my_data.json')
 
 
 class InteractiveRunValidationTests(SimpleTestCase):
@@ -1474,38 +1485,39 @@ class RunDataEndpointTests(APITestCase):
         self.client.force_authenticate(user=self.user)
 
     @patch('core.apps.views.AppMixin.run_loaddata.delay')
-    def test_run_loaddata_creates_upload_artifact_and_dispatches_task(self, mock_delay):
+    def test_run_loaddata_dispatches_task_with_container_fixture_path(self, mock_delay):
         mock_delay.return_value = Mock(id='task-loaddata-123')
-        fixture = SimpleUploadedFile(
-            'my_data.json',
-            b'[{"model":"auth.user","fields":{"username":"alice"}}]',
-            content_type='application/json',
-        )
 
         response = self.client.post(
             f'/api/apps/apps/{self.app.id}/run_loaddata/',
-            {'fixture': fixture, 'manage_path': 'src/manage.py'},
-            format='multipart',
+            {'fixture_path': 'fixtures/my_data.json', 'manage_path': 'src/manage.py'},
+            format='json',
         )
 
         self.assertEqual(response.status_code, 202)
-        artifact = AppRunArtifact.objects.get(app=self.app, kind=AppRunArtifactKind.LOAD_DATA_UPLOAD)
-        self.assertEqual(artifact.filename, 'my_data.json')
-        self.assertEqual(bytes(artifact.content), b'[{"model":"auth.user","fields":{"username":"alice"}}]')
+        self.assertEqual(AppRunArtifact.objects.count(), 0)
         mock_delay.assert_called_once_with(
             app_id=self.app.id,
-            artifact_id=str(artifact.id),
+            fixture_path='fixtures/my_data.json',
             manage_path='src/manage.py',
             user_id=self.user.id,
         )
 
     def test_run_loaddata_rejects_unsafe_manage_path(self):
-        fixture = SimpleUploadedFile('my_data.json', b'[]', content_type='application/json')
-
         response = self.client.post(
             f'/api/apps/apps/{self.app.id}/run_loaddata/',
-            {'fixture': fixture, 'manage_path': '../manage.py'},
-            format='multipart',
+            {'fixture_path': 'fixtures/my_data.json', 'manage_path': '../manage.py'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(AppRunArtifact.objects.count(), 0)
+
+    def test_run_loaddata_rejects_unsafe_fixture_path(self):
+        response = self.client.post(
+            f'/api/apps/apps/{self.app.id}/run_loaddata/',
+            {'fixture_path': '../my_data.json', 'manage_path': 'manage.py'},
+            format='json',
         )
 
         self.assertEqual(response.status_code, 400)
@@ -1589,34 +1601,25 @@ class RunDataTaskTests(TestCase):
         )
 
     @patch('core.apps.mixins.apps.run_data.DokkuAdapter')
-    def test_run_loaddata_sends_fixture_via_stdin_and_removes_upload(self, mock_dokku_cls):
+    def test_run_loaddata_runs_fixture_path_inside_app(self, mock_dokku_cls):
         mock_dokku = Mock()
-        mock_dokku.run_in_app_with_stdin.return_value = 'Installed 1 object(s)'
+        mock_dokku.run_in_app.return_value = 'Installed 1 object(s)'
         mock_dokku_cls.return_value = mock_dokku
-        artifact = AppRunArtifact.objects.create(
-            app=self.app,
-            created_by=self.user,
-            kind=AppRunArtifactKind.LOAD_DATA_UPLOAD,
-            filename='fixture.json',
-            content_type='application/json',
-            size=2,
-            content=b'[]',
-            expires_at=timezone.now() + timedelta(hours=1),
-        )
 
         task = AppMixin.run_loaddata
         task.request.id = 'task-loaddata-direct'
         result = task.run(
             app_id=self.app.id,
-            artifact_id=str(artifact.id),
+            fixture_path='fixtures/my_data.json',
             manage_path='manage.py',
             user_id=self.user.id,
         )
 
         self.assertEqual(result['status'], 'success')
-        mock_dokku.run_in_app_with_stdin.assert_called_once()
-        self.assertEqual(mock_dokku.run_in_app_with_stdin.call_args.kwargs['stdin_data'], '[]')
-        self.assertFalse(AppRunArtifact.objects.filter(id=artifact.id).exists())
+        mock_dokku.run_in_app.assert_called_once_with(
+            app_name='app-run-data-task',
+            command='python manage.py loaddata fixtures/my_data.json',
+        )
 
     @patch('core.apps.mixins.apps.run_data.DokkuAdapter')
     def test_run_dumpdata_creates_download_artifact_without_logging_content(self, mock_dokku_cls):

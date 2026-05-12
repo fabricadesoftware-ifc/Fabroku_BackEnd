@@ -14,6 +14,12 @@ from core.logs.models import AppLogManager, LogCategory
 ARTIFACT_TTL_HOURS = 24
 DANGEROUS_DUMP_ARG_PARTS = ('&&', '||', ';', '|', '>', '<', '`', '$(', '\n', '\r', '\x00')
 BLOCKED_DUMP_ARGS = {'--output', '-o'}
+SAFE_RUN_PATH_CHARS = set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-/')
+
+
+def validate_safe_run_path_chars(value: str, field_name: str):
+    if any(char not in SAFE_RUN_PATH_CHARS for char in value):
+        raise ValueError(f'{field_name} aceita apenas letras, numeros, ".", "_", "-" e "/".')
 
 
 def cleanup_expired_run_artifacts():
@@ -30,6 +36,7 @@ def validate_manage_path(manage_path: str | None) -> str:
         raise ValueError('manage_path nao pode ser vazio.')
     if normalized.startswith(('/', '~')) or ':' in normalized:
         raise ValueError('manage_path deve ser relativo ao app.')
+    validate_safe_run_path_chars(normalized, 'manage_path')
 
     path = PurePosixPath(normalized)
     if '..' in path.parts:
@@ -67,18 +74,30 @@ def build_dumpdata_command(manage_path: str, dump_args: list[str]) -> str:
     return ' '.join(shlex.quote(part) for part in parts)
 
 
-def build_loaddata_command(manage_path: str, tmp_path: str) -> str:
-    # Dokku parses `run` arguments with xargs-like semantics. Keep this as a
-    # single line; quoted multi-line scripts are split before they reach sh.
-    script = '; '.join([
-        'set -e',
-        f'tmp={shlex.quote(tmp_path)}',
-        'cleanup() { rm -f "$tmp"; }',
-        'trap cleanup EXIT',
-        'cat > "$tmp"',
-        f'python {shlex.quote(manage_path)} loaddata "$tmp"',
-    ])
-    return f'sh -lc {shlex.quote(script)}'
+def validate_loaddata_fixture_path(fixture_path: str | None) -> str:
+    normalized = (fixture_path or '').strip().replace('\\', '/')
+    if not normalized:
+        raise ValueError('fixture_path nao pode ser vazio.')
+    if normalized.startswith(('/', '~')) or ':' in normalized:
+        raise ValueError('fixture_path deve ser relativo ao app.')
+    if any(part in normalized for part in ('\n', '\r', '\x00')):
+        raise ValueError('fixture_path contem caracteres invalidos.')
+    validate_safe_run_path_chars(normalized, 'fixture_path')
+
+    path = PurePosixPath(normalized)
+    if '..' in path.parts:
+        raise ValueError('fixture_path nao pode conter "..".')
+    if path.name in ('', '.', '..'):
+        raise ValueError('fixture_path deve apontar para um arquivo JSON.')
+    if not path.name.lower().endswith('.json'):
+        raise ValueError('fixture_path deve apontar para um arquivo .json.')
+
+    return str(path)
+
+
+def build_loaddata_command(manage_path: str, fixture_path: str) -> str:
+    parts = ['python', manage_path, 'loaddata', fixture_path]
+    return ' '.join(shlex.quote(part) for part in parts)
 
 
 def command_output_failed(output: str) -> bool:
@@ -96,20 +115,14 @@ class RunDataMixin:
     """Tasks para import/export de dados Django via CLI."""
 
     @shared_task(bind=True)
-    def run_loaddata(self, app_id: int, artifact_id: str, manage_path: str, user_id: int) -> dict:
+    def run_loaddata(self, app_id: int, fixture_path: str, manage_path: str, user_id: int) -> dict:
         task = cast(Task, self)
         task_id = task.request.id
 
         try:
             app = App.objects.get(id=app_id, deleted_at__isnull=True)
-            artifact = AppRunArtifact.objects.get(
-                id=artifact_id,
-                app=app,
-                created_by_id=user_id,
-                kind=AppRunArtifactKind.LOAD_DATA_UPLOAD,
-            )
-        except (App.DoesNotExist, AppRunArtifact.DoesNotExist) as e:
-            raise RuntimeError('App ou artefato de loaddata nao encontrado.') from e
+        except App.DoesNotExist as e:
+            raise RuntimeError(f'App {app_id} not found') from e
 
         if not app.name_dokku:
             raise RuntimeError('App sem name_dokku configurado.')
@@ -119,28 +132,21 @@ class RunDataMixin:
 
         logger = AppLogManager(app, task_id)
         dokku_adapter = DokkuAdapter()
-        logical_command = f'python {manage_path} loaddata <fixture>'
+        command = build_loaddata_command(manage_path, fixture_path)
 
         try:
-            fixture_text = bytes(artifact.content).decode('utf-8')
-
             task.update_state(
                 state='PROGRESS',
-                meta={'current': 10, 'total': 100, 'status': f'Enviando fixture {artifact.filename}'},
+                meta={'current': 10, 'total': 100, 'status': f'Executando loaddata com {fixture_path}'},
             )
             logger.info(
-                f'Executando loaddata com fixture {artifact.filename} ({artifact.size} bytes)',
+                f'Executando loaddata com fixture {fixture_path}',
                 category=LogCategory.DATABASE,
                 progress=10,
-                metadata={'command': logical_command, 'filename': artifact.filename, 'size': artifact.size},
+                metadata={'command': command, 'fixture_path': fixture_path},
             )
 
-            tmp_path = f'/tmp/fabroku-loaddata-{artifact.id}.json'
-            output = dokku_adapter.run_in_app_with_stdin(
-                app_name=app.name_dokku,
-                command=build_loaddata_command(manage_path, tmp_path),
-                stdin_data=fixture_text,
-            )
+            output = dokku_adapter.run_in_app(app_name=app.name_dokku, command=command)
 
             if output.strip():
                 for line in output.splitlines()[:100]:
@@ -154,7 +160,7 @@ class RunDataMixin:
                     'loaddata finalizado com erro.',
                     category=LogCategory.DATABASE,
                     progress=100,
-                    metadata={'command': logical_command},
+                    metadata={'command': command},
                 )
                 raise RuntimeError(output)
 
@@ -164,9 +170,9 @@ class RunDataMixin:
             logger.success('loaddata executado com sucesso.', category=LogCategory.DATABASE, progress=100)
             return {
                 'status': 'success',
-                'message': f'loaddata executado com sucesso: {artifact.filename}',
+                'message': f'loaddata executado com sucesso: {fixture_path}',
                 'app_id': app.id,
-                'command': logical_command,
+                'command': command,
                 'lines': len(output.splitlines()) if output else 0,
             }
         except Exception as e:
@@ -177,11 +183,10 @@ class RunDataMixin:
             logger.error(
                 f'Erro ao executar loaddata: {e}',
                 category=LogCategory.DATABASE,
-                metadata={'error_type': type(e).__name__, 'command': logical_command},
+                metadata={'error_type': type(e).__name__, 'command': command},
             )
             raise
         finally:
-            artifact.delete()
             cleanup_expired_run_artifacts()
 
     @shared_task(bind=True)
