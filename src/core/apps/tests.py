@@ -23,7 +23,7 @@ from core.apps.mixins.apps.interactive_run import (
     submit_interactive_session_answer,
 )
 from core.apps.mixins.apps.redeploy_app import RedeployAppMixin
-from core.apps.mixins.apps.run_data import validate_dump_args, validate_manage_path
+from core.apps.mixins.apps.run_data import build_loaddata_command, validate_dump_args, validate_manage_path
 from core.apps.models import (
     App,
     AppProcessScale,
@@ -168,6 +168,13 @@ class RunDataValidationTests(SimpleTestCase):
             with self.subTest(args=args):
                 with self.assertRaises(ValueError):
                     validate_dump_args(args)
+
+    def test_build_loaddata_command_is_single_line_for_dokku_run_parser(self):
+        command = build_loaddata_command('src/manage.py', '/tmp/fabroku-loaddata-test.json')
+
+        self.assertNotIn('\n', command)
+        self.assertIn('sh -lc', command)
+        self.assertIn('python src/manage.py loaddata "$tmp"', command)
 
 
 class InteractiveRunValidationTests(SimpleTestCase):

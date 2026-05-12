@@ -68,7 +68,9 @@ def build_dumpdata_command(manage_path: str, dump_args: list[str]) -> str:
 
 
 def build_loaddata_command(manage_path: str, tmp_path: str) -> str:
-    script = '\n'.join([
+    # Dokku parses `run` arguments with xargs-like semantics. Keep this as a
+    # single line; quoted multi-line scripts are split before they reach sh.
+    script = '; '.join([
         'set -e',
         f'tmp={shlex.quote(tmp_path)}',
         'cleanup() { rm -f "$tmp"; }',
@@ -183,7 +185,14 @@ class RunDataMixin:
             cleanup_expired_run_artifacts()
 
     @shared_task(bind=True)
-    def run_dumpdata(self, app_id: int, manage_path: str, dump_args: list[str], output_filename: str, user_id: int) -> dict:
+    def run_dumpdata(
+        self,
+        app_id: int,
+        manage_path: str,
+        dump_args: list[str],
+        output_filename: str,
+        user_id: int,
+    ) -> dict:
         task = cast(Task, self)
         task_id = task.request.id
 

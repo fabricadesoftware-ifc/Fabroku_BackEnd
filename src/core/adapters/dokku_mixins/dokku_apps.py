@@ -1,6 +1,15 @@
 from abc import abstractmethod
 
 
+def _dokku_app_list_failed(output: str) -> bool:
+    normalized = (output or '').lower()
+    return (
+        normalized.startswith('failed to execute command:')
+        or normalized.startswith('ssh connection error:')
+        or normalized.startswith('ssh command timeout')
+    )
+
+
 class DokkuAppsMixin:
     """Mixin que fornece métodos para gerenciar aplicações no Dokku."""
 
@@ -32,6 +41,8 @@ class DokkuAppsMixin:
     def exists_app(self, app_name: str) -> bool:
         """Verifica se uma aplicação existe."""
         app_list = self._run_command('apps:list')
+        if _dokku_app_list_failed(app_list):
+            raise RuntimeError(app_list)
         return app_name in app_list.split()
 
     def lock_app(self, app_name: str) -> str:

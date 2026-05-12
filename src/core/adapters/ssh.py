@@ -1,5 +1,6 @@
 import io
 import os
+import socket
 from collections.abc import Generator
 
 import paramiko
@@ -8,11 +9,13 @@ import paramiko
 class SSHAdapter:
     """Adapter para executar comandos via SSH."""
 
-    def __init__(self, host, username, ssh_key_path, port):
+    def __init__(self, host, username, ssh_key_path, port, *, connect_timeout=30, command_timeout=120):
         self.host = host
         self.username = username
         self.ssh_key_path = ssh_key_path
         self.port = port
+        self.connect_timeout = connect_timeout
+        self.command_timeout = command_timeout
         self._temp_key_file = None
 
     @staticmethod
@@ -52,8 +55,18 @@ class SSHAdapter:
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
             pkey = self._get_pkey()
-            client.connect(self.host, port=self.port, username=self.username, pkey=pkey)
+            client.connect(
+                self.host,
+                port=self.port,
+                username=self.username,
+                pkey=pkey,
+                timeout=self.connect_timeout,
+                banner_timeout=self.connect_timeout,
+                auth_timeout=self.connect_timeout,
+            )
             stdin, stdout, stderr = client.exec_command(command)
+            stdout.channel.settimeout(self.command_timeout)
+            stderr.channel.settimeout(self.command_timeout)
             output = stdout.read().decode('utf-8')
             error_output = stderr.read().decode('utf-8')
             exit_status = stdout.channel.recv_exit_status()
@@ -61,6 +74,8 @@ class SSHAdapter:
                 detail = error_output.strip() or output.strip() or '(sem detalhes)'
                 return f'Failed to execute command: {command}\n{detail}'
             return self._successful_command_output(output, error_output)
+        except socket.timeout:
+            return f'SSH Command Timeout after {self.command_timeout}s while executing: {command}'
         except Exception as e:
             return f'SSH Connection Error: {e}'
         finally:
