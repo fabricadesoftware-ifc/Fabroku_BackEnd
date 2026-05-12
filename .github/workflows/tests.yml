@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       DJANGO_SETTINGS_MODULE: config.settings
-      DATABASE_URL: sqlite:///:memory:
+      DATABASE_URL: "sqlite:///:memory:"
       SECRET_KEY: github-actions-test-secret
       DEBUG: "False"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
