@@ -37,7 +37,7 @@ DEFAULT_CONTENTS = {
     'static.json': '{\n  "root": "dist",\n  "clean_urls": true,\n  "routes": {\n    "/**": "index.html"\n  },\n  "https_only": true\n}\n',
     'Procfile': 'web: gunicorn config.wsgi --bind 0.0.0.0:$PORT\n',
     'requirements.txt': '# Gerado por fabroku verify\n# Adicione suas dependências aqui\n',
-    'runtime.txt': 'python-3.13.2\n',
+    '.python-version': 'python-3.13.2\n',
 }
 
 

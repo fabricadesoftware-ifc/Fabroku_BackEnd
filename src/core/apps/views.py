@@ -15,7 +15,6 @@ from drf_spectacular.utils import extend_schema
 from rest_framework import serializers as drf_serializers
 from rest_framework import status
 from rest_framework.decorators import action
-from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.renderers import BaseRenderer, JSONRenderer
 from rest_framework.response import Response
@@ -36,8 +35,8 @@ from core.apps.mixins.apps.interactive_run import (
 from core.apps.mixins.apps.run_command import ALLOWED_COMMANDS, ALLOWED_PREFIXES, is_command_allowed
 from core.apps.mixins.apps.run_data import (
     cleanup_expired_run_artifacts,
-    get_run_artifact_expires_at,
     validate_dump_args,
+    validate_loaddata_fixture_path,
     validate_manage_path,
 )
 from core.apps.mixins.services.service_dokku import dokku_output_failed
@@ -758,9 +757,9 @@ class AppViewSet(ModelViewSet):
             status=status.HTTP_202_ACCEPTED,
         )
 
-    @action(detail=True, methods=['post'], url_path='run_loaddata', parser_classes=[MultiPartParser, FormParser])
+    @action(detail=True, methods=['post'], url_path='run_loaddata')
     def run_loaddata(self, request, pk=None):
-        """Recebe um fixture JSON da CLI e executa Django loaddata no app."""
+        """Executa Django loaddata usando um fixture que ja existe no app."""
         app = self.get_object()
 
         if not app.name_dokku:
@@ -769,42 +768,16 @@ class AppViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        fixture = request.FILES.get('fixture')
-        if not fixture:
-            return Response({'error': 'O campo fixture e obrigatorio.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        max_size = int(getattr(settings, 'CLI_RUN_ARTIFACT_MAX_BYTES', 50 * 1024 * 1024))
-        if fixture.size > max_size:
-            return Response(
-                {'error': f'Fixture excede o limite de {max_size} bytes.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         try:
-            filename = _safe_json_filename(fixture.name, default='fixture.json')
             manage_path = validate_manage_path(request.data.get('manage_path'))
-            content = fixture.read()
-            content.decode('utf-8')
+            fixture_path = validate_loaddata_fixture_path(request.data.get('fixture_path'))
         except ValueError as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-        except UnicodeDecodeError:
-            return Response({'error': 'Fixture deve ser JSON UTF-8.'}, status=status.HTTP_400_BAD_REQUEST)
 
         cleanup_expired_run_artifacts()
-        artifact = AppRunArtifact.objects.create(
-            app=app,
-            created_by=request.user,
-            kind=AppRunArtifactKind.LOAD_DATA_UPLOAD,
-            filename=filename,
-            content_type='application/json',
-            size=len(content),
-            content=content,
-            expires_at=get_run_artifact_expires_at(),
-        )
-
         task_result = AppMixin.run_loaddata.delay(
             app_id=app.id,
-            artifact_id=str(artifact.id),
+            fixture_path=fixture_path,
             manage_path=manage_path,
             user_id=request.user.id,
         )  # type: ignore
@@ -814,7 +787,7 @@ class AppViewSet(ModelViewSet):
         return Response(
             {
                 'status': 'RUNNING',
-                'message': f'Executando loaddata com {filename}',
+                'message': f'Executando loaddata com {fixture_path}',
                 'task_id': task_result.id,
             },
             status=status.HTTP_202_ACCEPTED,
