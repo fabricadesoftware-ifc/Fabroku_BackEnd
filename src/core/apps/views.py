@@ -94,7 +94,7 @@ def _has_global_access(user) -> bool:
 
 
 def _can_manage_process_scale(user) -> bool:
-    """Process scaling is restricted to admins and Fabrica members."""
+    """Process scaling is restricted to admins and privileged instance members."""
     return bool(getattr(user, 'is_superuser', False) or getattr(user, 'is_fabric', False))
 
 
@@ -556,7 +556,12 @@ class AppViewSet(ModelViewSet):
 
         if not _can_manage_process_scale(request.user):
             return Response(
-                {'error': 'Apenas membros da Fabrica ou administradores podem gerenciar processos.'},
+                {
+                    'error': (
+                        f'Apenas {settings.FABROKU_PRIVILEGED_ROLE_LABEL} ou administradores '
+                        'podem gerenciar processos.'
+                    )
+                },
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -590,7 +595,12 @@ class AppViewSet(ModelViewSet):
 
         if not _can_manage_process_scale(request.user):
             return Response(
-                {'error': 'Apenas membros da Fabrica ou administradores podem gerenciar processos.'},
+                {
+                    'error': (
+                        f'Apenas {settings.FABROKU_PRIVILEGED_ROLE_LABEL} ou administradores '
+                        'podem gerenciar processos.'
+                    )
+                },
                 status=status.HTTP_403_FORBIDDEN,
             )
 

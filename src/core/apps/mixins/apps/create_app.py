@@ -174,10 +174,10 @@ class CreateAppMixin:
         """
         Resolve o nome do app no Dokku.
 
-        - Membros da Fábrica (is_fabric) e admins (is_superuser) podem ter nomes
-          personalizados: se app.name_dokku já estiver preenchido, usa ele.
-          Caso contrário, usa o nome do app diretamente (sem sufixo de projeto).
-        - Usuários normais: nome-{project_id} (padrão).
+        - Usuarios privilegiados da instalacao (is_fabric legado) e admins
+          podem ter nomes personalizados: se app.name_dokku ja estiver
+          preenchido, usa ele. Caso contrario, usa o nome do app diretamente.
+        - Usuarios normais: usam o nome do app validado pelo backend.
         """
         can_customize = getattr(user, 'is_fabric', False) or user.is_superuser
 
@@ -186,7 +186,7 @@ class CreateAppMixin:
             return slugify_dokku(app.name_dokku)
 
         if can_customize:
-            # Membro da fábrica/admin sem nome custom: usa nome limpo
+            # Perfil privilegiado/admin sem nome custom: usa nome limpo.
             return slugify_dokku(app.name)
 
         # Usuário normal: nome limpo (unicidade garantida pela constraint no banco)

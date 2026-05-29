@@ -21,6 +21,7 @@ from core.adapters.utils.git_webhook import github_webhook
 from core.auth_user.allowed_emails.views import AllowedEmailViewSet
 from core.auth_user.cli_auth import cli_login
 from core.auth_user.views import CustomTokenRefreshView
+from core.platform_config import platform_config
 
 # Router para AllowedEmails
 allowed_emails_router = DefaultRouter()
@@ -35,6 +36,7 @@ def api_root(request, format=None):
         'projects': reverse('project-root', request=request, format=format),
         'logs': reverse('logs-list', request=request, format=format),
         'allowed_emails': reverse('allowed-email-list', request=request, format=format),
+        'platform_config': reverse('platform-config', request=request, format=format),
     })
 
 
@@ -45,6 +47,7 @@ urlpatterns = [
     path('api/apps/', include('core.apps.urls')),
     path('api/projects/', include('core.project.urls')),
     path('api/logs/', include('core.logs.urls')),
+    path('api/platform/config/', platform_config, name='platform-config'),
     path('api/token/refresh/', CustomTokenRefreshView.as_view(), name='token_refresh'),
     path('api/admin/', django_admin.site.urls),
     path('api/admin-api/storage-usage/', storage_usage, name='admin-storage-usage'),

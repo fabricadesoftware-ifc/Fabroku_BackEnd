@@ -22,6 +22,20 @@ def _parse_csv_env(name, default=None):
     return [item.strip() for item in raw_value.split(',') if item.strip()]
 
 
+def _parse_bool_env(name, default=False):
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+def _optional_env(name, default=None):
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip() or None
+
+
 LOCAL_DEV_ORIGINS = [
     'http://localhost:3000',
     'http://127.0.0.1:3000',
@@ -127,20 +141,20 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 CSRF_TRUSTED_ORIGINS = _parse_csv_env('CSRF_TRUSTED_ORIGINS', LOCAL_DEV_ORIGINS)
 
-CSRF_TRUSTED_ORIGIN_REGEXES = [
+CSRF_TRUSTED_ORIGIN_REGEXES = _parse_csv_env('CSRF_TRUSTED_ORIGIN_REGEXES', [
     r'^https://.*\.fabricadesoftware\.ifc\.edu\.br$',
     r'^https://.*\.fexcompany\.me$',
-]
+])
 
 
 CORS_ALLOWED_ORIGINS = _parse_csv_env('CORS_ALLOWED_ORIGINS', LOCAL_DEV_ORIGINS)
 
-CORS_ALLOWED_ORIGIN_REGEXES = [
+CORS_ALLOWED_ORIGIN_REGEXES = _parse_csv_env('CORS_ALLOWED_ORIGIN_REGEXES', [
     r'^https://.*\.fabricadesoftware\.ifc\.edu\.br$',
     r'^https://.*\.fexcompany\.me$',
-]
+])
 
-AUTH_COOKIE_DOMAIN = '.fabricadesoftware.ifc.edu.br'
+AUTH_COOKIE_DOMAIN = _optional_env('AUTH_COOKIE_DOMAIN', '.fabricadesoftware.ifc.edu.br')
 AUTH_COOKIE_SAMESITE = 'None'
 AUTH_COOKIE_SECURE = True
 
@@ -227,6 +241,25 @@ DOKKU_SSH_PORT = int(os.getenv('DOKKU_SSH_PORT', 22))  # noqa: PLW1508
 GITHUB_REDIRECT_URI = os.getenv('GITHUB_REDIRECT_URI', 'http://localhost:8000/api/auth/github/callback')
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')  # noqa: PLW1508
 BACKEND_URL = os.getenv('BACKEND_URL', 'http://localhost:8000')  # URL pública do backend para webhooks
+AUTH_ALLOWED_EMAIL_DOMAINS = _parse_csv_env('AUTH_ALLOWED_EMAIL_DOMAINS', ['estudantes.ifc.edu.br'])
+AUTH_ALLOW_ALL_VERIFIED_EMAILS = _parse_bool_env('AUTH_ALLOW_ALL_VERIFIED_EMAILS', False)
+AUTH_EMAIL_REJECTION_MESSAGE = os.getenv('AUTH_EMAIL_REJECTION_MESSAGE', 'O email do usuário não é do IFC.')
+FABROKU_ORGANIZATION_NAME = os.getenv('FABROKU_ORGANIZATION_NAME', 'Fábrica de Software')
+FABROKU_PRIVILEGED_ROLE_LABEL = os.getenv('FABROKU_PRIVILEGED_ROLE_LABEL', 'Membro da Fábrica')
+FABROKU_REGULAR_ROLE_LABEL = os.getenv('FABROKU_REGULAR_ROLE_LABEL', 'Aluno')
+FABROKU_APP_DOMAIN_SUFFIX = os.getenv('FABROKU_APP_DOMAIN_SUFFIX', '.class.fabricadesoftware.ifc.edu.br')
+SERVICE_PROXY_POSTGRES_HOST = os.getenv(
+    'SERVICE_PROXY_POSTGRES_HOST',
+    'proxy.pg.coolify.fabricadesoftware.ifc.edu.br',
+)
+SERVICE_PROXY_POSTGRES_PORT = int(os.getenv('SERVICE_PROXY_POSTGRES_PORT', 1022))  # noqa: PLW1508
+SERVICE_PROXY_REDIS_HOST = os.getenv('SERVICE_PROXY_REDIS_HOST', 'proxy.redis.coolify.fabricadesoftware.ifc.edu.br')
+SERVICE_PROXY_REDIS_PORT = int(os.getenv('SERVICE_PROXY_REDIS_PORT', 6379))  # noqa: PLW1508
+SERVICE_PROXY_RABBITMQ_HOST = os.getenv(
+    'SERVICE_PROXY_RABBITMQ_HOST',
+    'proxy.rabbitmq.coolify.fabricadesoftware.ifc.edu.br',
+)
+SERVICE_PROXY_RABBITMQ_PORT = int(os.getenv('SERVICE_PROXY_RABBITMQ_PORT', 5672))  # noqa: PLW1508
 CACHE_TTL_DEFAULT = int(os.getenv('CACHE_TTL_DEFAULT', 60))
 # Caches especificos podem sobrescrever esse valor com env vars no formato CACHE_TTL_<NAMESPACE>.
 ADMIN_STORAGE_USAGE_MAX_WORKERS = int(os.getenv('ADMIN_STORAGE_USAGE_MAX_WORKERS', 6))

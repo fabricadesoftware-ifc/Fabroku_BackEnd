@@ -94,8 +94,9 @@ def github_callback(request):
         if user_git_email.status_code != 200:  # noqa: PLR2004
             return _error_redirect({'error': 'email_failed', 'message': 'Falha ao obter email do usuário do GitHub.'})
 
-        if verify_git_email(user_git_email.json()) is None:
-            return _error_redirect({'error': 'invalid_email', 'message': 'O email do usuário não é do IFC.'})
+        approved_email = verify_git_email(user_git_email.json())
+        if approved_email is None:
+            return _error_redirect({'error': 'invalid_email', 'message': settings.AUTH_EMAIL_REJECTION_MESSAGE})
 
         token_json = token_res.json()
         access_token = token_json.get('access_token')
@@ -104,7 +105,7 @@ def github_callback(request):
             id=user_git_json.get('id'),
             defaults={
                 'name': user_git_json.get('login'),
-                'email': user_git_email.json()[0].get('email'),
+                'email': approved_email,
                 'git_token': access_token,
                 'avatar_url': user_git_json.get('avatar_url'),
             },
