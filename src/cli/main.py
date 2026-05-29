@@ -53,7 +53,7 @@ def whoami():
         user_data = api.get_user_me()
         click.echo(f'   Email: {user_data.get("email")}')
         if user_data.get('is_fabric'):
-            click.echo(f'   🏭 Membro da Fábrica')
+            click.echo(f'   🏭 Perfil privilegiado')
         if user_data.get('is_superuser'):
             click.echo(f'   🔑 Administrador')
         click.echo(f'   ✅ Token válido')

@@ -1,5 +1,6 @@
 import uuid
 
+from django.conf import settings
 from rest_framework import serializers
 
 from core.apps.mixins import AppMixin, ServiceMixin
@@ -160,13 +161,14 @@ class AppSerializer(serializers.ModelSerializer):
         ]
 
     def validate_name_dokku(self, value):
-        """Apenas membros da fabrica ou admins podem definir nome personalizado."""
+        """Apenas perfis privilegiados ou admins podem definir nome personalizado."""
         request = self.context.get('request')
         if request and request.user:
             is_fabric = getattr(request.user, 'is_fabric', False)
             if not is_fabric and not request.user.is_superuser:
                 raise serializers.ValidationError(
-                    'Apenas membros da Fabrica ou administradores podem personalizar o nome do app.'
+                    f'Apenas {settings.FABROKU_PRIVILEGED_ROLE_LABEL} ou administradores podem '
+                    'personalizar o nome do app.'
                 )
         return value
 

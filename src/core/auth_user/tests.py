@@ -2,12 +2,94 @@ from unittest.mock import patch
 
 from django.core.cache import cache
 from django.db import connection
+from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rest_framework.test import APIClient, APITestCase
 
+from core.adapters.utils.git_email import verify_git_email
 from core.apps.models import App, Service
+from core.auth_user.allowed_emails.models import AllowedEmail
 from core.auth_user.models import User
 from core.project.models import Project
+
+
+class GitEmailPolicyTests(APITestCase):
+    @override_settings(
+        AUTH_ALLOWED_EMAIL_DOMAINS=['estudantes.ifc.edu.br'],
+        AUTH_ALLOW_ALL_VERIFIED_EMAILS=False,
+    )
+    def test_default_policy_allows_verified_ifc_student_email(self):
+        approved_email = verify_git_email([
+            {'email': 'aluno@estudantes.ifc.edu.br', 'verified': True},
+        ])
+
+        self.assertEqual(approved_email, 'aluno@estudantes.ifc.edu.br')
+
+    @override_settings(
+        AUTH_ALLOWED_EMAIL_DOMAINS=['estudantes.ifc.edu.br'],
+        AUTH_ALLOW_ALL_VERIFIED_EMAILS=False,
+    )
+    def test_default_policy_blocks_unlisted_external_email(self):
+        approved_email = verify_git_email([
+            {'email': 'pessoa@example.com', 'verified': True},
+        ])
+
+        self.assertIsNone(approved_email)
+
+    @override_settings(
+        AUTH_ALLOWED_EMAIL_DOMAINS=['estudantes.ifc.edu.br'],
+        AUTH_ALLOW_ALL_VERIFIED_EMAILS=False,
+    )
+    def test_policy_allows_email_registered_in_allowlist(self):
+        AllowedEmail.objects.create(email='professor@example.com', is_active=True)
+
+        approved_email = verify_git_email([
+            {'email': 'professor@example.com', 'verified': True},
+        ])
+
+        self.assertEqual(approved_email, 'professor@example.com')
+
+    @override_settings(AUTH_ALLOWED_EMAIL_DOMAINS=['empresa.com'], AUTH_ALLOW_ALL_VERIFIED_EMAILS=False)
+    def test_policy_allows_configured_domain(self):
+        approved_email = verify_git_email([
+            {'email': 'dev@empresa.com', 'verified': True},
+        ])
+
+        self.assertEqual(approved_email, 'dev@empresa.com')
+
+    @override_settings(AUTH_ALLOWED_EMAIL_DOMAINS=[], AUTH_ALLOW_ALL_VERIFIED_EMAILS=True)
+    def test_policy_can_allow_any_verified_email(self):
+        approved_email = verify_git_email([
+            {'email': 'old@example.com', 'verified': True},
+            {'email': 'primary@example.com', 'verified': True, 'primary': True},
+        ])
+
+        self.assertEqual(approved_email, 'primary@example.com')
+
+    @override_settings(AUTH_ALLOWED_EMAIL_DOMAINS=['empresa.com'], AUTH_ALLOW_ALL_VERIFIED_EMAILS=True)
+    def test_policy_never_allows_unverified_email(self):
+        approved_email = verify_git_email([
+            {'email': 'dev@empresa.com', 'verified': False},
+        ])
+
+        self.assertIsNone(approved_email)
+
+
+class PlatformConfigTests(APITestCase):
+    @override_settings(
+        FABROKU_ORGANIZATION_NAME='Minha Organizacao',
+        FABROKU_PRIVILEGED_ROLE_LABEL='Equipe interna',
+        FABROKU_REGULAR_ROLE_LABEL='Usuario',
+        FABROKU_APP_DOMAIN_SUFFIX='.apps.example.com',
+    )
+    def test_platform_config_is_public_and_uses_installation_settings(self):
+        response = self.client.get('/api/platform/config/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['organization_name'], 'Minha Organizacao')
+        self.assertEqual(response.data['privileged_role_label'], 'Equipe interna')
+        self.assertEqual(response.data['regular_role_label'], 'Usuario')
+        self.assertEqual(response.data['app_domain_suffix'], '.apps.example.com')
 
 
 class UserAdminListTests(APITestCase):

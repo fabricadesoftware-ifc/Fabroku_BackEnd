@@ -71,7 +71,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
 
 
 @click.command()
-@click.option('--api-url', default=None, help='URL base da API Fabroku (ex: https://api.fabroku.ifc.edu.br)')
+@click.option('--api-url', default=None, help='URL base da API Fabroku (ex: https://api.exemplo.com)')
 def login(api_url):
     """Autenticar na plataforma Fabroku via GitHub."""
     if is_authenticated():

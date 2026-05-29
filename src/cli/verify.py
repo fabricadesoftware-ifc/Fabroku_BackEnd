@@ -124,7 +124,7 @@ def verify(app_type, directory, fix):
             user_data = api.get_user_me()
             is_fabric = user_data.get('is_fabric', False) or user_data.get('is_superuser', False)
             if is_fabric:
-                click.echo(f'🏭 Usuário da Fábrica — configuração personalizada disponível')
+                click.echo('🏭 Perfil privilegiado — configuração personalizada disponível')
                 click.echo()
         except Exception:
             pass  # Continua sem verificação de fábrica
@@ -149,7 +149,7 @@ def verify(app_type, directory, fix):
     click.echo(click.style(f'⚠️  {len(missing)} arquivo(s) faltando para deploy.', fg='yellow', bold=True))
 
     if is_fabric:
-        click.echo('   (Membros da Fábrica podem usar configuração personalizada)')
+        click.echo('   (Perfis privilegiados podem usar configuração personalizada)')
 
     if fix:
         click.echo()
