@@ -8,6 +8,7 @@ from .models import (
     AppRunArtifact,
     InteractiveRunAuditChunk,
     InteractiveRunEvent,
+    InteractiveRunRunner,
     InteractiveRunSession,
     Service,
 )
@@ -134,6 +135,7 @@ class InteractiveRunSessionAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
         'command_kind',
         'status',
         'task_id',
+        'runner_id',
         'created_at',
         'last_activity_at',
         'completed_at',
@@ -149,6 +151,8 @@ class InteractiveRunSessionAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
         'status',
         'manage_path',
         'task_id',
+        'runner_id',
+        'claimed_at',
         'cancel_requested',
         'prompt_counter',
         'awaiting_prompt_id',
@@ -168,6 +172,32 @@ class InteractiveRunSessionAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
     )
     fields = readonly_fields
     inlines = (InteractiveRunEventInline, InteractiveRunAuditChunkInline)
+
+
+@admin.register(InteractiveRunRunner)
+class InteractiveRunRunnerAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
+    list_display = (
+        'runner_id',
+        'hostname',
+        'pid',
+        'active_sessions',
+        'max_sessions',
+        'last_heartbeat_at',
+        'started_at',
+    )
+    list_filter = ('hostname', 'last_heartbeat_at', 'started_at')
+    search_fields = ('runner_id', 'hostname')
+    readonly_fields = (
+        'runner_id',
+        'hostname',
+        'pid',
+        'max_sessions',
+        'active_sessions',
+        'started_at',
+        'last_heartbeat_at',
+        'metadata',
+    )
+    fields = readonly_fields
 
 
 @admin.register(InteractiveRunEvent)

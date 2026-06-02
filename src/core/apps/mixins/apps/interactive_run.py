@@ -1,3 +1,4 @@
+import logging
 import re
 import shlex
 import socket
@@ -7,7 +8,9 @@ from datetime import timedelta
 from typing import cast
 
 import paramiko
+from asgiref.sync import async_to_sync
 from celery import Task, shared_task
+from channels.layers import get_channel_layer
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
@@ -39,6 +42,7 @@ TERMINAL_SESSION_STATUSES = {
     InteractiveRunSessionStatus.CANCELLED,
     InteractiveRunSessionStatus.EXPIRED,
 }
+module_logger = logging.getLogger(__name__)
 
 
 class InteractiveRunCancelled(RuntimeError):
@@ -157,6 +161,49 @@ def get_interactive_session_expires_at(now=None):
     return now + get_interactive_session_idle_timeout()
 
 
+def get_interactive_session_group_name(session_id: str) -> str:
+    return f'interactive-session-{session_id}'
+
+
+def _publish_group_message(session_id: str, message: dict):
+    channel_layer = get_channel_layer()
+    if channel_layer is None:
+        return
+
+    try:
+        async_to_sync(channel_layer.group_send)(get_interactive_session_group_name(session_id), message)
+    except Exception:
+        module_logger.debug('Falha ao publicar evento interativo no channel layer.', exc_info=True)
+
+
+def _publish_session_event(event: InteractiveRunEvent):
+    transaction.on_commit(
+        lambda: _publish_group_message(
+            str(event.session_id),
+            {
+                'type': 'interactive.event',
+                'event_id': event.id,
+                'event_type': event.event_type,
+                'payload': event.payload,
+            },
+        )
+    )
+
+
+def _publish_terminal_output(chunk: InteractiveRunAuditChunk, content: str):
+    transaction.on_commit(
+        lambda: _publish_group_message(
+            str(chunk.session_id),
+            {
+                'type': 'interactive.terminal_output',
+                'output_id': chunk.id,
+                'sequence': chunk.sequence,
+                'content': content,
+            },
+        )
+    )
+
+
 def cleanup_expired_interactive_sessions():
     now = timezone.now()
     InteractiveRunSession.objects.filter(
@@ -198,6 +245,7 @@ def _create_session_event(
     touch: bool = True,
 ):
     event = InteractiveRunEvent.objects.create(session=session, event_type=event_type, payload=payload)
+    _publish_session_event(event)
     if touch and session.status not in TERMINAL_SESSION_STATUSES:
         _touch_locked_session(session)
         session.save(update_fields=['last_activity_at', 'expires_at'])
@@ -274,11 +322,13 @@ def _consume_terminal_input_chunks(session_id: str) -> list[str]:
 def _record_terminal_output(session_id: str, value: str):
     if not value:
         return None
-    return create_interactive_audit_chunk(
+    chunk = create_interactive_audit_chunk(
         session_id,
         InteractiveRunAuditDirection.OUTPUT,
         value,
     )
+    _publish_terminal_output(chunk, value)
+    return chunk
 
 
 def submit_interactive_session_answer(session_id: str, prompt_id: str, value: str):
@@ -679,115 +729,131 @@ def _run_postgres_connect_loop(
         client.close()
 
 
+def execute_interactive_session(session_id: str, *, task_id: str | None = None, runner_id: str | None = None) -> dict:
+    """Executa uma sessao interativa ja criada.
+
+    O Celery antigo e o processo dedicado `interactive` usam esta mesma entrada para
+    manter um unico ponto de seguranca, auditoria e parsing de prompts.
+    """
+    task_id = task_id or f'interactive:{runner_id or "manual"}:{session_id}'
+
+    try:
+        session = InteractiveRunSession.objects.select_related('app', 'service').get(id=session_id)
+    except InteractiveRunSession.DoesNotExist as e:
+        raise RuntimeError('Sessao interativa nao encontrada.') from e
+
+    app = session.app
+    if session.command_kind != InteractiveRunCommandKind.POSTGRES_CONNECT and not app.name_dokku:
+        raise RuntimeError('App sem name_dokku configurado.')
+
+    driver = get_interactive_driver(session.command_kind)
+    dokku_adapter = DokkuAdapter()
+    logger = AppLogManager(app, task_id)
+    cleanup_expired_interactive_sessions()
+
+    session.task_id = task_id
+    if runner_id:
+        session.runner_id = runner_id
+        session.claimed_at = session.claimed_at or timezone.now()
+    session.status = InteractiveRunSessionStatus.RUNNING
+    session.started_at = timezone.now()
+    _touch_locked_session(session, now=session.started_at)
+    update_fields = ['task_id', 'status', 'started_at', 'last_activity_at', 'expires_at']
+    if runner_id:
+        update_fields.extend(['runner_id', 'claimed_at'])
+    session.save(update_fields=update_fields)
+
+    _create_session_event(
+        session,
+        InteractiveRunEventType.STATUS,
+        {
+            'status': InteractiveRunSessionStatus.RUNNING,
+            'message': f'Iniciando {driver.display_name}.',
+        },
+        touch=False,
+    )
+    log_metadata = {
+        'command_kind': session.command_kind,
+        'manage_path': session.manage_path,
+        'service_id': session.service_id,
+        'client_ip': session.client_ip,
+        'runner_id': runner_id,
+    }
+    logger.info(
+        f'Iniciando sessao interativa: {driver.display_name}',
+        category=driver.log_category,
+        metadata=log_metadata,
+    )
+
+    try:
+        if session.command_kind == InteractiveRunCommandKind.POSTGRES_CONNECT:
+            exit_status = _run_postgres_connect_loop(session, driver, dokku_adapter)
+            output_state = {'saw_success_output': False}
+            complete_message = 'Sessao Postgres finalizada.'
+        else:
+            exit_status, output_state = _run_interactive_command_loop(session, driver, dokku_adapter, logger)
+            complete_message = 'Superusuario criado com sucesso.'
+
+        if exit_status != 0:
+            raise RuntimeError(f'Comando interativo finalizado com codigo {exit_status}.')
+
+        _mark_session_terminal(
+            str(session.id),
+            InteractiveRunSessionStatus.COMPLETED,
+            InteractiveRunEventType.COMPLETE,
+            {
+                'message': complete_message,
+                'silent': bool(output_state.get('saw_success_output')),
+            },
+        )
+        logger.success(
+            'Sessao interativa concluida com sucesso.',
+            category=driver.log_category,
+            metadata=log_metadata,
+        )
+        return {
+            'status': 'success',
+            'message': 'Sessao interativa concluida com sucesso.',
+            'session_id': str(session.id),
+            'app_id': app.id,
+        }
+    except InteractiveRunCancelled as e:
+        _mark_session_terminal(
+            str(session.id),
+            InteractiveRunSessionStatus.CANCELLED,
+            InteractiveRunEventType.ERROR,
+            {'message': str(e)},
+        )
+        logger.warning(str(e), category=driver.log_category, metadata={'command_kind': session.command_kind})
+        raise
+    except InteractiveRunExpired as e:
+        _mark_session_terminal(
+            str(session.id),
+            InteractiveRunSessionStatus.EXPIRED,
+            InteractiveRunEventType.ERROR,
+            {'message': str(e)},
+        )
+        logger.warning(str(e), category=driver.log_category, metadata={'command_kind': session.command_kind})
+        raise
+    except Exception as e:
+        _mark_session_terminal(
+            str(session.id),
+            InteractiveRunSessionStatus.FAILED,
+            InteractiveRunEventType.ERROR,
+            {'message': str(e)},
+        )
+        logger.error(
+            f'Erro na sessao interativa: {e}',
+            category=driver.log_category,
+            metadata={'command_kind': session.command_kind, 'error_type': type(e).__name__},
+        )
+        raise
+
+
 class InteractiveRunMixin:
     """Infraestrutura generica para sessoes interativas executadas via Dokku."""
 
     @shared_task(bind=True)
     def run_interactive_session(self, session_id: str) -> dict:
         task = cast(Task, self)
-        task_id = task.request.id
-
-        try:
-            session = InteractiveRunSession.objects.select_related('app', 'service').get(id=session_id)
-        except InteractiveRunSession.DoesNotExist as e:
-            raise RuntimeError('Sessao interativa nao encontrada.') from e
-
-        app = session.app
-        if session.command_kind != InteractiveRunCommandKind.POSTGRES_CONNECT and not app.name_dokku:
-            raise RuntimeError('App sem name_dokku configurado.')
-
-        driver = get_interactive_driver(session.command_kind)
-        dokku_adapter = DokkuAdapter()
-        logger = AppLogManager(app, task_id)
-        cleanup_expired_interactive_sessions()
-
-        session.task_id = task_id
-        session.status = InteractiveRunSessionStatus.RUNNING
-        session.started_at = timezone.now()
-        _touch_locked_session(session, now=session.started_at)
-        session.save(update_fields=['task_id', 'status', 'started_at', 'last_activity_at', 'expires_at'])
-
-        _create_session_event(
-            session,
-            InteractiveRunEventType.STATUS,
-            {
-                'status': InteractiveRunSessionStatus.RUNNING,
-                'message': f'Iniciando {driver.display_name}.',
-            },
-            touch=False,
-        )
-        log_metadata = {
-            'command_kind': session.command_kind,
-            'manage_path': session.manage_path,
-            'service_id': session.service_id,
-            'client_ip': session.client_ip,
-        }
-        logger.info(
-            f'Iniciando sessao interativa: {driver.display_name}',
-            category=driver.log_category,
-            metadata=log_metadata,
-        )
-
-        try:
-            if session.command_kind == InteractiveRunCommandKind.POSTGRES_CONNECT:
-                exit_status = _run_postgres_connect_loop(session, driver, dokku_adapter)
-                output_state = {'saw_success_output': False}
-                complete_message = 'Sessao Postgres finalizada.'
-            else:
-                exit_status, output_state = _run_interactive_command_loop(session, driver, dokku_adapter, logger)
-                complete_message = 'Superusuario criado com sucesso.'
-
-            if exit_status != 0:
-                raise RuntimeError(f'Comando interativo finalizado com codigo {exit_status}.')
-
-            _mark_session_terminal(
-                str(session.id),
-                InteractiveRunSessionStatus.COMPLETED,
-                InteractiveRunEventType.COMPLETE,
-                {
-                    'message': complete_message,
-                    'silent': bool(output_state.get('saw_success_output')),
-                },
-            )
-            logger.success(
-                'Sessao interativa concluida com sucesso.',
-                category=driver.log_category,
-                metadata=log_metadata,
-            )
-            return {
-                'status': 'success',
-                'message': 'Sessao interativa concluida com sucesso.',
-                'session_id': str(session.id),
-                'app_id': app.id,
-            }
-        except InteractiveRunCancelled as e:
-            _mark_session_terminal(
-                str(session.id),
-                InteractiveRunSessionStatus.CANCELLED,
-                InteractiveRunEventType.ERROR,
-                {'message': str(e)},
-            )
-            logger.warning(str(e), category=driver.log_category, metadata={'command_kind': session.command_kind})
-            raise
-        except InteractiveRunExpired as e:
-            _mark_session_terminal(
-                str(session.id),
-                InteractiveRunSessionStatus.EXPIRED,
-                InteractiveRunEventType.ERROR,
-                {'message': str(e)},
-            )
-            logger.warning(str(e), category=driver.log_category, metadata={'command_kind': session.command_kind})
-            raise
-        except Exception as e:
-            _mark_session_terminal(
-                str(session.id),
-                InteractiveRunSessionStatus.FAILED,
-                InteractiveRunEventType.ERROR,
-                {'message': str(e)},
-            )
-            logger.error(
-                f'Erro na sessao interativa: {e}',
-                category=driver.log_category,
-                metadata={'command_kind': session.command_kind, 'error_type': type(e).__name__},
-            )
-            raise
+        return execute_interactive_session(session_id, task_id=task.request.id)

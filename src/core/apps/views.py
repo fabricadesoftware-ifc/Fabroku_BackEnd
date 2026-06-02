@@ -22,6 +22,7 @@ from rest_framework.viewsets import ModelViewSet
 
 from core.adapters import DokkuAdapter, GitHubAdapter
 from core.apps.interactive_crypto import decrypt_interactive_text
+from core.apps.interactive_runner import has_live_interactive_runner
 from core.apps.mixins import AppMixin, ServiceMixin
 from core.apps.mixins.apps.interactive_run import (
     TERMINAL_SESSION_STATUSES,
@@ -127,6 +128,7 @@ def _serialize_interactive_session(session: InteractiveRunSession, *, app_id) ->
         stream_url = f'/api/apps/apps/{app_id}/interactive_sessions/{session.id}/terminal_events/'
     else:
         stream_url = f'/api/apps/apps/{app_id}/interactive_sessions/{session.id}/events/'
+    websocket_url = f'/ws/apps/apps/{app_id}/interactive_sessions/{session.id}/'
 
     return {
         'session_id': str(session.id),
@@ -135,6 +137,7 @@ def _serialize_interactive_session(session: InteractiveRunSession, *, app_id) ->
         'service_id': session.service_id,
         'expires_at': session.expires_at.isoformat() if session.expires_at else None,
         'stream_url': stream_url,
+        'websocket_url': websocket_url,
     }
 
 
@@ -886,6 +889,17 @@ class AppViewSet(ModelViewSet):
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         cleanup_expired_interactive_sessions()
+        if not has_live_interactive_runner():
+            return Response(
+                {
+                    'error': (
+                        'Nenhum runner interativo esta ativo. '
+                        'Escale o processo interactive antes de abrir sessoes da CLI.'
+                    )
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
         session = InteractiveRunSession.objects.create(
             app=app,
             service=service,
@@ -899,12 +913,7 @@ class AppViewSet(ModelViewSet):
             last_activity_at=timezone.now(),
         )
 
-        task_result = AppMixin.run_interactive_session.delay(session_id=str(session.id))  # type: ignore
-        session.task_id = task_result.id
-        session.save(update_fields=['task_id'])
-
         payload = _serialize_interactive_session(session, app_id=app.id)
-        payload['task_id'] = task_result.id
         return Response(payload, status=status.HTTP_202_ACCEPTED)
 
     @action(
