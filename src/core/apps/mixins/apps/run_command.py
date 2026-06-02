@@ -21,6 +21,7 @@ ALLOWED_COMMANDS = {
     'php artisan migrate --force',
     'rails db:migrate',
     'bundle exec rails db:migrate',
+    'python manage.py loaddata'
 }
 
 # Prefixos permitidos (para comandos com argumentos variaveis)
