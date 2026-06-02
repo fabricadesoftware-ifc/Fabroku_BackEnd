@@ -87,7 +87,6 @@ def claim_pending_interactive_sessions(runner_id: str, *, limit: int) -> list[In
 
         queryset = (
             InteractiveRunSession.objects.select_for_update(**select_for_update_kwargs)
-            .select_related('app', 'service')
             .filter(
                 status=InteractiveRunSessionStatus.PENDING,
                 runner_id__isnull=True,
