@@ -43,6 +43,14 @@ LOCAL_DEV_ORIGINS = [
     'http://127.0.0.1:5173',
 ]
 
+DEFAULT_TRUSTED_ORIGINS = [
+    *LOCAL_DEV_ORIGINS,
+    'https://fabroku.fabricadesoftware.ifc.edu.br',
+    'https://fabroku-api.fabricadesoftware.ifc.edu.br',
+    'https://*.fabricadesoftware.ifc.edu.br',
+    'https://*.fexcompany.me',
+]
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -56,6 +64,8 @@ BROKER_URL = CELERY_BROKER_URL
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '*').split(',')
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+USE_X_FORWARDED_HOST = _parse_bool_env('USE_X_FORWARDED_HOST', True)
 
 ROOT_URLCONF = 'config.urls'
 
@@ -142,15 +152,13 @@ STATIC_URL = 'static/'
 
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
-CSRF_TRUSTED_ORIGINS = _parse_csv_env('CSRF_TRUSTED_ORIGINS', LOCAL_DEV_ORIGINS)
+CSRF_TRUSTED_ORIGINS = _parse_csv_env('CSRF_TRUSTED_ORIGINS', DEFAULT_TRUSTED_ORIGINS)
 
-CSRF_TRUSTED_ORIGIN_REGEXES = _parse_csv_env('CSRF_TRUSTED_ORIGIN_REGEXES', [
-    r'^https://.*\.fabricadesoftware\.ifc\.edu\.br$',
-    r'^https://.*\.fexcompany\.me$',
+
+CORS_ALLOWED_ORIGINS = _parse_csv_env('CORS_ALLOWED_ORIGINS', LOCAL_DEV_ORIGINS + [
+    'https://fabroku.fabricadesoftware.ifc.edu.br',
+    'https://fabroku-api.fabricadesoftware.ifc.edu.br',
 ])
-
-
-CORS_ALLOWED_ORIGINS = _parse_csv_env('CORS_ALLOWED_ORIGINS', LOCAL_DEV_ORIGINS)
 
 CORS_ALLOWED_ORIGIN_REGEXES = _parse_csv_env('CORS_ALLOWED_ORIGIN_REGEXES', [
     r'^https://.*\.fabricadesoftware\.ifc\.edu\.br$',
