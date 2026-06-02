@@ -60,10 +60,12 @@ ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '*').split(',')
 ROOT_URLCONF = 'config.urls'
 
 WSGI_APPLICATION = 'config.wsgi.application'
+ASGI_APPLICATION = 'config.asgi.application'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 INSTALLED_APPS = [
+    'daphne',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -75,6 +77,7 @@ INSTALLED_APPS = [
     'corsheaders',
     'drf_spectacular',
     'django_filters',
+    'channels',
     'django_celery_results',
     'core.adapters',
     'core.logs',
@@ -266,6 +269,17 @@ ADMIN_STORAGE_USAGE_MAX_WORKERS = int(os.getenv('ADMIN_STORAGE_USAGE_MAX_WORKERS
 CLI_RUN_ARTIFACT_MAX_BYTES = int(os.getenv('CLI_RUN_ARTIFACT_MAX_BYTES', 50 * 1024 * 1024))
 CLI_INTERACTIVE_SESSION_IDLE_SECONDS = int(os.getenv('CLI_INTERACTIVE_SESSION_IDLE_SECONDS', 5 * 60))
 APP_PROCESS_MAX_INSTANCES = int(os.getenv('APP_PROCESS_MAX_INSTANCES', 5))
+CHANNEL_REDIS_URL = os.getenv('CHANNEL_REDIS_URL', os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/0'))
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            'hosts': [CHANNEL_REDIS_URL],
+        },
+    },
+}
+CLI_INTERACTIVE_MAX_SESSIONS = int(os.getenv('CLI_INTERACTIVE_MAX_SESSIONS', 20))
+CLI_INTERACTIVE_RUNNER_HEARTBEAT_SECONDS = int(os.getenv('CLI_INTERACTIVE_RUNNER_HEARTBEAT_SECONDS', 10))
 
 CELERY_TIMEZONE = 'America/Sao_Paulo'
 CELERY_TASK_TRACK_STARTED = True

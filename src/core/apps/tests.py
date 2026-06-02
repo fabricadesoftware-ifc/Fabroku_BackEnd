@@ -2,9 +2,11 @@ import socket
 from datetime import timedelta
 from unittest.mock import ANY, Mock, patch
 
+from asgiref.sync import async_to_sync
+from channels.testing import WebsocketCommunicator
 from django.core.cache import cache
 from django.db import connection
-from django.test import SimpleTestCase, TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient, APITestCase
@@ -13,6 +15,7 @@ from core.adapters.dokku_mixins.dokku_apps import DokkuAppsMixin
 from core.adapters.dokku_mixins.dokku_config import DokkuConfigMixin
 from core.adapters.ssh import SSHAdapter
 from core.apps.interactive_crypto import decrypt_interactive_text
+from core.apps.interactive_runner import claim_pending_interactive_sessions, has_live_interactive_runner
 from core.apps.mixins import AppMixin, ServiceMixin
 from core.apps.mixins.apps import interactive_run
 from core.apps.mixins.apps.create_app import CreateAppMixin
@@ -38,14 +41,17 @@ from core.apps.models import (
     InteractiveRunCommandKind,
     InteractiveRunEvent,
     InteractiveRunEventType,
+    InteractiveRunRunner,
     InteractiveRunSession,
     InteractiveRunSessionStatus,
     Service,
 )
 from core.apps.process_scale import parse_ps_scale_output, validate_process_quantities
-from core.auth_user.models import User
+from core.auth_user.models import CLIToken, User
 from core.cache_versioning import APP_LAST_COMMIT_CACHE_NAMESPACE, get_cache_ttl
 from core.project.models import Project
+
+from config.asgi import application
 
 
 class FakeStatus:
@@ -278,6 +284,7 @@ class FakeInteractiveClient:
         return None
 
 
+@override_settings(CHANNEL_LAYERS={'default': {'BACKEND': 'channels.layers.InMemoryChannelLayer'}})
 class InteractiveRunEndpointTests(APITestCase):
     def setUp(self):
         self.client = APIClient()
@@ -301,12 +308,17 @@ class InteractiveRunEndpointTests(APITestCase):
             project=self.project,
             status='RUNNING',
         )
+        self.runner = InteractiveRunRunner.objects.create(
+            runner_id='runner-test',
+            hostname='test-host',
+            pid=123,
+            max_sessions=5,
+            active_sessions=0,
+            last_heartbeat_at=timezone.now(),
+        )
         self.client.force_authenticate(user=self.user)
 
-    @patch('core.apps.views.AppMixin.run_interactive_session.delay')
-    def test_create_interactive_session_dispatches_task(self, mock_delay):
-        mock_delay.return_value = Mock(id='task-interactive-123')
-
+    def test_create_interactive_session_waits_for_interactive_runner(self):
         response = self.client.post(
             f'/api/apps/apps/{self.app.id}/interactive_sessions/',
             {'command_kind': 'django_createsuperuser', 'manage_path': 'src/manage.py'},
@@ -314,16 +326,27 @@ class InteractiveRunEndpointTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, 202)
-        self.assertEqual(response.data['task_id'], 'task-interactive-123')
+        self.assertIn('websocket_url', response.data)
+        self.assertNotIn('task_id', response.data)
         session = InteractiveRunSession.objects.get(id=response.data['session_id'])
         self.assertEqual(session.status, InteractiveRunSessionStatus.PENDING)
         self.assertEqual(session.manage_path, 'src/manage.py')
-        self.assertEqual(session.task_id, 'task-interactive-123')
-        mock_delay.assert_called_once_with(session_id=str(session.id))
+        self.assertIsNone(session.task_id)
 
-    @patch('core.apps.views.AppMixin.run_interactive_session.delay')
-    def test_create_postgres_connect_session_uses_linked_postgres_service(self, mock_delay):
-        mock_delay.return_value = Mock(id='task-postgres-connect-123')
+    def test_create_interactive_session_rejects_when_no_runner_is_alive(self):
+        self.runner.delete()
+
+        response = self.client.post(
+            f'/api/apps/apps/{self.app.id}/interactive_sessions/',
+            {'command_kind': 'django_createsuperuser', 'manage_path': 'src/manage.py'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn('runner interativo', response.data['error'])
+        self.assertFalse(InteractiveRunSession.objects.exists())
+
+    def test_create_postgres_connect_session_uses_linked_postgres_service(self):
         service = Service.objects.create(
             name='db-interactive',
             user='postgres',
@@ -343,15 +366,13 @@ class InteractiveRunEndpointTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, 202)
-        self.assertEqual(response.data['task_id'], 'task-postgres-connect-123')
         self.assertIn('terminal_events', response.data['stream_url'])
+        self.assertIn('websocket_url', response.data)
         session = InteractiveRunSession.objects.get(id=response.data['session_id'])
         self.assertEqual(session.command_kind, InteractiveRunCommandKind.POSTGRES_CONNECT)
         self.assertEqual(session.service_id, service.id)
-        mock_delay.assert_called_once_with(session_id=str(session.id))
 
-    @patch('core.apps.views.AppMixin.run_interactive_session.delay')
-    def test_create_postgres_connect_session_rejects_non_postgres_service(self, mock_delay):
+    def test_create_postgres_connect_session_rejects_non_postgres_service(self):
         service = Service.objects.create(
             name='redis-interactive',
             user='redis',
@@ -371,7 +392,6 @@ class InteractiveRunEndpointTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, 400)
-        self.assertFalse(mock_delay.called)
 
     def test_answer_endpoint_encrypts_pending_answer_without_storing_plaintext(self):
         session = InteractiveRunSession.objects.create(
@@ -593,6 +613,155 @@ class InteractiveRunEndpointTests(APITestCase):
         self.assertFalse(session.events.filter(event_type=InteractiveRunEventType.OUTPUT).exists())
 
 
+class InteractiveRunRunnerClaimTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='runner-claim@example.com',
+            password='senha123',
+            name='Runner Claim User',
+        )
+        self.project = Project.objects.create(name='Projeto Runner Claim')
+        self.project.users.add(self.user)
+        self.app = App.objects.create(
+            name='app-runner-claim',
+            name_dokku='app-runner-claim',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=self.project,
+            status='RUNNING',
+        )
+
+    def test_claim_pending_sessions_marks_runner_without_starting_execution(self):
+        InteractiveRunRunner.objects.create(
+            runner_id='runner-claim-test',
+            hostname='test-host',
+            pid=321,
+            max_sessions=2,
+            active_sessions=0,
+            last_heartbeat_at=timezone.now(),
+        )
+        session = InteractiveRunSession.objects.create(
+            app=self.app,
+            created_by=self.user,
+            command_kind=InteractiveRunCommandKind.DJANGO_CREATESUPERUSER,
+            status=InteractiveRunSessionStatus.PENDING,
+            manage_path='manage.py',
+            expires_at=timezone.now() + timedelta(minutes=5),
+            last_activity_at=timezone.now(),
+        )
+
+        claimed = claim_pending_interactive_sessions('runner-claim-test', limit=1)
+
+        self.assertEqual([str(item.id) for item in claimed], [str(session.id)])
+        session.refresh_from_db()
+        self.assertEqual(session.runner_id, 'runner-claim-test')
+        self.assertIsNotNone(session.claimed_at)
+        self.assertEqual(session.status, InteractiveRunSessionStatus.PENDING)
+
+    def test_has_live_runner_ignores_stale_heartbeat(self):
+        InteractiveRunRunner.objects.create(
+            runner_id='runner-stale-test',
+            hostname='test-host',
+            pid=321,
+            max_sessions=2,
+            active_sessions=0,
+            last_heartbeat_at=timezone.now() - timedelta(minutes=10),
+        )
+
+        self.assertFalse(has_live_interactive_runner())
+
+
+@override_settings(CHANNEL_LAYERS={'default': {'BACKEND': 'channels.layers.InMemoryChannelLayer'}})
+class InteractiveRunWebSocketTests(TransactionTestCase):
+    reset_sequences = True
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='interactive-ws@example.com',
+            password='senha123',
+            name='Interactive WS User',
+        )
+        self.other_user = User.objects.create_user(
+            email='interactive-ws-other@example.com',
+            password='senha123',
+            name='Interactive WS Other User',
+        )
+        self.token = CLIToken.objects.create(user=self.user)
+        self.other_token = CLIToken.objects.create(user=self.other_user)
+        self.project = Project.objects.create(name='Projeto Interactive WS')
+        self.project.users.add(self.user)
+        self.app = App.objects.create(
+            name='app-interactive-ws',
+            name_dokku='app-interactive-ws',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=self.project,
+            status='RUNNING',
+        )
+        self.session = InteractiveRunSession.objects.create(
+            app=self.app,
+            created_by=self.user,
+            command_kind=InteractiveRunCommandKind.DJANGO_CREATESUPERUSER,
+            status=InteractiveRunSessionStatus.AWAITING_INPUT,
+            manage_path='manage.py',
+            awaiting_prompt_id='email-1',
+            awaiting_prompt_text='Email address:',
+            awaiting_prompt_secret=False,
+            expires_at=timezone.now() + timedelta(minutes=5),
+            last_activity_at=timezone.now(),
+        )
+
+    def _communicator(self, token=None, session=None):
+        session = session or self.session
+        headers = []
+        if token:
+            headers.append((b'authorization', f'CLI {token.token}'.encode('utf-8')))
+        return WebsocketCommunicator(
+            application,
+            f'/ws/apps/apps/{self.app.id}/interactive_sessions/{session.id}/',
+            headers=headers,
+        )
+
+    def test_websocket_rejects_missing_cli_token(self):
+        async def scenario():
+            communicator = self._communicator()
+            connected, _subprotocol = await communicator.connect()
+            self.assertFalse(connected)
+
+        async_to_sync(scenario)()
+
+    def test_websocket_rejects_session_from_other_user(self):
+        async def scenario():
+            communicator = self._communicator(token=self.other_token)
+            connected, _subprotocol = await communicator.connect()
+            self.assertFalse(connected)
+
+        async_to_sync(scenario)()
+
+    def test_websocket_accepts_answer_and_keeps_plaintext_out_of_database(self):
+        async def scenario():
+            communicator = self._communicator(token=self.token)
+            connected, _subprotocol = await communicator.connect()
+            self.assertTrue(connected)
+            connected_message = await communicator.receive_json_from()
+            self.assertEqual(connected_message['type'], 'status')
+
+            await communicator.send_json_to({
+                'type': 'answer',
+                'prompt_id': 'email-1',
+                'value': 'admin@example.com',
+            })
+            ack = await communicator.receive_json_from()
+            self.assertEqual(ack['type'], 'ack')
+            await communicator.disconnect()
+
+        async_to_sync(scenario)()
+        self.session.refresh_from_db()
+        self.assertIsNotNone(self.session.pending_answer_ciphertext)
+        self.assertNotIn(b'admin@example.com', bytes(self.session.pending_answer_ciphertext))
+
+
+@override_settings(CHANNEL_LAYERS={'default': {'BACKEND': 'channels.layers.InMemoryChannelLayer'}})
 class InteractiveRunTaskTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(

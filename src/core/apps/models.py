@@ -247,6 +247,8 @@ class InteractiveRunSession(models.Model):
     )
     manage_path = models.CharField(max_length=255, default='manage.py')
     task_id = models.CharField(max_length=255, null=True, blank=True, db_index=True)
+    runner_id = models.CharField(max_length=128, null=True, blank=True, db_index=True)
+    claimed_at = models.DateTimeField(null=True, blank=True)
     cancel_requested = models.BooleanField(default=False)
     prompt_counter = models.PositiveIntegerField(default=0)
     awaiting_prompt_id = models.CharField(max_length=64, null=True, blank=True)
@@ -276,6 +278,29 @@ class InteractiveRunSession(models.Model):
             models.Index(fields=['app', 'status'], name='idx_irs_app_status'),
             models.Index(fields=['created_by', 'created_at'], name='idx_irs_user_created'),
             models.Index(fields=['service', 'created_at'], name='idx_irs_service_created'),
+            models.Index(fields=['runner_id', 'status'], name='idx_irs_runner_status'),
+        ]
+
+
+class InteractiveRunRunner(models.Model):
+    runner_id = models.CharField(max_length=128, primary_key=True)
+    hostname = models.CharField(max_length=255, blank=True, default='')
+    pid = models.PositiveIntegerField(default=0)
+    max_sessions = models.PositiveIntegerField(default=1)
+    active_sessions = models.PositiveIntegerField(default=0)
+    started_at = models.DateTimeField(default=timezone.now)
+    last_heartbeat_at = models.DateTimeField(db_index=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    def __str__(self):
+        return self.runner_id
+
+    class Meta:
+        db_table = 'interactive_run_runners'
+        verbose_name = 'Interactive Run Runner'
+        verbose_name_plural = 'Interactive Run Runners'
+        indexes = [
+            models.Index(fields=['last_heartbeat_at'], name='idx_irr_last_heartbeat'),
         ]
 
 
