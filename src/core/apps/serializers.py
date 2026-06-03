@@ -26,6 +26,10 @@ class ServiceSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
         ]
+        extra_kwargs = {
+            'name': {'required': False, 'allow_blank': True},
+            'project': {'required': False},
+        }
         read_only_fields = [
             'id',
             'host',

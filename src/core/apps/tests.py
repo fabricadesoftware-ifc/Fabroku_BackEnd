@@ -1216,6 +1216,63 @@ class LinkServiceMixinTests(TestCase):
         mock_dokku.restart_app.assert_called_once_with(app.name_dokku)
 
 
+class ServiceCreateEndpointTests(APITestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email='service-create@example.com',
+            password='senha123',
+            name='Service Create User',
+        )
+        self.project = Project.objects.create(name='Projeto Service Create')
+        self.project.users.add(self.user)
+        self.app = App.objects.create(
+            name='app-service-create',
+            name_dokku='app-service-create',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=self.project,
+            status='RUNNING',
+        )
+        self.client.force_authenticate(user=self.user)
+
+    @patch('core.apps.serializers.ServiceMixin.create_service_standalone.delay')
+    def test_create_standalone_service_allows_missing_name(self, mock_delay):
+        mock_delay.return_value = Mock(id='task-standalone-service')
+
+        response = self.client.post(
+            '/api/apps/services/',
+            {
+                'project': self.project.id,
+                'service_type': 'postgres',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['name'], 'provisionando...')
+        self.assertEqual(response.data['task_id'], 'task-standalone-service')
+        mock_delay.assert_called_once()
+        self.assertIsNone(mock_delay.call_args.kwargs['name'])
+
+    @patch('core.apps.serializers.ServiceMixin.create_service.delay')
+    def test_create_attached_service_allows_missing_name(self, mock_delay):
+        mock_delay.return_value = Mock(id='task-attached-service')
+
+        response = self.client.post(
+            '/api/apps/services/',
+            {
+                'app': self.app.id,
+                'service_type': 'postgres',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['name'], 'app-service-create-db')
+        mock_delay.assert_called_once_with(app_id=self.app.id, service_type='postgres')
+
+
 class RunCommandTests(TestCase):
     @patch('core.apps.mixins.apps.run_command.DokkuAdapter')
     def test_run_command_marks_task_as_failure_when_output_contains_traceback(self, mock_dokku_cls):
