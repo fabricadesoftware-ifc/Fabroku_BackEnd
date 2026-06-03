@@ -1,8 +1,10 @@
 import asyncio
+import json
+from contextlib import suppress
+from json import JSONDecodeError
 from urllib.parse import parse_qs
 
 from channels.db import database_sync_to_async
-from channels.generic.websocket import AsyncJsonWebsocketConsumer
 
 from core.apps.interactive_crypto import decrypt_interactive_text
 from core.apps.mixins.apps.interactive_run import (
@@ -91,11 +93,42 @@ def _cancel_session(session_id: str):
     request_interactive_session_cancel(session_id)
 
 
-class InteractiveSessionConsumer(AsyncJsonWebsocketConsumer):
-    async def connect(self):
+class InteractiveSessionConsumer:
+    """WebSocket ASGI puro para sessoes interativas da CLI.
+
+    Evitamos herdar dos consumers do Channels aqui de proposito. Eles sempre
+    escutam o channel layer interno, o que fazia sessoes longas cairem quando o
+    Redis demorava a responder, mesmo sem usarmos groups.
+    """
+
+    @classmethod
+    def as_asgi(cls):
+        async def application(scope, receive, send):
+            consumer = cls(scope)
+            await consumer(receive, send)
+
+        return application
+
+    def __init__(self, scope):
+        self.scope = scope
+        self.asgi_receive = None
+        self.asgi_send = None
+        self.app_id = None
+        self.session_id = None
+        self.session = None
+        self.last_event_id = 0
+        self.last_output_id = 0
+        self.connected = False
+        self.stream_task = None
+        self.send_lock = asyncio.Lock()
+
+    async def __call__(self, receive, send):
+        self.asgi_receive = receive
+        self.asgi_send = send
+
         user = self.scope.get('user')
         if not user or not user.is_authenticated:
-            await self.close(code=4401)
+            await self._close(4401)
             return
 
         self.app_id = int(self.scope['url_route']['kwargs']['app_id'])
@@ -103,14 +136,13 @@ class InteractiveSessionConsumer(AsyncJsonWebsocketConsumer):
         query = parse_qs(self.scope.get('query_string', b'').decode('utf-8', errors='ignore'))
         self.last_event_id = self._query_int(query, 'after_event')
         self.last_output_id = self._query_int(query, 'after_output')
-        self.send_lock = asyncio.Lock()
 
         self.session = await _get_session_snapshot(self.app_id, self.session_id, user.id)
         if not self.session:
-            await self.close(code=4404)
+            await self._close(4404)
             return
 
-        await self.accept()
+        await self._accept()
         await self._send_json({
             'type': 'status',
             'status': self.session['status'],
@@ -118,12 +150,35 @@ class InteractiveSessionConsumer(AsyncJsonWebsocketConsumer):
         })
         self.stream_task = asyncio.create_task(self._stream_database_messages())
 
-    async def disconnect(self, close_code):
+        try:
+            while self.connected:
+                message = await receive()
+                message_type = message.get('type')
+
+                if message_type == 'websocket.disconnect':
+                    return
+
+                if message_type != 'websocket.receive':
+                    continue
+
+                content = self._decode_websocket_message(message)
+                if content is None:
+                    await self._send_json({'type': 'error', 'message': 'Mensagem WebSocket invalida.'})
+                    continue
+
+                await self._receive_json(content)
+        finally:
+            self.connected = False
+            await self._cancel_stream_task()
+
+    async def _cancel_stream_task(self):
         stream_task = getattr(self, 'stream_task', None)
         if stream_task and not stream_task.done():
             stream_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await stream_task
 
-    async def receive_json(self, content, **kwargs):
+    async def _receive_json(self, content):
         message_type = content.get('type')
 
         try:
@@ -156,23 +211,8 @@ class InteractiveSessionConsumer(AsyncJsonWebsocketConsumer):
         except ValueError as exc:
             await self._send_json({'type': 'error', 'message': str(exc)})
 
-    async def interactive_event(self, event):
-        await self._send_json({
-            'type': event['event_type'],
-            'id': event['event_id'],
-            **event.get('payload', {}),
-        })
-
-    async def interactive_terminal_output(self, event):
-        await self._send_json({
-            'type': 'terminal.output',
-            'output_id': event['output_id'],
-            'sequence': event['sequence'],
-            'content': event['content'],
-        })
-
     async def _stream_database_messages(self):
-        while True:
+        while self.connected:
             messages = await _load_replay_messages(
                 self.session_id,
                 self.session['command_kind'],
@@ -193,8 +233,38 @@ class InteractiveSessionConsumer(AsyncJsonWebsocketConsumer):
             await asyncio.sleep(DATABASE_STREAM_POLL_SECONDS)
 
     async def _send_json(self, content: dict):
+        if not self.connected:
+            return
+
         async with self.send_lock:
-            await self.send_json(content)
+            if not self.connected:
+                return
+            await self.asgi_send({
+                'type': 'websocket.send',
+                'text': json.dumps(content),
+            })
+
+    async def _accept(self):
+        self.connected = True
+        await self.asgi_send({'type': 'websocket.accept'})
+
+    async def _close(self, code: int):
+        await self.asgi_send({'type': 'websocket.close', 'code': code})
+
+    @staticmethod
+    def _decode_websocket_message(message: dict):
+        raw_content = message.get('text')
+        if raw_content is None and message.get('bytes') is not None:
+            raw_content = message['bytes'].decode('utf-8', errors='ignore')
+        if raw_content is None:
+            return {}
+
+        try:
+            parsed = json.loads(raw_content)
+        except (JSONDecodeError, TypeError):
+            return None
+
+        return parsed if isinstance(parsed, dict) else None
 
     def _track_message_offsets(self, message: dict):
         if message.get('output_id'):
