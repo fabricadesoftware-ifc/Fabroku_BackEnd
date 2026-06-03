@@ -166,6 +166,9 @@ def get_interactive_session_group_name(session_id: str) -> str:
 
 
 def _publish_group_message(session_id: str, message: dict):
+    if not getattr(settings, 'CLI_INTERACTIVE_ENABLE_CHANNEL_LAYER_EVENTS', False):
+        return
+
     channel_layer = get_channel_layer()
     if channel_layer is None:
         return
