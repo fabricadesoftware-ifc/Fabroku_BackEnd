@@ -27,6 +27,7 @@ from core.apps.mixins.apps.interactive_run import (
 from core.apps.mixins.apps.redeploy_app import RedeployAppMixin
 from core.apps.mixins.apps.run_data import (
     build_loaddata_command,
+    build_migrate_command,
     validate_dump_args,
     validate_loaddata_fixture_path,
     validate_manage_path,
@@ -192,6 +193,11 @@ class RunDataValidationTests(SimpleTestCase):
         command = build_loaddata_command('src/manage.py', 'fixtures/my_data.json')
 
         self.assertEqual(command, 'python src/manage.py loaddata fixtures/my_data.json')
+
+    def test_build_migrate_command_supports_custom_manage_path(self):
+        command = build_migrate_command('src/manage.py', noinput=True)
+
+        self.assertEqual(command, 'python src/manage.py migrate --noinput')
 
 
 class InteractiveRunValidationTests(SimpleTestCase):
@@ -1710,6 +1716,33 @@ class RunDataEndpointTests(APITestCase):
         )
         self.client.force_authenticate(user=self.user)
 
+    @patch('core.apps.views.AppMixin.run_migrate.delay')
+    def test_run_migrate_dispatches_task_with_custom_manage_path(self, mock_delay):
+        mock_delay.return_value = Mock(id='task-migrate-123')
+
+        response = self.client.post(
+            f'/api/apps/apps/{self.app.id}/run_migrate/',
+            {'manage_path': 'src/manage.py', 'noinput': True},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 202)
+        mock_delay.assert_called_once_with(
+            app_id=self.app.id,
+            manage_path='src/manage.py',
+            noinput=True,
+            user_id=self.user.id,
+        )
+
+    def test_run_migrate_rejects_unsafe_manage_path(self):
+        response = self.client.post(
+            f'/api/apps/apps/{self.app.id}/run_migrate/',
+            {'manage_path': '../manage.py'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+
     @patch('core.apps.views.AppMixin.run_loaddata.delay')
     def test_run_loaddata_dispatches_task_with_container_fixture_path(self, mock_delay):
         mock_delay.return_value = Mock(id='task-loaddata-123')
@@ -1824,6 +1857,27 @@ class RunDataTaskTests(TestCase):
             branch='main',
             project=self.project,
             status='RUNNING',
+        )
+
+    @patch('core.apps.mixins.apps.run_data.DokkuAdapter')
+    def test_run_migrate_runs_manage_path_inside_app(self, mock_dokku_cls):
+        mock_dokku = Mock()
+        mock_dokku.run_in_app.return_value = 'No migrations to apply.'
+        mock_dokku_cls.return_value = mock_dokku
+
+        task = AppMixin.run_migrate
+        task.request.id = 'task-migrate-direct'
+        result = task.run(
+            app_id=self.app.id,
+            manage_path='src/manage.py',
+            noinput=True,
+            user_id=self.user.id,
+        )
+
+        self.assertEqual(result['status'], 'success')
+        mock_dokku.run_in_app.assert_called_once_with(
+            app_name='app-run-data-task',
+            command='python src/manage.py migrate --noinput',
         )
 
     @patch('core.apps.mixins.apps.run_data.DokkuAdapter')

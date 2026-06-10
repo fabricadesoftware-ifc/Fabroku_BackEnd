@@ -100,6 +100,13 @@ def build_loaddata_command(manage_path: str, fixture_path: str) -> str:
     return ' '.join(shlex.quote(part) for part in parts)
 
 
+def build_migrate_command(manage_path: str, noinput: bool = False) -> str:
+    parts = ['python', manage_path, 'migrate']
+    if noinput:
+        parts.append('--noinput')
+    return ' '.join(shlex.quote(part) for part in parts)
+
+
 def command_output_failed(output: str) -> bool:
     normalized = (output or '').lower()
     return (
@@ -113,6 +120,82 @@ def command_output_failed(output: str) -> bool:
 
 class RunDataMixin:
     """Tasks para import/export de dados Django via CLI."""
+
+    @shared_task(bind=True)
+    def run_migrate(self, app_id: int, manage_path: str, noinput: bool, user_id: int) -> dict:
+        task = cast(Task, self)
+        task_id = task.request.id
+
+        try:
+            app = App.objects.get(id=app_id, deleted_at__isnull=True)
+        except App.DoesNotExist as e:
+            raise RuntimeError(f'App {app_id} not found') from e
+
+        if not app.name_dokku:
+            raise RuntimeError('App sem name_dokku configurado.')
+
+        app.task_id = task_id
+        app.save(update_fields=['task_id'])
+
+        logger = AppLogManager(app, task_id)
+        dokku_adapter = DokkuAdapter()
+        command = build_migrate_command(manage_path, noinput=noinput)
+
+        try:
+            task.update_state(
+                state='PROGRESS',
+                meta={'current': 10, 'total': 100, 'status': 'Executando migrations Django'},
+            )
+            logger.info(
+                'Executando migrations Django.',
+                category=LogCategory.DATABASE,
+                progress=10,
+                metadata={'command': command, 'manage_path': manage_path, 'noinput': noinput},
+            )
+
+            output = dokku_adapter.run_in_app(app_name=app.name_dokku, command=command)
+
+            if output.strip():
+                for line in output.splitlines()[:100]:
+                    logger.dokku(line, category=LogCategory.DATABASE, progress=60)
+
+            if command_output_failed(output):
+                app.error_type = 'MigrateExecutionError'
+                app.error_details = output[:4000]
+                app.save(update_fields=['error_type', 'error_details'])
+                logger.error(
+                    'migrate finalizado com erro.',
+                    category=LogCategory.DATABASE,
+                    progress=100,
+                    metadata={'command': command},
+                )
+                raise RuntimeError(output)
+
+            app.error_type = None
+            app.error_details = None
+            app.save(update_fields=['error_type', 'error_details'])
+            logger.success('migrate executado com sucesso.', category=LogCategory.DATABASE, progress=100)
+            return {
+                'status': 'success',
+                'message': 'migrate executado com sucesso.',
+                'app_id': app.id,
+                'command': command,
+                'output': output,
+                'lines': len(output.splitlines()) if output else 0,
+            }
+        except Exception as e:
+            if not app.error_details:
+                app.error_type = type(e).__name__
+                app.error_details = str(e)
+                app.save(update_fields=['error_type', 'error_details'])
+            logger.error(
+                f'Erro ao executar migrate: {e}',
+                category=LogCategory.DATABASE,
+                metadata={'error_type': type(e).__name__, 'command': command},
+            )
+            raise
+        finally:
+            cleanup_expired_run_artifacts()
 
     @shared_task(bind=True)
     def run_loaddata(self, app_id: int, fixture_path: str, manage_path: str, user_id: int) -> dict:

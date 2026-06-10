@@ -770,6 +770,41 @@ class AppViewSet(ModelViewSet):
             status=status.HTTP_202_ACCEPTED,
         )
 
+    @action(detail=True, methods=['post'], url_path='run_migrate')
+    def run_migrate(self, request, pk=None):
+        """Executa Django migrate no app usando um manage.py validado."""
+        app = self.get_object()
+
+        if not app.name_dokku:
+            return Response(
+                {'error': 'App nao tem name_dokku configurado'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            manage_path = validate_manage_path(request.data.get('manage_path'))
+        except ValueError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        noinput = bool(request.data.get('noinput', False))
+        task_result = AppMixin.run_migrate.delay(
+            app_id=app.id,
+            manage_path=manage_path,
+            noinput=noinput,
+            user_id=request.user.id,
+        )  # type: ignore
+        app.task_id = task_result.id
+        app.save(update_fields=['task_id'])
+
+        return Response(
+            {
+                'status': 'RUNNING',
+                'message': 'Executando migrations Django',
+                'task_id': task_result.id,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
     @action(detail=True, methods=['post'], url_path='run_loaddata')
     def run_loaddata(self, request, pk=None):
         """Executa Django loaddata usando um fixture que ja existe no app."""
