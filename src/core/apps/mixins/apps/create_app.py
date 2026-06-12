@@ -4,6 +4,7 @@ from typing import cast
 from celery import Task, shared_task
 
 from core.adapters import DokkuAdapter, GitHubAdapter
+from core.adapters.git_utils import parse_github_repo_name
 from core.apps.models import App
 from core.apps.process_scale import reapply_saved_process_scales
 from core.apps.utils import slugify_dokku
@@ -15,6 +16,7 @@ def https_to_ssh_url(url: str) -> str:
     """
     Converte URL HTTPS do GitHub para SSH.
     https://github.com/user/repo.git -> git@github.com:user/repo.git
+    funcionaaa
     """
     match = re.match(r'https://github\.com/([^/]+)/([^/]+?)(\.git)?$', url)
     if match:
@@ -251,14 +253,16 @@ class CreateAppMixin:
         Verifica permissões e configura autenticação para repos privados.
         Para repos privados, usa HTTPS com token (x-access-token) para
         evitar problemas de chave SSH duplicada no GitHub.
-        Retorna a URL correta para usar.
+        Retorna a URL correta para usar ou deveria ;).
         """
         task.update_state(
             state='PROGRESS', meta={'current': 28, 'total': 100, 'status': 'Verificando permissões do GitHub...'}
         )
         logger.info('Verificando permissões do repositório GitHub...', category=LogCategory.GIT, progress=28)
 
-        repo_name = git_url.rsplit('.com/', maxsplit=1)[-1].replace('.git', '')  # type: ignore
+        repo_name = parse_github_repo_name(git_url)  # type: ignore
+        if not repo_name:
+            raise Exception(f'Nao foi possivel extrair owner/repo de: {git_url}')
 
         user_git_repos_list = gh_adapter.list_user_repos(user_id=user.id)  # type: ignore
         # Detecta erro de permissão ao acessar org
@@ -363,7 +367,9 @@ class CreateAppMixin:
         try:
             from github import Github  # noqa: PLC0415
 
-            repo_name = app.git.rsplit('.com/', maxsplit=1)[-1].replace('.git', '')
+            repo_name = parse_github_repo_name(app.git)
+            if not repo_name:
+                return None
             gh = Github(user.git_token)
             repo = gh.get_repo(repo_name)
             branch = repo.get_branch(app.branch)
@@ -373,14 +379,22 @@ class CreateAppMixin:
 
     @staticmethod
     def _setup_webhook(gh_adapter: GitHubAdapter, user: User, app: App, logger: AppLogManager):
-        """Configura webhook no GitHub para deploy automático."""
+        """Configura webhook no GitHub para deploy automático. ou tenta."""
         logger.info('Configurando webhook para deploy automático...', category=LogCategory.GIT, progress=86)
 
         # Extrai nome do repositório da URL
-        repo_name = app.git.rsplit('.com/', maxsplit=1)[-1].replace('.git', '')
+        repo_name = parse_github_repo_name(app.git)
+        if not repo_name:
+            logger.warning(f'Webhook nao configurado: URL GitHub invalida ({app.git})', category=LogCategory.GIT, progress=87)
+            return
 
         try:
             result = gh_adapter.create_webhook(repo_name=repo_name, app_id=app.id, user_id=user.id)
+            if result.get('status') == 'webhook atualizado':
+                logger.success('Webhook reparado e atualizado', category=LogCategory.GIT, progress=87)
+                return
+            if result.get('status') == 'webhook ja existe':
+                result['status'] = 'webhook jÃ¡ existe'
 
             if result.get('status') == 'webhook criado':
                 logger.success(
@@ -396,7 +410,7 @@ class CreateAppMixin:
                 )
 
         except Exception as e:
-            # Webhook é opcional, não deve falhar a criação do app
+            # Webhook é opcional, não deve falhar a criação do app. será?
             logger.warning(
                 f'Não foi possível configurar webhook automático: {str(e)}',
                 category=LogCategory.GIT,

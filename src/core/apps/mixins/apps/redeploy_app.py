@@ -6,6 +6,7 @@ from typing import cast
 from celery import Task, shared_task
 
 from core.adapters import DokkuAdapter, GitHubAdapter
+from core.adapters.git_utils import parse_github_repo_name
 from core.apps.models import App
 from core.apps.process_scale import reapply_saved_process_scales
 from core.auth_user.models import User
@@ -190,7 +191,7 @@ class RedeployAppMixin:
             # Decide a URL para git:sync.
             # Se o repo é privado, o create_app já salvou a URL SSH no app.git.
             # Se é público, a URL é HTTPS. Respeita o que foi definido na criação.
-            # Também verifica via GitHub API se temos token disponível.
+            # Também verifica via GitHub API se temos token disponível. Se eu esqueci de mim, foi pra conhecer nós...
             git_url = app.git
 
             if git_url.startswith('git@'):
@@ -207,7 +208,9 @@ class RedeployAppMixin:
                     try:
                         from github import Github  # noqa: PLC0415
 
-                        repo_name = git_url.rsplit('.com/', maxsplit=1)[-1].replace('.git', '')
+                        repo_name = parse_github_repo_name(git_url)
+                        if not repo_name:
+                            raise ValueError(f'URL GitHub invalida: {git_url}')
                         gh = Github(git_token)
                         repo = gh.get_repo(repo_name)
                         is_private = repo.private
@@ -305,13 +308,11 @@ class RedeployAppMixin:
 
     @staticmethod
     def _get_git_token(app: App) -> str | None:
-        """Obtém o git_token de um usuário do projeto que tenha acesso ao repo."""
+        """Obtém o git_token de um usuário do projeto que tenha acesso ao repo. help"""
         from github import Github, GithubException  # noqa: PLC0415
 
         users_with_token = app.project.users.exclude(git_token__isnull=True).exclude(git_token='')
-        repo_name = (
-            app.git.rsplit('.com/', maxsplit=1)[-1].replace('.git', '') if app.git and '.com/' in app.git else None
-        )
+        repo_name = parse_github_repo_name(app.git)
 
         for user in users_with_token:
             if not repo_name:

@@ -21,6 +21,7 @@ from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
 from core.adapters import DokkuAdapter, GitHubAdapter
+from core.adapters.git_utils import get_github_hook_events, normalize_webhook_url, parse_github_repo_name
 from core.apps.interactive_crypto import decrypt_interactive_text
 from core.apps.interactive_runner import has_live_interactive_runner
 from core.apps.mixins import AppMixin, ServiceMixin
@@ -105,14 +106,8 @@ def _display_user(user) -> str:
 
 
 def _parse_github_repo_name(git_url: str | None) -> str | None:
-    """Extrai owner/repo de URLs HTTPS ou SSH do GitHub."""
-    import re
-
-    git_url = git_url or ''
-    match_https = re.match(r'https://github\.com/([^/]+/[^/]+?)(?:\.git)?$', git_url)
-    match_ssh = re.match(r'git@github\.com:([^/]+/[^/]+?)(?:\.git)?$', git_url)
-    match = match_https or match_ssh
-    return match.group(1) if match else None
+    """Extrai owner/repo de URLs GitHub aceitas pelo Fabroku."""
+    return parse_github_repo_name(git_url)
 
 
 def _safe_json_filename(filename: str | None, *, default: str = 'dump.json') -> str:
@@ -1198,7 +1193,9 @@ class AppViewSet(ModelViewSet):
             )
 
             status_value = result.get('status', 'unknown')
-            if status_value == 'webhook criado' or (status_value.startswith('webhook') and 'existe' in status_value):
+            if status_value in {'webhook criado', 'webhook atualizado'} or (
+                status_value.startswith('webhook') and 'existe' in status_value
+            ):
                 return Response({
                     'status': status_value,
                     'webhook_url': webhook_url,
@@ -1299,20 +1296,55 @@ class AppViewSet(ModelViewSet):
                     require_hook_access=True,
                 )
                 expected_url = f'{settings.BACKEND_URL}/api/webhooks/github/{app.id}/'
+                normalized_expected_url = normalize_webhook_url(expected_url)
                 if project_user_with_hook_access and repo_with_hook_access:
                     hooks = list(repo_with_hook_access.get_hooks())
-                    matching = [h for h in hooks if h.config.get('url') == expected_url]
-                    all_hooks = [{'id': h.id, 'url': h.config.get('url'), 'active': h.active} for h in hooks]
+                    matching = [
+                        h for h in hooks if normalize_webhook_url(h.config.get('url')) == normalized_expected_url
+                    ]
+                    all_hooks = [
+                        {
+                            'id': h.id,
+                            'url': h.config.get('url'),
+                            'active': h.active,
+                            'events': get_github_hook_events(h),
+                            'content_type': h.config.get('content_type'),
+                        }
+                        for h in hooks
+                    ]
+                    matching_details = [
+                        {
+                            'id': h.id,
+                            'active': h.active,
+                            'events': get_github_hook_events(h),
+                            'content_type': h.config.get('content_type'),
+                        }
+                        for h in matching
+                    ]
+                    usable_matching = [
+                        item for item in matching_details
+                        if item['active'] and 'push' in item['events'] and item['content_type'] == 'json'
+                    ]
+                    has_incomplete_matching = bool(matching_details) and not bool(usable_matching)
 
                     diag['checks']['webhook_exists'] = {
-                        'ok': len(matching) > 0,
+                        'ok': len(usable_matching) > 0,
                         'matching_hooks': len(matching),
+                        'usable_hooks': len(usable_matching),
+                        'matching_details': matching_details,
                         'all_hooks': all_hooks,
                         'expected_url': expected_url,
                         'checked_as': _display_user(project_user_with_hook_access),
-                        'message': f'{len(matching)} webhook(s) encontrado(s) apontando para o Fabroku.'
-                        if matching
-                        else f'Nenhum webhook aponta para {expected_url}. Use setup_webhook para criar.',
+                        'message': (
+                            f'{len(usable_matching)} webhook(s) ativo(s), JSON e com evento push apontando para o Fabroku.'
+                            if usable_matching
+                            else (
+                                'Webhook encontrado, mas precisa ser reparado: ele deve estar ativo, usar JSON e escutar push. '
+                                'Use setup_webhook para atualizar.'
+                                if has_incomplete_matching
+                                else f'Nenhum webhook aponta para {expected_url}. Use setup_webhook para criar.'
+                            )
+                        ),
                     }
                 else:
                     diag['checks']['webhook_exists'] = {
@@ -1362,7 +1394,7 @@ class AppViewSet(ModelViewSet):
             return Response({'error': 'git_token ausente'}, status=status.HTTP_400_BAD_REQUEST)
 
         git_url = app.git or ''
-        repo_name = git_url.rsplit('.com/', maxsplit=1)[-1].replace('.git', '') if '.com/' in git_url else None
+        repo_name = _parse_github_repo_name(git_url)
 
         if not repo_name:
             return Response(
@@ -1462,7 +1494,7 @@ class AppViewSet(ModelViewSet):
         try:
             from github import Github  # noqa: PLC0415
 
-            repo_name = app.git.rsplit('.com/', maxsplit=1)[-1].replace('.git', '') if '.com/' in app.git else None
+            repo_name = _parse_github_repo_name(app.git)
             if not repo_name:
                 payload = {'sha': app.last_commit_sha[:7], 'error': 'Não foi possível extrair repo da URL.'}
                 if cache_ttl:
