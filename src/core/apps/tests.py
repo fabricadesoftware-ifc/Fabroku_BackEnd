@@ -1,3 +1,4 @@
+import json
 import socket
 from datetime import timedelta
 from unittest.mock import ANY, Mock, patch
@@ -77,18 +78,29 @@ class FakeBranch:
 
 
 class FakeHook:
-    def __init__(self, hook_id, url, active=True):
+    def __init__(self, hook_id, url, active=True, events=None, content_type='json'):
         self.id = hook_id
         self.active = active
-        self.config = {'url': url}
+        self.events = events if events is not None else ['push']
+        self.config = {'url': url, 'content_type': content_type}
+        self.raw_data = {'events': self.events}
+        self.edited = False
+
+    def edit(self, name, config, events, active):
+        self.name = name
+        self.config = config
+        self.events = events
+        self.active = active
+        self.edited = True
 
 
 class FakeRepo:
-    def __init__(self, expected_url):
+    def __init__(self, expected_url, hooks=None):
         self.expected_url = expected_url
+        self.hooks = hooks
 
     def get_hooks(self):
-        return [FakeHook(77, self.expected_url)]
+        return self.hooks if self.hooks is not None else [FakeHook(77, self.expected_url)]
 
     def get_branch(self, branch_name):
         return FakeBranch()
@@ -2325,7 +2337,7 @@ class StorageUsageTests(APITestCase):
         self.assertEqual(len(refreshed_response.data['services']), 2)
 
 
-@override_settings(BACKEND_URL='https://backend.example.com')
+@override_settings(BACKEND_URL='https://backend.example.com', GITHUB_WEBHOOK_SECRET=None)
 class WebhookSetupTests(APITestCase):
     def setUp(self):
         self.client = APIClient()
@@ -2395,6 +2407,20 @@ class WebhookSetupTests(APITestCase):
         self.assertEqual(response.data['attempts'][0]['user'], 'Requester')
         self.assertEqual(response.data['attempts'][1]['user'], 'Owner')
 
+    @patch('core.apps.views.GitHubAdapter.create_webhook')
+    def test_setup_webhook_accepts_repaired_existing_hook(self, mock_create_webhook):
+        mock_create_webhook.return_value = {
+            'status': 'webhook atualizado',
+            'hook_id': 123,
+            'url': f'https://backend.example.com/api/webhooks/github/{self.app.id}/',
+        }
+
+        response = self.client.post(f'/api/apps/apps/{self.app.id}/setup_webhook/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['status'], 'webhook atualizado')
+        self.assertEqual(response.data['hook_id'], 123)
+
     @patch('core.apps.views._find_project_user_for_github_repo')
     def test_diagnose_webhook_reports_project_user_that_can_read_hooks(self, mock_find_project_user_for_github_repo):
         expected_url = f'https://backend.example.com/api/webhooks/github/{self.app.id}/'
@@ -2411,3 +2437,66 @@ class WebhookSetupTests(APITestCase):
         self.assertEqual(response.data['checks']['project_git_token']['user'], 'Owner')
         self.assertTrue(response.data['checks']['webhook_exists']['ok'])
         self.assertEqual(response.data['checks']['webhook_exists']['checked_as'], 'Owner')
+
+    @patch('core.apps.views._find_project_user_for_github_repo')
+    def test_diagnose_webhook_reports_incomplete_hook_as_not_ok(self, mock_find_project_user_for_github_repo):
+        expected_url = f'https://backend.example.com/api/webhooks/github/{self.app.id}/'
+        fake_repo = FakeRepo(
+            expected_url,
+            hooks=[FakeHook(77, expected_url.rstrip('/'), active=False, events=['issues'], content_type='form')],
+        )
+        mock_find_project_user_for_github_repo.side_effect = [
+            (self.project_user, fake_repo, []),
+            (self.project_user, fake_repo, []),
+        ]
+
+        response = self.client.get(f'/api/apps/apps/{self.app.id}/diagnose_webhook/')
+
+        self.assertEqual(response.status_code, 200)
+        webhook_check = response.data['checks']['webhook_exists']
+        self.assertFalse(webhook_check['ok'])
+        self.assertEqual(webhook_check['matching_hooks'], 1)
+        self.assertEqual(webhook_check['usable_hooks'], 0)
+        self.assertIn('precisa ser reparado', webhook_check['message'])
+
+    @patch('core.adapters.utils.git_webhook._get_git_token_for_app', return_value=None)
+    @patch('core.adapters.utils.git_webhook.AppMixin.redeploy_app.delay')
+    def test_github_webhook_accepts_branch_names_with_slashes(self, mock_redeploy, mock_get_git_token):
+        mock_redeploy.return_value = Mock(id='task-webhook-123')
+        self.app.branch = 'feature/auto-deploy'
+        self.app.save(update_fields=['branch'])
+
+        response = self.client.post(
+            f'/api/webhooks/github/{self.app.id}/',
+            data=json.dumps({
+                'ref': 'refs/heads/feature/auto-deploy',
+                'after': 'abc123def4567890',
+                'pusher': {'name': 'student'},
+            }),
+            content_type='application/json',
+            HTTP_X_GITHUB_EVENT='push',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['status'], 'deploy_started')
+        mock_redeploy.assert_called_once_with(app_id=self.app.id, commit='abc123def4567890')
+
+    @patch('core.adapters.git_mixins.repo.Github')
+    def test_create_webhook_repairs_incomplete_existing_hook(self, mock_github_cls):
+        from core.adapters import GitHubAdapter
+
+        expected_url = f'https://backend.example.com/api/webhooks/github/{self.app.id}/'
+        hook = FakeHook(99, expected_url, active=False, events=['issues'], content_type='form')
+        mock_github_cls.return_value.get_repo.return_value = FakeRepo(expected_url, hooks=[hook])
+
+        result = GitHubAdapter().create_webhook(
+            repo_name='org/repo',
+            app_id=self.app.id,
+            user_id=self.request_user.id,
+        )
+
+        self.assertEqual(result['status'], 'webhook atualizado')
+        self.assertTrue(hook.edited)
+        self.assertTrue(hook.active)
+        self.assertEqual(hook.events, ['push'])
+        self.assertEqual(hook.config['content_type'], 'json')

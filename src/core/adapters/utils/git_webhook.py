@@ -10,6 +10,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 
 from core.adapters import GitHubAdapter
+from core.adapters.git_utils import parse_github_branch_from_ref, parse_github_repo_name
 from core.apps.mixins import AppMixin
 from core.apps.models import App
 
@@ -21,7 +22,7 @@ def _get_git_token_for_app(app: App) -> str | None:
     from github import Github, GithubException  # noqa: PLC0415
 
     users_with_token = app.project.users.exclude(git_token__isnull=True).exclude(git_token='')
-    repo_name = app.git.rsplit('.com/', maxsplit=1)[-1].replace('.git', '') if app.git and '.com/' in app.git else None
+    repo_name = parse_github_repo_name(app.git)
 
     for user in users_with_token:
         if not repo_name:
@@ -96,7 +97,7 @@ def github_webhook(request, app_id: int):
 
     # Verifica se é a branch correta
     ref = payload.get('ref', '')
-    branch = ref.split('/')[-1] if ref else None
+    branch = parse_github_branch_from_ref(ref)
 
     if branch != app.branch:
         return JsonResponse({

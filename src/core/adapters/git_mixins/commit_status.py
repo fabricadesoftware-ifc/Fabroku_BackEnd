@@ -8,25 +8,18 @@ diretamente nos commits do GitHub.
 """
 
 import logging
-import re
 
 from django.conf import settings
 from github import Github, GithubException
+
+from core.adapters.git_utils import parse_github_repo_name
 
 logger = logging.getLogger(__name__)
 
 
 def _parse_repo_name(git_url: str) -> str | None:
     """Extrai 'owner/repo' de uma URL do GitHub (HTTPS ou SSH)."""
-    # HTTPS: https://github.com/owner/repo.git
-    match = re.match(r'https://github\.com/([^/]+/[^/]+?)(?:\.git)?$', git_url)
-    if match:
-        return match.group(1)
-    # SSH: git@github.com:owner/repo.git
-    match = re.match(r'git@github\.com:([^/]+/[^/]+?)(?:\.git)?$', git_url)
-    if match:
-        return match.group(1)
-    return None
+    return parse_github_repo_name(git_url)
 
 
 class CommitStatusMixin:
