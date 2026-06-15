@@ -25,8 +25,10 @@ class ProjectViewSet(ModelViewSet):
     def get_queryset(self):
         """Superusers veem todos os projetos, usuarios normais so os seus."""
         user_queryset = User.objects.only('id', 'name', 'email', 'avatar_url')
-        queryset = Project.objects.only('id', 'name', 'created_at', 'updated_at').prefetch_related(
-            Prefetch('users', queryset=user_queryset)
+        queryset = (
+            Project.objects.only('id', 'name', 'created_at', 'updated_at')
+            .prefetch_related(Prefetch('users', queryset=user_queryset))
+            .order_by('-created_at', '-id')
         )
 
         if _has_global_access(self.request.user):
