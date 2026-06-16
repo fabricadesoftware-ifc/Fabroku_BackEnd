@@ -101,6 +101,12 @@ class RedeployAppMixin:
                 'Commit status indisponível: nenhum usuário do projeto tem token GitHub',
                 category=LogCategory.DEPLOY,
             )
+            logger.warning(
+                'Repositorios privados precisam de um token GitHub valido. Reautorize o GitHub '
+                'ou garanta que um membro do projeto tenha acesso ao repo.',
+                category=LogCategory.GIT,
+                progress=9,
+            )
         if not commit:
             py_logger.warning('Commit status ignorado para app %s: SHA do commit não fornecido', app.name)
         if commit and git_token:
@@ -232,6 +238,11 @@ class RedeployAppMixin:
                         progress=10,
                     )
                 else:
+                    logger.warning(
+                        'Usando URL HTTPS sem credencial. Se o repositorio for privado, o clone vai falhar.',
+                        category=LogCategory.GIT,
+                        progress=10,
+                    )
                     logger.info(
                         'Usando URL HTTPS (repositório público)',
                         category=LogCategory.GIT,

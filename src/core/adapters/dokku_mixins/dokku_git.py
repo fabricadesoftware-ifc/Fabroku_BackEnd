@@ -1,6 +1,20 @@
 from abc import abstractmethod
 from collections.abc import Callable, Generator
 
+GIT_SYNC_FAILURE_MARKERS = (
+    '[error]',
+    '[ssh error]',
+    'app build failed',
+    'authentication failed',
+    'could not read from remote repository',
+    'could not read username',
+    'fatal:',
+    'not found',
+    'permission denied',
+    'repository not found',
+    'terminal prompts disabled',
+)
+
 
 class DokkuGitMixin:
     """Mixin que fornece métodos para integração Git com Dokku."""
@@ -64,13 +78,7 @@ class DokkuGitMixin:
         output = '\n'.join(lines)
 
         output_lower = output.lower()
-        if (
-            '[error]' in output_lower
-            or '[ssh error]' in output_lower
-            or 'app build failed' in output_lower
-            or 'could not read from remote repository' in output_lower
-            or 'permission denied' in output_lower
-        ):
+        if any(marker in output_lower for marker in GIT_SYNC_FAILURE_MARKERS):
             return 'Failed to sync Git repository and deploy.'
 
         return output
