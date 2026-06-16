@@ -14,6 +14,7 @@ from rest_framework.test import APIClient, APITestCase
 
 from core.adapters.dokku_mixins.dokku_apps import DokkuAppsMixin
 from core.adapters.dokku_mixins.dokku_config import DokkuConfigMixin
+from core.adapters.git_utils import build_github_auth_url, mask_git_credentials, parse_github_repo_name
 from core.adapters.ssh import SSHAdapter
 from core.apps.interactive_crypto import decrypt_interactive_text
 from core.apps.interactive_runner import claim_pending_interactive_sessions, has_live_interactive_runner
@@ -136,6 +137,7 @@ class FakeRedeployDokkuAdapter:
         self.start_database_output = start_database_output
         self.set_config_calls = []
         self.start_database_calls = []
+        self.sync_git_calls = []
 
     def start_database(self, db_name: str) -> str:
         self.start_database_calls.append(db_name)
@@ -152,6 +154,7 @@ class FakeRedeployDokkuAdapter:
         return self.set_config_output
 
     def sync_git_streaming(self, **kwargs):
+        self.sync_git_calls.append(kwargs)
         return 'Sync complete'
 
     def get_app_domain(self, app_name: str) -> str:
@@ -159,6 +162,24 @@ class FakeRedeployDokkuAdapter:
 
     def enable_letsencrypt(self, app_name: str) -> str:
         return 'OK'
+
+
+class GitUrlUtilsTests(SimpleTestCase):
+    def test_parse_and_mask_authenticated_github_url(self):
+        git_url = 'https://x-access-token:secret-token@github.com/org/private-repo.git'
+
+        assert parse_github_repo_name(git_url) == 'org/private-repo'
+        assert mask_git_credentials(git_url) == 'https://***@github.com/org/private-repo.git'
+        assert (
+            mask_git_credentials(f'Cloning from {git_url}')
+            == 'Cloning from https://***@github.com/org/private-repo.git'
+        )
+
+    def test_build_github_auth_url_normalizes_https_url(self):
+        assert (
+            build_github_auth_url('https://github.com/org/private-repo', 'secret-token')
+            == 'https://x-access-token:secret-token@github.com/org/private-repo.git'
+        )
 
 
 class CacheVersioningTests(SimpleTestCase):
@@ -1105,6 +1126,51 @@ class EnvVarFlowTests(TestCase):
         self.assertIn('dokku postgres:start db-redeploy-teste', commands)
         self.assertIn('dokku apps:list', commands)
         self.assertIn('dokku config:set --no-restart app-redeploy-teste [vars: SECRET_KEY]', commands)
+
+    @patch('core.apps.mixins.apps.redeploy_app.AppLogManager')
+    @patch('core.apps.mixins.apps.redeploy_app.DokkuAdapter')
+    @patch('github.Github')
+    def test_redeploy_uses_requested_user_token_for_github_sync(
+        self, mock_github_cls, mock_dokku_cls, mock_logger_cls,
+    ):
+        requester = User.objects.create_user(
+            email='requester-private@example.com',
+            password='senha123',
+            name='Requester Private',
+            git_token='token-requester-private',
+        )
+        project_user = User.objects.create_user(
+            email='member-private@example.com',
+            password='senha123',
+            name='Member Without Token',
+        )
+        project = Project.objects.create(name='Projeto Repo Privado')
+        project.users.add(project_user)
+        app = App.objects.create(
+            name='app-private-redeploy',
+            name_dokku='app-private-redeploy',
+            git='https://github.com/org/private-repo.git',
+            branch='main',
+            project=project,
+            domain='app.example.com',
+        )
+
+        mock_github_cls.return_value.get_repo.return_value = Mock()
+        fake_dokku = FakeRedeployDokkuAdapter()
+        mock_dokku_cls.return_value = fake_dokku
+        mock_logger_cls.return_value = Mock()
+        task = RedeployAppMixin.redeploy_app
+
+        with patch.object(task, 'update_state'):
+            task.request.id = 'task-private-redeploy'
+            result = task.run(app_id=app.id, commit=None, requested_by_id=requester.id)
+
+        assert result['status'] == 'success'
+        assert (
+            fake_dokku.sync_git_calls[0]['git_url']
+            == 'https://x-access-token:token-requester-private@github.com/org/private-repo.git'
+        )
+        mock_github_cls.assert_called_once_with('token-requester-private')
 
     @patch('core.apps.mixins.apps.redeploy_app.AppLogManager')
     @patch('core.apps.mixins.apps.redeploy_app.DokkuAdapter')
