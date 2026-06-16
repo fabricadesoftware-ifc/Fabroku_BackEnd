@@ -1,7 +1,54 @@
+import re
+
 from django.db import models
 from django.utils import timezone
 
 from core.apps.models import App
+
+SENSITIVE_LOG_KEYS = (
+    'API_KEY',
+    'BROKER_URL',
+    'DATABASE_URL',
+    'DSN',
+    'KEY',
+    'PASS',
+    'PASSWORD',
+    'PWD',
+    'RABBITMQ_URL',
+    'REDIS_URL',
+    'SECRET',
+    'TOKEN',
+)
+ENV_OUTPUT_PATTERN = re.compile(r'(?m)^(\s*[A-Za-z_][A-Za-z0-9_]*\s*:\s*)(.+)$')
+ENV_ASSIGNMENT_PATTERN = re.compile(r'(?m)(\b[A-Za-z_][A-Za-z0-9_]*=)([^\s]+)')
+
+
+def _is_sensitive_key(key: str) -> bool:
+    normalized = key.upper()
+    return any(marker in normalized for marker in SENSITIVE_LOG_KEYS)
+
+
+def redact_sensitive_log_message(message: str | None) -> str | None:
+    """Oculta valores sensiveis que aparecem em outputs de comandos."""
+    if message is None:
+        return None
+
+    def replace_output(match: re.Match) -> str:
+        prefix = match.group(1)
+        key = prefix.split(':', 1)[0].strip()
+        if _is_sensitive_key(key):
+            return f'{prefix}[oculto]'
+        return match.group(0)
+
+    def replace_assignment(match: re.Match) -> str:
+        prefix = match.group(1)
+        key = prefix[:-1]
+        if _is_sensitive_key(key):
+            return f'{prefix}[oculto]'
+        return match.group(0)
+
+    redacted = ENV_OUTPUT_PATTERN.sub(replace_output, message)
+    return ENV_ASSIGNMENT_PATTERN.sub(replace_assignment, redacted)
 
 
 class LogLevel(models.TextChoices):
@@ -89,6 +136,8 @@ class AppLogManager:
             message = '(sem saída)'
         elif not message.strip():
             message = '(saída vazia)'
+
+        message = redact_sensitive_log_message(message)
 
         return AppLog.objects.create(
             app=self.app,

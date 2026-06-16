@@ -12,8 +12,10 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient, APITestCase
 
+from config.asgi import application
 from core.adapters.dokku_mixins.dokku_apps import DokkuAppsMixin
 from core.adapters.dokku_mixins.dokku_config import DokkuConfigMixin
+from core.adapters.dokku_mixins.dokku_git import DokkuGitMixin
 from core.adapters.git_utils import build_github_auth_url, mask_git_credentials, parse_github_repo_name
 from core.adapters.ssh import SSHAdapter
 from core.apps.interactive_crypto import decrypt_interactive_text
@@ -52,9 +54,8 @@ from core.apps.models import (
 from core.apps.process_scale import parse_ps_scale_output, validate_process_quantities
 from core.auth_user.models import CLIToken, User
 from core.cache_versioning import APP_LAST_COMMIT_CACHE_NAMESPACE, get_cache_ttl
+from core.logs.models import redact_sensitive_log_message
 from core.project.models import Project
-
-from config.asgi import application
 
 
 class FakeStatus:
@@ -122,6 +123,20 @@ class FakeAppsAdapter(DokkuAppsMixin):
 
     def _run_command(self, command: str) -> str:
         return self.output
+
+
+class FakeGitAdapter(DokkuGitMixin):
+    def __init__(self, output_lines):
+        self.output_lines = output_lines
+
+    def _run_command(self, command: str) -> str:
+        return '\n'.join(self.output_lines)
+
+    def _run_command_streaming(self, command: str):
+        yield from self.output_lines
+
+    def exists_app(self, app_name: str) -> bool:
+        return True
 
 
 class FakeRedeployDokkuAdapter:
@@ -1000,6 +1015,41 @@ class DokkuConfigMixinTests(SimpleTestCase):
         adapter.set_config(app_name='my-app', env_vars={'DISPLAY_NAME': 'Meu App'}, no_restart=True)
 
         self.assertEqual(adapter.commands, ["config:set --no-restart my-app 'DISPLAY_NAME=Meu App'"])
+
+
+class DokkuGitMixinTests(SimpleTestCase):
+    def test_sync_git_streaming_treats_fatal_auth_prompt_as_failure(self):
+        adapter = FakeGitAdapter([
+            "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+        ])
+
+        output = adapter.sync_git_streaming(
+            app_name='my-app',
+            git_url='https://github.com/org/private-repo.git',
+            branch='main',
+        )
+
+        self.assertEqual(output, 'Failed to sync Git repository and deploy.')
+
+
+class LogRedactionTests(SimpleTestCase):
+    def test_redacts_sensitive_config_values_from_dokku_output(self):
+        message = '\n'.join([
+            '-----> Setting config vars',
+            'DEBUG: True',
+            'SECRET_KEY: abc123',
+            'DATABASE_URL: postgres://user:pass@host/db',
+            'TOKEN=value',
+        ])
+
+        redacted = redact_sensitive_log_message(message)
+
+        self.assertIn('DEBUG: True', redacted)
+        self.assertIn('SECRET_KEY: [oculto]', redacted)
+        self.assertIn('DATABASE_URL: [oculto]', redacted)
+        self.assertIn('TOKEN=[oculto]', redacted)
+        self.assertNotIn('abc123', redacted)
+        self.assertNotIn('postgres://user:pass@host/db', redacted)
 
 
 class DokkuAppsMixinTests(SimpleTestCase):
