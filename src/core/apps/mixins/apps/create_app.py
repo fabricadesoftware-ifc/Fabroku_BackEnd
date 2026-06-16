@@ -4,7 +4,7 @@ from typing import cast
 from celery import Task, shared_task
 
 from core.adapters import DokkuAdapter, GitHubAdapter
-from core.adapters.git_utils import parse_github_repo_name
+from core.adapters.git_utils import build_github_auth_url, mask_git_credentials, parse_github_repo_name
 from core.apps.models import App
 from core.apps.process_scale import reapply_saved_process_scales
 from core.apps.utils import slugify_dokku
@@ -24,15 +24,14 @@ def https_to_ssh_url(url: str) -> str:
         return f'git@github.com:{owner}/{repo}.git'
     return url
 
+
 def https_to_auth_url(url: str, token: str) -> str:
     """
     Adiciona token de autenticação na URL HTTPS do GitHub.
     https://github.com/user/repo.git -> https://x-access-token:{token}@github.com/user/repo.git
     """
-    match = re.match(r'https://github\.com/(.+)', url)
-    if match:
-        return f'https://x-access-token:{token}@github.com/{match.group(1)}'
-    return url
+    return build_github_auth_url(url, token)
+
 
 class CreateAppMixin:
     """
@@ -334,13 +333,14 @@ class CreateAppMixin:
             """Callback chamado para cada linha de log do git:sync."""
             if not line.strip():
                 return
+            safe_line = mask_git_credentials(line)
 
             line_count[0] += 1
             # Progresso incremental entre 50% e 85%
             # Aumenta 0.5% a cada linha, até o máximo
             progress = min(base_progress + (line_count[0] * 0.5), max_progress - 1)
 
-            logger.dokku(line, category=LogCategory.GIT, progress=int(progress))
+            logger.dokku(safe_line, category=LogCategory.GIT, progress=int(progress))
 
         output = adapter.sync_git_streaming(
             app_name=dokku_app_name,
@@ -349,14 +349,16 @@ class CreateAppMixin:
             on_line=on_log_line,
         )
 
+        safe_output = mask_git_credentials(output)
+
         if 'Failed' in output or 'failed' in output.lower():
-            logger.error(f'Erro no git:sync: {output}', category=LogCategory.GIT, progress=85)
-            raise RuntimeError(f'Falha ao sincronizar repositório: {output}')
+            logger.error(f'Erro no git:sync: {safe_output}', category=LogCategory.GIT, progress=85)
+            raise RuntimeError(f'Falha ao sincronizar repositorio: {safe_output}')
 
         # Log final
         logger.dokku(
             f'✅ Sync concluído ({line_count[0]} linhas processadas)',
-            command=f'dokku git:sync {dokku_app_name} {git_url} {branch}',
+            command=f'dokku git:sync {dokku_app_name} {mask_git_credentials(git_url)} {branch}',
             category=LogCategory.GIT,
             progress=85,
         )

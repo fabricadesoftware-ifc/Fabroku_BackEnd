@@ -6,7 +6,7 @@ from typing import cast
 from celery import Task, shared_task
 
 from core.adapters import DokkuAdapter, GitHubAdapter
-from core.adapters.git_utils import parse_github_repo_name
+from core.adapters.git_utils import build_github_auth_url, mask_git_credentials, parse_github_repo_name
 from core.apps.models import App
 from core.apps.process_scale import reapply_saved_process_scales
 from core.auth_user.models import User
@@ -26,15 +26,13 @@ def https_to_ssh_url(url: str) -> str:
         return f'git@github.com:{owner}/{repo}.git'
     return url
 
+
 def https_to_auth_url(url: str, token: str) -> str:
     """
     Adiciona token de autenticação na URL HTTPS do GitHub.
     https://github.com/user/repo.git -> https://x-access-token:{token}@github.com/user/repo.git
     """
-    match = re.match(r'https://github\.com/(.+)', url)
-    if match:
-        return f'https://x-access-token:{token}@github.com/{match.group(1)}'
-    return url
+    return build_github_auth_url(url, token)
 
 
 def _dokku_output_failed(output: str) -> bool:
@@ -59,7 +57,7 @@ class RedeployAppMixin:
     """Mixin para redeploy de aplicações via webhook."""
 
     @shared_task(bind=True)
-    def redeploy_app(self, app_id: int, commit: str | None = None) -> dict:
+    def redeploy_app(self, app_id: int, commit: str | None = None, requested_by_id: int | None = None) -> dict:
         """
         Faz redeploy de uma aplicação existente.
         Chamado pelo webhook do GitHub quando há push na branch configurada.
@@ -92,7 +90,8 @@ class RedeployAppMixin:
 
         # --- GitHub Commit Status ---
         github_adapter = GitHubAdapter()
-        git_token = RedeployAppMixin._get_git_token(app)
+        requested_by = RedeployAppMixin._get_requested_by(requested_by_id)
+        git_token = RedeployAppMixin._get_git_token(app, preferred_user=requested_by)
         if not git_token:
             py_logger.warning(
                 'Commit status ignorado para app %s: nenhum usuário do projeto tem git_token',
@@ -179,13 +178,14 @@ class RedeployAppMixin:
             def on_log_line(line: str):
                 if not line.strip():
                     return
+                safe_line = mask_git_credentials(line)
                 line_count[0] += 1
                 progress = min(base_progress + (line_count[0] * 0.5), max_progress - 1)
                 progress = int(progress)
-                logger.dokku(line, category=LogCategory.GIT, progress=progress)
+                logger.dokku(safe_line, category=LogCategory.GIT, progress=progress)
                 task.update_state(
                     state='PROGRESS',
-                    meta={'current': progress, 'total': 100, 'status': line.strip()[:120]},
+                    meta={'current': progress, 'total': 100, 'status': safe_line.strip()[:120]},
                 )
 
             # Decide a URL para git:sync.
@@ -198,6 +198,13 @@ class RedeployAppMixin:
                 # Já é SSH (repo privado legado)
                 logger.info(
                     'Usando URL SSH (repositório privado)',
+                    category=LogCategory.GIT,
+                    progress=10,
+                )
+            elif git_token and parse_github_repo_name(git_url):
+                git_url = https_to_auth_url(git_url, git_token)
+                logger.info(
+                    'Usando HTTPS autenticado para sincronizar o repositorio GitHub',
                     category=LogCategory.GIT,
                     progress=10,
                 )
@@ -237,14 +244,15 @@ class RedeployAppMixin:
                 branch=app.branch,
                 on_line=on_log_line,
             )
+            safe_output = mask_git_credentials(output)
 
             if 'Failed' in output or 'failed' in output.lower():
-                logger.error(f'Erro no redeploy: {output}', category=LogCategory.DEPLOY, progress=90)
+                logger.error(f'Erro no redeploy: {safe_output}', category=LogCategory.DEPLOY, progress=90)
                 app.status = 'ERROR'
                 app.save(update_fields=['status'])
                 if commit and git_token:
                     github_adapter.set_deploy_failure(git_token, app.git, commit, app.name, 'Build falhou')
-                return {'status': 'error', 'message': output}
+                return {'status': 'error', 'message': safe_output}
 
             # Sucesso
             app.status = 'RUNNING'
@@ -307,14 +315,35 @@ class RedeployAppMixin:
             raise
 
     @staticmethod
-    def _get_git_token(app: App) -> str | None:
+    def _get_requested_by(user_id: int | None) -> User | None:
+        """Busca o usuario que iniciou o redeploy manual, quando existir."""
+        if not user_id:
+            return None
+        return User.objects.filter(id=user_id).first()
+
+    @staticmethod
+    def _iter_users_with_git_token(app: App, preferred_user: User | None = None):
+        """Itera usuarios com token, priorizando quem solicitou o redeploy manual."""
+        yielded_ids = set()
+
+        if preferred_user and preferred_user.git_token:
+            yielded_ids.add(preferred_user.id)
+            yield preferred_user
+
+        users_with_token = app.project.users.exclude(git_token__isnull=True).exclude(git_token='')
+        if yielded_ids:
+            users_with_token = users_with_token.exclude(id__in=yielded_ids)
+
+        yield from users_with_token
+
+    @staticmethod
+    def _get_git_token(app: App, preferred_user: User | None = None) -> str | None:
         """Obtém o git_token de um usuário do projeto que tenha acesso ao repo. help"""
         from github import Github, GithubException  # noqa: PLC0415
 
-        users_with_token = app.project.users.exclude(git_token__isnull=True).exclude(git_token='')
         repo_name = parse_github_repo_name(app.git)
 
-        for user in users_with_token:
+        for user in RedeployAppMixin._iter_users_with_git_token(app, preferred_user=preferred_user):
             if not repo_name:
                 # Sem repo pra testar, retorna o primeiro token disponível
                 return user.git_token

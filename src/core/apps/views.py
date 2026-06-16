@@ -673,7 +673,11 @@ class AppViewSet(ModelViewSet):
         app.save(update_fields=['status'])
 
         commit = request.data.get('commit')
-        task_result = AppMixin.redeploy_app.delay(app_id=app.id, commit=commit)  # type: ignore
+        task_result = AppMixin.redeploy_app.delay(  # type: ignore
+            app_id=app.id,
+            commit=commit,
+            requested_by_id=request.user.id,
+        )
 
         return Response(
             {
