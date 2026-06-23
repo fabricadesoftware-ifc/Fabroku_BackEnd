@@ -2,20 +2,34 @@ import io
 import os
 import socket
 from collections.abc import Generator
+from typing import Callable
 
 import paramiko
+
+from core.logs.ssh_audit import begin_ssh_audit, finish_ssh_audit
 
 
 class SSHAdapter:
     """Adapter para executar comandos via SSH."""
 
-    def __init__(self, host, username, ssh_key_path, port, *, connect_timeout=30, command_timeout=120):
+    def __init__(  # noqa: PLR0913
+        self,
+        host,
+        username,
+        ssh_key_path,
+        port,
+        *,
+        connect_timeout=30,
+        command_timeout=120,
+        audit_context=None,
+    ):
         self.host = host
         self.username = username
         self.ssh_key_path = ssh_key_path
         self.port = port
         self.connect_timeout = connect_timeout
         self.command_timeout = command_timeout
+        self.audit_context = audit_context or {}
         self._temp_key_file = None
 
     @staticmethod
@@ -51,6 +65,7 @@ class SSHAdapter:
         raise ValueError('Não foi possível carregar a chave SSH. Formato não suportado.')
 
     def _run_command(self, command: str) -> str:
+        audit = begin_ssh_audit(command, self.audit_context)
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
@@ -72,17 +87,31 @@ class SSHAdapter:
             exit_status = stdout.channel.recv_exit_status()
             if exit_status != 0:
                 detail = error_output.strip() or output.strip() or '(sem detalhes)'
+                finish_ssh_audit(
+                    audit,
+                    status='failed',
+                    exit_status=exit_status,
+                    error_summary=detail,
+                )
                 return f'Failed to execute command: {command}\n{detail}'
+            finish_ssh_audit(audit, status='success', exit_status=exit_status)
             return self._successful_command_output(output, error_output)
         except socket.timeout:
+            finish_ssh_audit(
+                audit,
+                status='timeout',
+                error_summary=f'Timeout after {self.command_timeout}s',
+            )
             return f'SSH Command Timeout after {self.command_timeout}s while executing: {command}'
         except Exception as e:
+            finish_ssh_audit(audit, status='error', error_summary=str(e))
             return f'SSH Connection Error: {e}'
         finally:
             client.close()
 
     def _run_command_with_stdin(self, command: str, stdin_data: str) -> str:
         """Executa um comando via SSH enviando dados no stdin."""
+        audit = begin_ssh_audit(command, self.audit_context)
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
@@ -96,9 +125,17 @@ class SSHAdapter:
             exit_status = stdout.channel.recv_exit_status()
             if exit_status != 0:
                 detail = error_output.strip() or output.strip() or '(sem detalhes)'
+                finish_ssh_audit(
+                    audit,
+                    status='failed',
+                    exit_status=exit_status,
+                    error_summary=detail,
+                )
                 return f'Failed to execute command: {command}\n{detail}'
+            finish_ssh_audit(audit, status='success', exit_status=exit_status)
             return self._successful_command_output(output, error_output)
         except Exception as e:
+            finish_ssh_audit(audit, status='error', error_summary=str(e))
             return f'SSH Connection Error: {e}'
         finally:
             client.close()
@@ -112,6 +149,7 @@ class SSHAdapter:
             for line in adapter._run_command_streaming('git:sync ...'):
                 print(line)
         """
+        audit = begin_ssh_audit(command, self.audit_context)
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         exit_status = -1
@@ -129,10 +167,91 @@ class SSHAdapter:
             if exit_status != 0:
                 for line in stderr:
                     yield f'[ERROR] {line.rstrip()}'
+                finish_ssh_audit(audit, status='failed', exit_status=exit_status)
+            else:
+                finish_ssh_audit(audit, status='success', exit_status=exit_status)
 
         except Exception as e:
+            finish_ssh_audit(audit, status='error', error_summary=str(e))
             yield f'[SSH ERROR] {e}'
 
+        finally:
+            client.close()
+
+        return exit_status
+
+    def _run_command_streaming_controlled(  # noqa: PLR0912
+        self,
+        command: str,
+        *,
+        should_stop: Callable[[], bool],
+        get_pty: bool = True,
+    ) -> Generator[str, None, int]:
+        """Executa comando streaming permitindo encerrar quando `should_stop` retornar True."""
+        audit = begin_ssh_audit(command, self.audit_context)
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        exit_status = -1
+        text_buffer = ''
+        stopped_by_request = False
+
+        try:
+            pkey = self._get_pkey()
+            client.connect(
+                self.host,
+                port=self.port,
+                username=self.username,
+                pkey=pkey,
+                timeout=self.connect_timeout,
+                banner_timeout=self.connect_timeout,
+                auth_timeout=self.connect_timeout,
+            )
+            _stdin, stdout, stderr = client.exec_command(command, get_pty=get_pty)
+            channel = stdout.channel
+            channel.settimeout(1)
+
+            while not channel.exit_status_ready():
+                if should_stop():
+                    stopped_by_request = True
+                    channel.close()
+                    break
+
+                if channel.recv_ready():
+                    chunk = channel.recv(4096).decode('utf-8', errors='replace')
+                    text_buffer += chunk
+                    while '\n' in text_buffer:
+                        line, text_buffer = text_buffer.split('\n', 1)
+                        yield line.rstrip('\r')
+                    continue
+
+                if channel.recv_stderr_ready():
+                    chunk = channel.recv_stderr(4096).decode('utf-8', errors='replace')
+                    text_buffer += chunk
+                    while '\n' in text_buffer:
+                        line, text_buffer = text_buffer.split('\n', 1)
+                        yield f'[ERROR] {line.rstrip("\r")}'
+                    continue
+
+            if text_buffer.strip():
+                yield text_buffer.rstrip('\r\n')
+
+            if channel.exit_status_ready():
+                exit_status = channel.recv_exit_status()
+            if stopped_by_request:
+                finish_ssh_audit(audit, status='success', exit_status=exit_status)
+            elif exit_status == 0:
+                finish_ssh_audit(audit, status='success', exit_status=exit_status)
+            else:
+                error_output = stderr.read().decode('utf-8', errors='replace') if not stderr.channel.closed else ''
+                finish_ssh_audit(
+                    audit,
+                    status='failed',
+                    exit_status=exit_status,
+                    error_summary=error_output.strip(),
+                )
+        except Exception as e:
+            finish_ssh_audit(audit, status='error', error_summary=str(e))
+            yield f'[SSH ERROR] {e}'
         finally:
             client.close()
 

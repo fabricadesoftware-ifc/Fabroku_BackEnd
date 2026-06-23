@@ -1,4 +1,6 @@
+import shlex
 from abc import abstractmethod
+from collections.abc import Callable, Generator
 
 
 def _dokku_app_list_failed(output: str) -> bool:
@@ -76,3 +78,10 @@ class DokkuAppsMixin:
     def logs_app(self, app_name: str, num_lines: int = 200) -> str:
         """Retorna os logs recentes da aplicação em execução (stdout/stderr do container)."""
         return self._run_command(f'logs {app_name} -n {num_lines}')
+
+    def logs_app_tail(self, app_name: str, *, should_stop: Callable[[], bool]) -> Generator[str, None, int]:
+        """Retorna logs runtime em streaming ate `should_stop` solicitar parada."""
+        return self._run_command_streaming_controlled(
+            f'logs {shlex.quote(app_name)} --tail',
+            should_stop=should_stop,
+        )

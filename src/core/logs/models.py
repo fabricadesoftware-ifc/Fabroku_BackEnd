@@ -1,9 +1,11 @@
+import hashlib
 import re
 
+from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
-from core.apps.models import App
+from core.apps.models import App, Service
 
 SENSITIVE_LOG_KEYS = (
     'API_KEY',
@@ -106,6 +108,76 @@ class AppLog(models.Model):
 
     def __str__(self):
         return f'[{self.level}] {self.app.name}: {self.message[:50]}'
+
+
+class SSHCommandAuditStatus(models.TextChoices):
+    SUCCESS = 'success', 'Success'
+    FAILED = 'failed', 'Failed'
+    TIMEOUT = 'timeout', 'Timeout'
+    ERROR = 'error', 'Error'
+
+
+class SSHCommandAudit(models.Model):
+    """Registro resumido de comandos SSH executados pelo Fabroku."""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='ssh_command_audits',
+    )
+    app = models.ForeignKey(
+        App,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='ssh_command_audits',
+    )
+    service = models.ForeignKey(
+        Service,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='ssh_command_audits',
+    )
+    origin = models.CharField(max_length=128, blank=True, default='')
+    command_family = models.CharField(max_length=64, blank=True, default='', db_index=True)
+    sanitized_command = models.TextField()
+    command_hash = models.CharField(max_length=64, db_index=True)
+    status = models.CharField(
+        max_length=16,
+        choices=SSHCommandAuditStatus.choices,
+        default=SSHCommandAuditStatus.SUCCESS,
+        db_index=True,
+    )
+    exit_status = models.IntegerField(null=True, blank=True)
+    duration_ms = models.PositiveIntegerField(default=0)
+    task_id = models.CharField(max_length=255, null=True, blank=True, db_index=True)
+    request_path = models.CharField(max_length=512, blank=True, default='')
+    request_method = models.CharField(max_length=16, blank=True, default='')
+    error_summary = models.TextField(blank=True, default='')
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    @staticmethod
+    def hash_command(command: str) -> str:
+        return hashlib.sha256(command.encode('utf-8')).hexdigest()
+
+    def __str__(self):
+        return f'{self.command_family or "ssh"}:{self.status}:{self.created_at:%Y-%m-%d %H:%M:%S}'
+
+    class Meta:
+        db_table = 'ssh_command_audits'
+        verbose_name = 'SSH Command Audit'
+        verbose_name_plural = 'SSH Command Audits'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['created_at'], name='idx_ssh_audit_created'),
+            models.Index(fields=['origin', 'created_at'], name='idx_ssh_audit_origin'),
+            models.Index(fields=['app', 'created_at'], name='idx_ssh_audit_app'),
+            models.Index(fields=['user', 'created_at'], name='idx_ssh_audit_user'),
+        ]
 
 
 class AppLogManager:
