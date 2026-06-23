@@ -104,6 +104,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'core.logs.middleware.SSHCommandAuditContextMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -289,6 +290,11 @@ CHANNEL_LAYERS = {
 CLI_INTERACTIVE_MAX_SESSIONS = int(os.getenv('CLI_INTERACTIVE_MAX_SESSIONS', 20))
 CLI_INTERACTIVE_RUNNER_HEARTBEAT_SECONDS = int(os.getenv('CLI_INTERACTIVE_RUNNER_HEARTBEAT_SECONDS', 10))
 CLI_INTERACTIVE_ENABLE_CHANNEL_LAYER_EVENTS = _parse_bool_env('CLI_INTERACTIVE_ENABLE_CHANNEL_LAYER_EVENTS', False)
+LOG_STREAM_BUFFER_LINES = int(os.getenv('LOG_STREAM_BUFFER_LINES', '500'))
+LOG_STREAM_IDLE_SECONDS = int(os.getenv('LOG_STREAM_IDLE_SECONDS', '30'))
+LOG_STREAM_RUNNER_HEARTBEAT_SECONDS = int(os.getenv('LOG_STREAM_RUNNER_HEARTBEAT_SECONDS', '10'))
+SSH_AUDIT_ENABLED = _parse_bool_env('SSH_AUDIT_ENABLED', True)
+SSH_AUDIT_RETENTION_DAYS = int(os.getenv('SSH_AUDIT_RETENTION_DAYS', '7'))
 
 CELERY_TIMEZONE = 'America/Sao_Paulo'
 CELERY_TASK_TRACK_STARTED = True

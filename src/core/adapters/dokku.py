@@ -30,12 +30,14 @@ class DokkuAdapter(
 ):
     def __init__(
         self,
+        *,
+        audit_context=None,
     ):
         self.host = settings.DOKKU_SSH_HOST
         self.username = settings.DOKKU_SSH_USERNAME
         self.ssh_key_path = settings.DOKKU_SSH_KEY
         self.port = settings.DOKKU_SSH_PORT
-        super().__init__(self.host, self.username, self.ssh_key_path, self.port)
+        super().__init__(self.host, self.username, self.ssh_key_path, self.port, audit_context=audit_context)
 
     def _run_command(self, command: str) -> str:
         """Executa comando via SSH no servidor Dokku."""

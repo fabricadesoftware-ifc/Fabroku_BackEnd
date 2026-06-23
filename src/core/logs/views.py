@@ -1,11 +1,25 @@
+import json
+import time
+
+from django.http import StreamingHttpResponse
 from drf_spectacular.utils import extend_schema
 from rest_framework import viewsets
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from core.apps.models import App
 from core.adapters import DokkuAdapter
+from core.apps.models import App
+from core.logs.logstream import (
+    SSE_KEEPALIVE_SECONDS,
+    app_stream_subscription,
+    channel_name,
+    encode_event,
+    get_logstream_redis,
+    has_live_runner,
+    read_buffer,
+    touch_subscriber,
+)
+from core.logs.ssh_audit import ssh_audit_context
 
 from .models import AppLog
 from .serializers import AppLogSerializer
@@ -84,10 +98,86 @@ class AppLogViewSet(viewsets.ReadOnlyModelViewSet):
 
         num = min(int(request.query_params.get('num', 200)), 500)
         try:
-            dokku = DokkuAdapter()
-            output = dokku.logs_app(app.name_dokku, num_lines=num)
+            with ssh_audit_context(
+                origin='http.app_runtime',
+                user_id=getattr(request.user, 'id', None),
+                app_id=app.id,
+            ):
+                dokku = DokkuAdapter()
+                output = dokku.logs_app(app.name_dokku, num_lines=num)
             lines = [ln.strip() for ln in (output or '').split('\n') if ln.strip()]
         except Exception as e:
             return Response({'lines': [], 'error': str(e)}, status=500)
 
         return Response({'lines': lines})
+
+    @action(detail=False, methods=['get'], url_path='app-runtime-stream')
+    def app_runtime_stream(self, request):
+        """
+        Stream SSE dos logs runtime do app.
+        Query params: ?app={app_id}&tail={number}.
+        """
+        app_id = request.query_params.get('app')
+        if not app_id:
+            return Response({'error': 'ParÃ¢metro app Ã© obrigatÃ³rio'}, status=400)
+
+        try:
+            app = App.objects.select_related('project').get(id=app_id)
+        except App.DoesNotExist:
+            return Response({'error': 'App nÃ£o encontrado'}, status=404)
+
+        if not _has_global_access(request.user) and not app.project.users.filter(id=request.user.id).exists():
+            return Response({'error': 'Sem permissÃ£o'}, status=403)
+
+        if not app.name_dokku:
+            return Response({'error': 'App sem name_dokku'}, status=400)
+
+        redis_client = get_logstream_redis()
+        if not has_live_runner(redis_client):
+            return Response({'error': 'Logstream indisponÃ­vel'}, status=503)
+
+        try:
+            tail = min(max(int(request.query_params.get('tail', 200)), 1), 500)
+        except ValueError:
+            tail = 200
+
+        def event_stream():
+            with app_stream_subscription(app.id) as (redis_client, subscriber_id):
+                pubsub = redis_client.pubsub(ignore_subscribe_messages=True)
+                pubsub.subscribe(channel_name(app.id))
+                keepalive_at = time.monotonic()
+
+                buffer_events = read_buffer(redis_client, app.id)[-tail:]
+                yield encode_event(
+                    'snapshot',
+                    {
+                        'lines': [event.get('line', '') for event in buffer_events if event.get('line')],
+                        'count': len(buffer_events),
+                    },
+                )
+
+                try:
+                    while True:
+                        touch_subscriber(redis_client, app.id, subscriber_id)
+                        message = pubsub.get_message(timeout=1)
+                        if message and message.get('type') == 'message':
+                            try:
+                                decoded = json.loads(message.get('data') or '{}')
+                            except json.JSONDecodeError:
+                                continue
+                            event_name = decoded.get('event') or 'line'
+                            payload = decoded.get('payload') or {}
+                            yield encode_event(event_name, payload)
+                            keepalive_at = time.monotonic()
+                            continue
+
+                        if time.monotonic() - keepalive_at >= SSE_KEEPALIVE_SECONDS:
+                            keepalive_at = time.monotonic()
+                            yield encode_event('heartbeat', {'created_at': time.time()})
+                finally:
+                    pubsub.close()
+
+        response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
+        response['Cache-Control'] = 'no-cache'
+        response['X-Accel-Buffering'] = 'no'
+        return response
