@@ -1,6 +1,9 @@
+import asyncio
 import json
 import time
+import uuid
 
+from django.conf import settings
 from django.http import StreamingHttpResponse
 from drf_spectacular.utils import extend_schema
 from rest_framework import viewsets
@@ -12,13 +15,14 @@ from core.adapters import DokkuAdapter
 from core.apps.models import App
 from core.logs.logstream import (
     SSE_KEEPALIVE_SECONDS,
-    app_stream_subscription,
     channel_name,
     encode_event,
+    get_async_logstream_redis,
     get_logstream_redis,
     has_live_runner,
-    read_buffer,
-    touch_subscriber,
+    read_buffer_async,
+    remove_subscriber_async,
+    touch_subscriber_async,
 )
 from core.logs.ssh_audit import ssh_audit_context
 
@@ -139,6 +143,8 @@ class AppLogViewSet(viewsets.ReadOnlyModelViewSet):
         Query params: ?app={app_id}&tail={number}.
         """
         app_id = request.query_params.get('app')
+        if not settings.LOG_STREAM_SSE_ENABLED:
+            return Response({'error': 'Streaming SSE de logs desativado'}, status=503)
         if not app_id:
             return Response({'error': 'ParÃ¢metro app Ã© obrigatÃ³rio'}, status=400)
 
@@ -162,13 +168,17 @@ class AppLogViewSet(viewsets.ReadOnlyModelViewSet):
         except ValueError:
             tail = 200
 
-        def event_stream():
-            with app_stream_subscription(app.id) as (redis_client, subscriber_id):
+        async def event_stream():
+            redis_client = get_async_logstream_redis()
+            subscriber_id = str(uuid.uuid4())
+            pubsub = None
+            try:
+                await touch_subscriber_async(redis_client, app.id, subscriber_id)
                 pubsub = redis_client.pubsub(ignore_subscribe_messages=True)
-                pubsub.subscribe(channel_name(app.id))
+                await pubsub.subscribe(channel_name(app.id))
                 keepalive_at = time.monotonic()
 
-                buffer_events = read_buffer(redis_client, app.id)[-tail:]
+                buffer_events = (await read_buffer_async(redis_client, app.id))[-tail:]
                 yield encode_event(
                     'snapshot',
                     {
@@ -177,26 +187,31 @@ class AppLogViewSet(viewsets.ReadOnlyModelViewSet):
                     },
                 )
 
-                try:
-                    while True:
-                        touch_subscriber(redis_client, app.id, subscriber_id)
-                        message = pubsub.get_message(timeout=1)
-                        if message and message.get('type') == 'message':
-                            try:
-                                decoded = json.loads(message.get('data') or '{}')
-                            except json.JSONDecodeError:
-                                continue
-                            event_name = decoded.get('event') or 'line'
-                            payload = decoded.get('payload') or {}
-                            yield encode_event(event_name, payload)
-                            keepalive_at = time.monotonic()
+                while True:
+                    await touch_subscriber_async(redis_client, app.id, subscriber_id)
+                    message = await pubsub.get_message(timeout=1)
+                    if message and message.get('type') == 'message':
+                        try:
+                            decoded = json.loads(message.get('data') or '{}')
+                        except json.JSONDecodeError:
                             continue
+                        event_name = decoded.get('event') or 'line'
+                        payload = decoded.get('payload') or {}
+                        yield encode_event(event_name, payload)
+                        keepalive_at = time.monotonic()
+                        continue
 
-                        if time.monotonic() - keepalive_at >= SSE_KEEPALIVE_SECONDS:
-                            keepalive_at = time.monotonic()
-                            yield encode_event('heartbeat', {'created_at': time.time()})
-                finally:
-                    pubsub.close()
+                    if time.monotonic() - keepalive_at >= SSE_KEEPALIVE_SECONDS:
+                        keepalive_at = time.monotonic()
+                        yield encode_event('heartbeat', {'created_at': time.time()})
+                    await asyncio.sleep(0)
+            except asyncio.CancelledError:
+                raise
+            finally:
+                if pubsub is not None:
+                    await pubsub.aclose()
+                await remove_subscriber_async(redis_client, app.id, subscriber_id)
+                await redis_client.aclose()
 
         response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
         response['Cache-Control'] = 'no-cache'
