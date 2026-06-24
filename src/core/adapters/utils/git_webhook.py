@@ -10,7 +10,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 
 from core.adapters import GitHubAdapter
-from core.adapters.git_utils import parse_github_branch_from_ref, parse_github_repo_name
+from core.adapters.git_utils import parse_github_branch_from_ref
+from core.apps.github_integration import find_project_user_for_github_repo
 from core.apps.mixins import AppMixin
 from core.apps.models import App
 
@@ -18,27 +19,16 @@ logger = logging.getLogger(__name__)
 
 
 def _get_git_token_for_app(app: App) -> str | None:
-    """Obtém o git_token de um usuário do projeto que tenha acesso ao repo."""
-    from github import Github, GithubException  # noqa: PLC0415
+    access = find_project_user_for_github_repo(app)
+    if access.user and access.token:
+        logger.info(
+            'Token valido para repo %s via usuario %s',
+            access.repo_name,
+            access.user.username or access.user.id,
+        )
+        return access.token
 
-    users_with_token = app.project.users.exclude(git_token__isnull=True).exclude(git_token='')
-    repo_name = parse_github_repo_name(app.git)
-
-    for user in users_with_token:
-        if not repo_name:
-            return user.git_token
-        try:
-            gh = Github(user.git_token)
-            gh.get_repo(repo_name)
-            logger.info('Token válido para repo %s via usuário %s', repo_name, user.username or user.id)
-            return user.git_token
-        except GithubException:
-            logger.warning('Token do usuário %s não tem acesso ao repo %s', user.username or user.id, repo_name)
-            continue
-        except Exception:
-            continue
-
-    logger.warning('Nenhum token com acesso ao repo %s', repo_name)
+    logger.warning('Nenhum token com acesso ao repo %s. Tentativas: %s', access.repo_name, access.attempts)
     return None
 
 

@@ -18,6 +18,7 @@ from core.adapters.dokku_mixins.dokku_config import DokkuConfigMixin
 from core.adapters.dokku_mixins.dokku_git import DokkuGitMixin
 from core.adapters.git_utils import build_github_auth_url, mask_git_credentials, parse_github_repo_name
 from core.adapters.ssh import SSHAdapter
+from core.apps.github_integration import GitSyncPlan
 from core.apps.interactive_crypto import decrypt_interactive_text
 from core.apps.interactive_runner import claim_pending_interactive_sessions, has_live_interactive_runner
 from core.apps.mixins import AppMixin, ServiceMixin
@@ -1124,9 +1125,17 @@ class EnvVarFlowTests(TestCase):
 
     @patch('core.apps.mixins.apps.redeploy_app.AppLogManager')
     @patch('core.apps.mixins.apps.redeploy_app.DokkuAdapter')
-    @patch('core.apps.mixins.apps.redeploy_app.RedeployAppMixin._get_git_token', return_value=None)
+    @patch(
+        'core.apps.mixins.apps.redeploy_app.resolve_git_sync_plan',
+        return_value=GitSyncPlan(
+            ok=True,
+            git_url='https://github.com/org/repo.git',
+            strategy='github_public',
+            message='Repositorio GitHub acessivel publicamente; usando HTTPS sem credencial.',
+        ),
+    )
     def test_redeploy_syncs_env_vars_without_restart_and_logs_preflight(
-        self, mock_get_git_token, mock_dokku_cls, mock_logger_cls,
+        self, mock_resolve_git_sync_plan, mock_dokku_cls, mock_logger_cls,
     ):
         user = User.objects.create_user(email='redeploy@example.com', password='senha123', name='Redeploy User')
         project = Project.objects.create(name='Projeto Redeploy')
@@ -1179,9 +1188,20 @@ class EnvVarFlowTests(TestCase):
 
     @patch('core.apps.mixins.apps.redeploy_app.AppLogManager')
     @patch('core.apps.mixins.apps.redeploy_app.DokkuAdapter')
-    @patch('github.Github')
+    @patch(
+        'core.apps.mixins.apps.redeploy_app.resolve_git_sync_plan',
+        return_value=GitSyncPlan(
+            ok=True,
+            git_url='https://x-access-token:token-requester-private@github.com/org/private-repo.git',
+            strategy='github_token',
+            message='Usando HTTPS autenticado com token de Requester Private.',
+            token='token-requester-private',
+            repo_name='org/private-repo',
+            repo_private=True,
+        ),
+    )
     def test_redeploy_uses_requested_user_token_for_github_sync(
-        self, mock_github_cls, mock_dokku_cls, mock_logger_cls,
+        self, mock_resolve_git_sync_plan, mock_dokku_cls, mock_logger_cls,
     ):
         requester = User.objects.create_user(
             email='requester-private@example.com',
@@ -1205,7 +1225,6 @@ class EnvVarFlowTests(TestCase):
             domain='app.example.com',
         )
 
-        mock_github_cls.return_value.get_repo.return_value = Mock()
         fake_dokku = FakeRedeployDokkuAdapter()
         mock_dokku_cls.return_value = fake_dokku
         mock_logger_cls.return_value = Mock()
@@ -1220,12 +1239,67 @@ class EnvVarFlowTests(TestCase):
             fake_dokku.sync_git_calls[0]['git_url']
             == 'https://x-access-token:token-requester-private@github.com/org/private-repo.git'
         )
-        mock_github_cls.assert_called_once_with('token-requester-private')
+        mock_resolve_git_sync_plan.assert_called_once_with(app, preferred_user=requester)
 
     @patch('core.apps.mixins.apps.redeploy_app.AppLogManager')
     @patch('core.apps.mixins.apps.redeploy_app.DokkuAdapter')
-    @patch('core.apps.mixins.apps.redeploy_app.RedeployAppMixin._get_git_token', return_value=None)
-    def test_redeploy_fails_fast_when_config_step_times_out(self, mock_get_git_token, mock_dokku_cls, mock_logger_cls):
+    @patch(
+        'core.apps.mixins.apps.redeploy_app.resolve_git_sync_plan',
+        return_value=GitSyncPlan(
+            ok=False,
+            git_url=None,
+            strategy='github_token_required',
+            message=(
+                'O repositorio org/private-repo nao esta acessivel publicamente e '
+                'nenhum token GitHub do projeto conseguiu acessa-lo.'
+            ),
+            repo_name='org/private-repo',
+            repo_private=True,
+        ),
+    )
+    def test_redeploy_private_repo_without_valid_token_does_not_call_git_sync(
+        self, mock_resolve_git_sync_plan, mock_dokku_cls, mock_logger_cls,
+    ):
+        user = User.objects.create_user(email='private-no-token@example.com', password='senha123', name='Private User')
+        project = Project.objects.create(name='Projeto Repo Privado Sem Token')
+        project.users.add(user)
+        app = App.objects.create(
+            name='app-private-no-token',
+            name_dokku='app-private-no-token',
+            git='https://github.com/org/private-repo.git',
+            branch='main',
+            project=project,
+            domain='app.example.com',
+        )
+
+        fake_dokku = FakeRedeployDokkuAdapter()
+        mock_dokku_cls.return_value = fake_dokku
+        mock_logger_cls.return_value = Mock()
+        task = RedeployAppMixin.redeploy_app
+
+        with patch.object(task, 'update_state'):
+            task.request.id = 'task-private-no-token'
+            result = task.run(app_id=app.id, commit=None, requested_by_id=user.id)
+
+        assert result['status'] == 'error'
+        assert fake_dokku.sync_git_calls == []
+        app.refresh_from_db()
+        self.assertEqual(app.status, 'ERROR')
+
+    @patch('core.apps.mixins.apps.redeploy_app.AppLogManager')
+    @patch('core.apps.mixins.apps.redeploy_app.DokkuAdapter')
+    @patch(
+        'core.apps.mixins.apps.redeploy_app.resolve_git_sync_plan',
+        return_value=GitSyncPlan(
+            ok=True,
+            git_url='https://github.com/org/repo.git',
+            strategy='github_public',
+            message='Repositorio GitHub acessivel publicamente; usando HTTPS sem credencial.',
+        ),
+    )
+    def test_redeploy_fails_fast_when_config_step_times_out(
+        self, mock_resolve_git_sync_plan, mock_dokku_cls, mock_logger_cls,
+    ):
         user = User.objects.create_user(email='redeploy-timeout@example.com', password='senha123', name='Timeout User')
         project = Project.objects.create(name='Projeto Timeout')
         project.users.add(user)
@@ -2479,7 +2553,7 @@ class WebhookSetupTests(APITestCase):
         )
         self.client.force_authenticate(user=self.request_user)
 
-    @patch('core.apps.views.GitHubAdapter.create_webhook')
+    @patch('core.apps.github_integration.GitHubAdapter.create_webhook')
     def test_setup_webhook_uses_project_member_token_when_request_user_cannot_manage_hooks(self, mock_create_webhook):
         mock_create_webhook.side_effect = [
             {
@@ -2502,7 +2576,7 @@ class WebhookSetupTests(APITestCase):
         self.assertEqual(mock_create_webhook.call_args_list[0].kwargs['user_id'], self.request_user.id)
         self.assertEqual(mock_create_webhook.call_args_list[1].kwargs['user_id'], self.project_user.id)
 
-    @patch('core.apps.views.GitHubAdapter.create_webhook')
+    @patch('core.apps.github_integration.GitHubAdapter.create_webhook')
     def test_setup_webhook_returns_clear_error_when_no_project_token_can_configure(self, mock_create_webhook):
         mock_create_webhook.side_effect = [
             {
@@ -2523,7 +2597,7 @@ class WebhookSetupTests(APITestCase):
         self.assertEqual(response.data['attempts'][0]['user'], 'Requester')
         self.assertEqual(response.data['attempts'][1]['user'], 'Owner')
 
-    @patch('core.apps.views.GitHubAdapter.create_webhook')
+    @patch('core.apps.github_integration.GitHubAdapter.create_webhook')
     def test_setup_webhook_accepts_repaired_existing_hook(self, mock_create_webhook):
         mock_create_webhook.return_value = {
             'status': 'webhook atualizado',

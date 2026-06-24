@@ -20,8 +20,9 @@ from rest_framework.renderers import BaseRenderer, JSONRenderer
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
-from core.adapters import DokkuAdapter, GitHubAdapter
+from core.adapters import DokkuAdapter
 from core.adapters.git_utils import get_github_hook_events, normalize_webhook_url, parse_github_repo_name
+from core.apps.github_integration import ensure_github_webhook
 from core.apps.interactive_crypto import decrypt_interactive_text
 from core.apps.interactive_runner import has_live_interactive_runner
 from core.apps.mixins import AppMixin, ServiceMixin
@@ -1157,73 +1158,16 @@ class AppViewSet(ModelViewSet):
         app = self.get_object()
         user = request.user
 
-        if not app.git:
-            return Response(
-                {'error': 'App não tem URL do repositório Git configurada.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        result = ensure_github_webhook(app, preferred_user=user)
+        if result.get('ok'):
+            return Response(result)
 
-        repo_name = _parse_github_repo_name(app.git)
-        if not repo_name:
-            return Response(
-                {'error': f'Nao foi possivel extrair owner/repo de: {app.git}'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        candidate_users = list(_iter_project_users_with_git_token(app, preferred_user=user))
-        if not candidate_users:
-            return Response(
-                {'error': 'Nenhum usuario do projeto tem git_token salvo para configurar o webhook.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        github_adapter = GitHubAdapter()
-        webhook_url = f'{settings.BACKEND_URL}/api/webhooks/github/{app.id}/'
-        attempts = []
-
-        for candidate_user in candidate_users:
-            result = github_adapter.create_webhook(
-                repo_name=repo_name,
-                app_id=app.id,
-                user_id=candidate_user.id,
-            )
-
-            logger.info(
-                'Webhook setup para app %s via %s: %s (URL: %s)',
-                app.name,
-                _display_user(candidate_user),
-                result,
-                webhook_url,
-            )
-
-            status_value = result.get('status', 'unknown')
-            if status_value in {'webhook criado', 'webhook atualizado'} or (
-                status_value.startswith('webhook') and 'existe' in status_value
-            ):
-                return Response({
-                    'status': status_value,
-                    'webhook_url': webhook_url,
-                    'backend_url': settings.BACKEND_URL,
-                    'repo': repo_name,
-                    'hook_id': result.get('hook_id'),
-                    'configured_by': _display_user(candidate_user),
-                })
-
-            attempts.append({
-                'user': _display_user(candidate_user),
-                'status': status_value,
-                'error': result.get('error'),
-            })
-
-        logger.warning('Nao foi possivel configurar webhook para app %s. Tentativas: %s', app.name, attempts)
         return Response(
             {
-                'error': (
-                    'Nao foi possivel configurar o webhook com nenhum token do projeto. '
-                    'Verifique se ao menos um membro tem permissao de Webhooks no repositorio GitHub.'
-                ),
-                'repo': repo_name,
-                'attempts': attempts,
+                'error': result.get('error', 'Nao foi possivel configurar o webhook.'),
+                'repo': result.get('repo'),
+                'webhook_url': result.get('webhook_url'),
+                'attempts': result.get('attempts', []),
             },
             status=status.HTTP_400_BAD_REQUEST,
         )

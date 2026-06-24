@@ -7,6 +7,7 @@ from celery import Task, shared_task
 
 from core.adapters import DokkuAdapter, GitHubAdapter
 from core.adapters.git_utils import build_github_auth_url, mask_git_credentials, parse_github_repo_name
+from core.apps.github_integration import resolve_git_sync_plan
 from core.apps.models import App
 from core.apps.process_scale import reapply_saved_process_scales
 from core.auth_user.models import User
@@ -91,7 +92,8 @@ class RedeployAppMixin:
         # --- GitHub Commit Status ---
         github_adapter = GitHubAdapter()
         requested_by = RedeployAppMixin._get_requested_by(requested_by_id)
-        git_token = RedeployAppMixin._get_git_token(app, preferred_user=requested_by)
+        git_sync_plan = resolve_git_sync_plan(app, preferred_user=requested_by)
+        git_token = git_sync_plan.token
         if not git_token:
             py_logger.warning(
                 'Commit status ignorado para app %s: nenhum usuário do projeto tem git_token',
@@ -194,60 +196,15 @@ class RedeployAppMixin:
                     meta={'current': progress, 'total': 100, 'status': safe_line.strip()[:120]},
                 )
 
-            # Decide a URL para git:sync.
-            # Se o repo é privado, o create_app já salvou a URL SSH no app.git.
-            # Se é público, a URL é HTTPS. Respeita o que foi definido na criação.
-            # Também verifica via GitHub API se temos token disponível. Se eu esqueci de mim, foi pra conhecer nós...
-            git_url = app.git
+            # O plano centraliza token, repo privado/publico e fallback de GitHub.
+            if not git_sync_plan.ok:
+                logger.error(git_sync_plan.message, category=LogCategory.GIT, progress=10)
+                app.status = 'ERROR'
+                app.save(update_fields=['status'])
+                return {'status': 'error', 'message': git_sync_plan.message}
 
-            if git_url.startswith('git@'):
-                # Já é SSH (repo privado legado)
-                logger.info(
-                    'Usando URL SSH (repositório privado)',
-                    category=LogCategory.GIT,
-                    progress=10,
-                )
-            elif git_token and parse_github_repo_name(git_url):
-                git_url = https_to_auth_url(git_url, git_token)
-                logger.info(
-                    'Usando HTTPS autenticado para sincronizar o repositorio GitHub',
-                    category=LogCategory.GIT,
-                    progress=10,
-                )
-            else:
-                # Verifica se o repo é privado para usar HTTPS com token
-                is_private = False
-                if git_token:
-                    try:
-                        from github import Github  # noqa: PLC0415
-
-                        repo_name = parse_github_repo_name(git_url)
-                        if not repo_name:
-                            raise ValueError(f'URL GitHub invalida: {git_url}')
-                        gh = Github(git_token)
-                        repo = gh.get_repo(repo_name)
-                        is_private = repo.private
-                    except Exception:
-                        pass
-
-                if is_private and git_token:
-                    git_url = https_to_auth_url(app.git, git_token)
-                    logger.info(
-                        'Repositório privado detectado, usando HTTPS com token',
-                        category=LogCategory.GIT,
-                        progress=10,
-                    )
-                else:
-                    logger.warning(
-                        'Usando URL HTTPS sem credencial. Se o repositorio for privado, o clone vai falhar.',
-                        category=LogCategory.GIT,
-                        progress=10,
-                    )
-                    logger.info(
-                        'Usando URL HTTPS (repositório público)',
-                        category=LogCategory.GIT,
-                        progress=10,
-                    )
+            git_url = git_sync_plan.git_url or app.git
+            logger.info(git_sync_plan.message, category=LogCategory.GIT, progress=10)
 
             output = dokku_adapter.sync_git_streaming(
                 app_name=dokku_app_name,
