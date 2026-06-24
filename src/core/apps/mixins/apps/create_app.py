@@ -5,6 +5,7 @@ from celery import Task, shared_task
 
 from core.adapters import DokkuAdapter, GitHubAdapter
 from core.adapters.git_utils import build_github_auth_url, mask_git_credentials, parse_github_repo_name
+from core.apps.github_integration import ensure_github_webhook
 from core.apps.models import App
 from core.apps.process_scale import reapply_saved_process_scales
 from core.apps.utils import slugify_dokku
@@ -381,40 +382,32 @@ class CreateAppMixin:
 
     @staticmethod
     def _setup_webhook(gh_adapter: GitHubAdapter, user: User, app: App, logger: AppLogManager):
-        """Configura webhook no GitHub para deploy automático. ou tenta."""
-        logger.info('Configurando webhook para deploy automático...', category=LogCategory.GIT, progress=86)
-
-        # Extrai nome do repositório da URL
-        repo_name = parse_github_repo_name(app.git)
-        if not repo_name:
-            logger.warning(f'Webhook nao configurado: URL GitHub invalida ({app.git})', category=LogCategory.GIT, progress=87)
-            return
-
+        logger.info('Configurando webhook para deploy automatico...', category=LogCategory.GIT, progress=86)
         try:
-            result = gh_adapter.create_webhook(repo_name=repo_name, app_id=app.id, user_id=user.id)
+            result = ensure_github_webhook(app, preferred_user=user, github_adapter=gh_adapter)
             if result.get('status') == 'webhook atualizado':
                 logger.success('Webhook reparado e atualizado', category=LogCategory.GIT, progress=87)
-                return
-            if result.get('status') == 'webhook ja existe':
-                result['status'] = 'webhook jÃ¡ existe'
-
-            if result.get('status') == 'webhook criado':
+            elif result.get('status') == 'webhook criado':
                 logger.success(
-                    f"Webhook configurado! Deploys automáticos ativados para branch '{app.branch}'",
+                    f"Webhook configurado! Deploys automaticos ativados para branch '{app.branch}'",
                     category=LogCategory.GIT,
                     progress=87,
                 )
-            elif result.get('status') == 'webhook já existe':
-                logger.info('Webhook já estava configurado', category=LogCategory.GIT, progress=87)
+            elif result.get('ok'):
+                logger.info(
+                    f'Webhook ja estava configurado ({result.get("configured_by", "usuario desconhecido")})',
+                    category=LogCategory.GIT,
+                    progress=87,
+                )
             else:
                 logger.warning(
-                    f'Webhook: {result.get("status", "status desconhecido")}', category=LogCategory.GIT, progress=87
+                    f'Webhook nao configurado: {result.get("error", result.get("status", "status desconhecido"))}',
+                    category=LogCategory.GIT,
+                    progress=87,
                 )
-
         except Exception as e:
-            # Webhook é opcional, não deve falhar a criação do app. será?
             logger.warning(
-                f'Não foi possível configurar webhook automático: {str(e)}',
+                f'Nao foi possivel configurar webhook automatico: {str(e)}',
                 category=LogCategory.GIT,
                 progress=87,
             )
