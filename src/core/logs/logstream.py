@@ -3,12 +3,14 @@ import logging
 import socket
 import time
 import uuid
+from contextlib import asynccontextmanager
 from contextlib import contextmanager
 from dataclasses import dataclass
 from threading import Event, Thread
 from typing import Iterator
 
 import redis
+import redis.asyncio as async_redis
 from django.conf import settings
 from django.utils import timezone
 
@@ -25,6 +27,10 @@ LOCK_TTL_SECONDS = 45
 
 def get_logstream_redis() -> redis.Redis:
     return redis.Redis.from_url(settings.CHANNEL_REDIS_URL, decode_responses=True)
+
+
+def get_async_logstream_redis() -> async_redis.Redis:
+    return async_redis.Redis.from_url(settings.CHANNEL_REDIS_URL, decode_responses=True)
 
 
 def _apps_key() -> str:
@@ -80,8 +86,17 @@ def touch_subscriber(redis_client: redis.Redis, app_id: int, subscriber_id: str)
     request_app_stream(redis_client, app_id)
 
 
+async def touch_subscriber_async(redis_client: async_redis.Redis, app_id: int, subscriber_id: str) -> None:
+    await redis_client.setex(_subscriber_key(app_id, subscriber_id), SUBSCRIBER_TTL_SECONDS, '1')
+    await redis_client.sadd(_apps_key(), str(app_id))
+
+
 def remove_subscriber(redis_client: redis.Redis, app_id: int, subscriber_id: str) -> None:
     redis_client.delete(_subscriber_key(app_id, subscriber_id))
+
+
+async def remove_subscriber_async(redis_client: async_redis.Redis, app_id: int, subscriber_id: str) -> None:
+    await redis_client.delete(_subscriber_key(app_id, subscriber_id))
 
 
 def count_subscribers(redis_client: redis.Redis, app_id: int) -> int:
@@ -101,6 +116,16 @@ def get_requested_app_ids(redis_client: redis.Redis) -> list[int]:
 def read_buffer(redis_client: redis.Redis, app_id: int) -> list[dict]:
     events = []
     for raw_payload in redis_client.lrange(_buffer_key(app_id), 0, -1):
+        try:
+            events.append(json.loads(raw_payload))
+        except json.JSONDecodeError:
+            continue
+    return events
+
+
+async def read_buffer_async(redis_client: async_redis.Redis, app_id: int) -> list[dict]:
+    events = []
+    for raw_payload in await redis_client.lrange(_buffer_key(app_id), 0, -1):
         try:
             events.append(json.loads(raw_payload))
         except json.JSONDecodeError:
@@ -157,6 +182,18 @@ def app_stream_subscription(app_id: int) -> Iterator[tuple[redis.Redis, str]]:
         yield redis_client, subscriber_id
     finally:
         remove_subscriber(redis_client, app_id, subscriber_id)
+
+
+@asynccontextmanager
+async def async_app_stream_subscription(app_id: int):
+    redis_client = get_async_logstream_redis()
+    subscriber_id = str(uuid.uuid4())
+    await touch_subscriber_async(redis_client, app_id, subscriber_id)
+    try:
+        yield redis_client, subscriber_id
+    finally:
+        await remove_subscriber_async(redis_client, app_id, subscriber_id)
+        await redis_client.aclose()
 
 
 def acquire_app_lock(redis_client: redis.Redis, app_id: int, owner: str) -> bool:

@@ -1,9 +1,9 @@
 # ruff: noqa: PT009, PT019
 
-from contextlib import contextmanager
 from datetime import timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+from asgiref.sync import async_to_sync
 from django.core.management import call_command
 from django.test import override_settings
 from django.utils import timezone
@@ -72,40 +72,51 @@ class AppLogVisibilityTests(APITestCase):
         self.assertEqual(response.data['results'][0]['id'], self.log.id)
 
     @patch('core.logs.views.has_live_runner', return_value=True)
+    @patch('core.logs.views.remove_subscriber_async', new_callable=AsyncMock)
+    @patch('core.logs.views.touch_subscriber_async', new_callable=AsyncMock)
+    @patch('core.logs.views.get_async_logstream_redis')
     @patch('core.logs.views.get_logstream_redis')
-    @patch('core.logs.views.read_buffer')
-    @patch('core.logs.views.app_stream_subscription')
+    @patch('core.logs.views.read_buffer_async')
     def test_runtime_sse_sends_snapshot_from_redis_buffer(
         self,
-        mock_subscription,
         mock_read_buffer,
         mock_get_redis,
+        mock_get_async_redis,
+        _mock_touch_subscriber,
+        _mock_remove_subscriber,
         _mock_has_runner,
     ):
         redis_client = MagicMock()
+        redis_client.aclose = AsyncMock()
         pubsub = MagicMock()
+        pubsub.subscribe = AsyncMock()
+        pubsub.get_message = AsyncMock(return_value=None)
+        pubsub.aclose = AsyncMock()
         redis_client.pubsub.return_value = pubsub
         mock_get_redis.return_value = redis_client
+        mock_get_async_redis.return_value = redis_client
         mock_read_buffer.return_value = [
             {'line': 'linha 1'},
             {'line': 'linha 2'},
         ]
 
-        @contextmanager
-        def fake_subscription(_app_id):
-            yield redis_client, 'subscriber-test'
-
-        mock_subscription.side_effect = fake_subscription
         self.client.force_authenticate(user=self.owner)
 
         response = self.client.get(f'/api/logs/app-runtime-stream/?app={self.app.id}&tail=200')
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response['Content-Type'], 'text/event-stream')
-        first_chunk = next(response.streaming_content).decode('utf-8')
+        first_chunk = async_to_sync(self._read_first_stream_chunk)(response).decode('utf-8')
         self.assertIn('event: snapshot', first_chunk)
         self.assertIn('linha 1', first_chunk)
         self.assertIn('linha 2', first_chunk)
+
+    async def _read_first_stream_chunk(self, response):
+        iterator = response.streaming_content.__aiter__()
+        try:
+            return await iterator.__anext__()
+        finally:
+            await iterator.aclose()
 
     def test_runtime_sse_rejects_non_member(self):
         outsider = User.objects.create_user(
