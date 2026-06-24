@@ -5,6 +5,7 @@ from django.http import StreamingHttpResponse
 from drf_spectacular.utils import extend_schema
 from rest_framework import viewsets
 from rest_framework.decorators import action
+from rest_framework.renderers import BaseRenderer, JSONRenderer
 from rest_framework.response import Response
 
 from core.adapters import DokkuAdapter
@@ -23,6 +24,21 @@ from core.logs.ssh_audit import ssh_audit_context
 
 from .models import AppLog
 from .serializers import AppLogSerializer
+
+
+class ServerSentEventRenderer(BaseRenderer):
+    """Renderer usado apenas para liberar content negotiation de streams SSE."""
+
+    media_type = 'text/event-stream'
+    format = 'event-stream'
+    charset = 'utf-8'
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        if data is None:
+            return b''
+        if isinstance(data, bytes):
+            return data
+        return json.dumps(data).encode(self.charset)
 
 
 def _has_global_access(user) -> bool:
@@ -111,7 +127,12 @@ class AppLogViewSet(viewsets.ReadOnlyModelViewSet):
 
         return Response({'lines': lines})
 
-    @action(detail=False, methods=['get'], url_path='app-runtime-stream')
+    @action(
+        detail=False,
+        methods=['get'],
+        url_path='app-runtime-stream',
+        renderer_classes=[ServerSentEventRenderer, JSONRenderer],
+    )
     def app_runtime_stream(self, request):
         """
         Stream SSE dos logs runtime do app.
