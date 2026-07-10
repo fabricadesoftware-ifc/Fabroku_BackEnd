@@ -1498,6 +1498,13 @@ class ServiceViewSet(ModelViewSet):
 
         task_result = ServiceMixin.delete_service.delay(service_id=instance.id, deleted_by_id=request.user.id)  # type: ignore
 
+        if instance.app:
+            instance.app.task_id = task_result.id
+            instance.app.save(update_fields=['task_id'])
+        else:
+            instance.task_id = task_result.id
+            instance.save(update_fields=['task_id'])
+
         return Response(
             {
                 'status': 'DELETING',

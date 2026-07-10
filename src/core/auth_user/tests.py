@@ -92,6 +92,25 @@ class PlatformConfigTests(APITestCase):
         self.assertEqual(response.data['app_domain_suffix'], '.apps.example.com')
 
 
+class AdminUnfoldSmokeTests(APITestCase):
+    def test_admin_index_renders_with_unfold_navigation(self):
+        superuser = User.objects.create_user(
+            email='admin-unfold@example.com',
+            password='senha123',
+            name='Admin Unfold',
+            is_superuser=True,
+            is_staff=True,
+        )
+        self.client.force_login(superuser)
+
+        response = self.client.get('/api/admin/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Fabroku')
+        self.assertContains(response, 'Plataforma')
+        self.assertContains(response, 'Auditoria')
+
+
 class UserAdminListTests(APITestCase):
     def setUp(self):
         self.client = APIClient()
