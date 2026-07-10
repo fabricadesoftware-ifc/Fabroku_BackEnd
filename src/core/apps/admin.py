@@ -1,4 +1,5 @@
 from django.contrib import admin
+from unfold.admin import ModelAdmin, TabularInline
 
 from core.apps.interactive_crypto import decrypt_interactive_text
 
@@ -36,7 +37,7 @@ class SuperuserOnlyAdminMixin:
         return bool(request.user and request.user.is_superuser)
 
 
-class InteractiveRunEventInline(admin.TabularInline):
+class InteractiveRunEventInline(TabularInline):
     model = InteractiveRunEvent
     extra = 0
     can_delete = False
@@ -51,7 +52,7 @@ class InteractiveRunEventInline(admin.TabularInline):
         return False
 
 
-class InteractiveRunAuditChunkInline(SuperuserOnlyAdminMixin, admin.TabularInline):
+class InteractiveRunAuditChunkInline(SuperuserOnlyAdminMixin, TabularInline):
     model = InteractiveRunAuditChunk
     extra = 0
     can_delete = False
@@ -76,7 +77,7 @@ class InteractiveRunAuditChunkInline(SuperuserOnlyAdminMixin, admin.TabularInlin
 
 
 @admin.register(App)
-class AppAdmin(admin.ModelAdmin):
+class AppAdmin(ModelAdmin):
     list_display = ('id', 'name', 'project', 'status', 'deleted_at', 'deleted_by', 'created_at', 'updated_at')
     list_filter = ('status', 'deleted_at', 'created_at', 'updated_at')
     search_fields = ('name', 'project__name', 'domain')
@@ -84,7 +85,7 @@ class AppAdmin(admin.ModelAdmin):
 
 
 @admin.register(Service)
-class ServiceAdmin(admin.ModelAdmin):
+class ServiceAdmin(ModelAdmin):
     list_display = ('id', 'name', 'app', 'user', 'host', 'port', 'deleted_at', 'deleted_by', 'created_at', 'updated_at')
     list_filter = ('service_type', 'deleted_at', 'created_at', 'updated_at')
     search_fields = ('name', 'app__name', 'user', 'host')
@@ -92,7 +93,7 @@ class ServiceAdmin(admin.ModelAdmin):
 
 
 @admin.register(AppProcessScale)
-class AppProcessScaleAdmin(admin.ModelAdmin):
+class AppProcessScaleAdmin(ModelAdmin):
     list_display = (
         'app',
         'process_name',
@@ -107,7 +108,7 @@ class AppProcessScaleAdmin(admin.ModelAdmin):
 
 
 @admin.register(AppRunArtifact)
-class AppRunArtifactAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
+class AppRunArtifactAdmin(ReadOnlyAdminMixin, ModelAdmin):
     list_display = ('id', 'kind', 'filename', 'app', 'created_by', 'size', 'created_at', 'expires_at')
     list_filter = ('kind', 'created_at', 'expires_at')
     search_fields = ('filename', 'app__name', 'created_by__email', 'created_by__name')
@@ -126,7 +127,7 @@ class AppRunArtifactAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
 
 
 @admin.register(InteractiveRunSession)
-class InteractiveRunSessionAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
+class InteractiveRunSessionAdmin(ReadOnlyAdminMixin, ModelAdmin):
     list_display = (
         'id',
         'app',
@@ -175,7 +176,7 @@ class InteractiveRunSessionAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
 
 
 @admin.register(InteractiveRunRunner)
-class InteractiveRunRunnerAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
+class InteractiveRunRunnerAdmin(ReadOnlyAdminMixin, ModelAdmin):
     list_display = (
         'runner_id',
         'hostname',
@@ -201,7 +202,7 @@ class InteractiveRunRunnerAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
 
 
 @admin.register(InteractiveRunEvent)
-class InteractiveRunEventAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
+class InteractiveRunEventAdmin(ReadOnlyAdminMixin, ModelAdmin):
     list_display = ('id', 'session', 'event_type', 'payload_preview', 'created_at')
     list_filter = ('event_type', 'created_at')
     search_fields = ('session__id', 'session__app__name', 'session__created_by__email')
@@ -215,7 +216,7 @@ class InteractiveRunEventAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
 
 
 @admin.register(InteractiveRunAuditChunk)
-class InteractiveRunAuditChunkAdmin(SuperuserOnlyAdminMixin, ReadOnlyAdminMixin, admin.ModelAdmin):
+class InteractiveRunAuditChunkAdmin(SuperuserOnlyAdminMixin, ReadOnlyAdminMixin, ModelAdmin):
     list_display = ('id', 'session', 'direction', 'sequence', 'size', 'created_at', 'consumed_at')
     list_filter = ('direction', 'created_at', 'consumed_at')
     search_fields = ('session__id', 'session__app__name', 'session__service__name', 'session__created_by__email')

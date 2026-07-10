@@ -10,6 +10,8 @@ from datetime import timedelta
 from pathlib import Path
 
 import dj_database_url
+from django.urls import reverse_lazy
+from django.utils.translation import gettext_lazy as _
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -76,6 +78,9 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 INSTALLED_APPS = [
     'daphne',
+    'unfold',
+    'unfold.contrib.filters',
+    'unfold.contrib.inlines',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -152,6 +157,161 @@ USE_TZ = True
 STATIC_URL = 'static/'
 
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
+UNFOLD = {
+    'SITE_TITLE': 'Administração | Fabroku',
+    'SITE_HEADER': 'Fabroku',
+    'SITE_SUBHEADER': 'Controle da plataforma',
+    'SITE_SYMBOL': 'rocket_launch',
+    'SITE_URL': os.getenv('FRONTEND_URL', 'https://fabroku.fabricadesoftware.ifc.edu.br'),
+    'SHOW_HISTORY': True,
+    'SHOW_VIEW_ON_SITE': False,
+    'SHOW_BACK_BUTTON': True,
+    'ENVIRONMENT': 'config.admin.environment_callback',
+    'BORDER_RADIUS': '8px',
+    'COLORS': {
+        'base': {
+            '50': '#f8f8fc',
+            '100': '#f0f0f7',
+            '200': '#dedeea',
+            '300': '#bfc0d2',
+            '400': '#9294ad',
+            '500': '#6e7089',
+            '600': '#53556c',
+            '700': '#3e4054',
+            '800': '#292a3d',
+            '900': '#1a1a2e',
+            '950': '#101022',
+        },
+        'primary': {
+            '50': '#eef2ff',
+            '100': '#e0e7ff',
+            '200': '#c7d2fe',
+            '300': '#a5b4fc',
+            '400': '#818cf8',
+            '500': '#5d5ff3',
+            '600': '#3f46e8',
+            '700': '#2c31c8',
+            '800': '#2328a1',
+            '900': '#20257f',
+            '950': '#111247',
+        },
+    },
+    'SIDEBAR': {
+        'show_search': True,
+        'show_all_applications': False,
+        'navigation': [
+            {
+                'title': _('Plataforma'),
+                'separator': False,
+                'collapsible': False,
+                'items': [
+                    {
+                        'title': _('Visão geral'),
+                        'icon': 'dashboard',
+                        'link': reverse_lazy('admin:index'),
+                    },
+                    {
+                        'title': _('Projetos'),
+                        'icon': 'folder_open',
+                        'link': reverse_lazy('admin:project_project_changelist'),
+                    },
+                    {
+                        'title': _('Apps'),
+                        'icon': 'deployed_code',
+                        'link': reverse_lazy('admin:apps_app_changelist'),
+                    },
+                    {
+                        'title': _('Serviços'),
+                        'icon': 'database',
+                        'link': reverse_lazy('admin:apps_service_changelist'),
+                    },
+                    {
+                        'title': _('Escala de processos'),
+                        'icon': 'dynamic_feed',
+                        'link': reverse_lazy('admin:apps_appprocessscale_changelist'),
+                    },
+                ],
+            },
+            {
+                'title': _('Pessoas e acesso'),
+                'separator': True,
+                'collapsible': True,
+                'items': [
+                    {
+                        'title': _('Usuários'),
+                        'icon': 'group',
+                        'link': reverse_lazy('admin:auth_user_user_changelist'),
+                    },
+                    {
+                        'title': _('E-mails permitidos'),
+                        'icon': 'mark_email_read',
+                        'link': reverse_lazy('admin:auth_user_allowedemail_changelist'),
+                    },
+                    {
+                        'title': _('Tokens da CLI'),
+                        'icon': 'key',
+                        'link': reverse_lazy('admin:auth_user_clitoken_changelist'),
+                    },
+                    {
+                        'title': _('Grupos e permissões'),
+                        'icon': 'admin_panel_settings',
+                        'link': reverse_lazy('admin:auth_group_changelist'),
+                    },
+                ],
+            },
+            {
+                'title': _('Operações'),
+                'separator': True,
+                'collapsible': True,
+                'items': [
+                    {
+                        'title': _('Logs dos apps'),
+                        'icon': 'terminal',
+                        'link': reverse_lazy('admin:logs_applog_changelist'),
+                    },
+                    {
+                        'title': _('Sessões interativas'),
+                        'icon': 'developer_mode',
+                        'link': reverse_lazy('admin:apps_interactiverunsession_changelist'),
+                    },
+                    {
+                        'title': _('Runners interativos'),
+                        'icon': 'memory',
+                        'link': reverse_lazy('admin:apps_interactiverunrunner_changelist'),
+                    },
+                    {
+                        'title': _('Artefatos de comandos'),
+                        'icon': 'inventory_2',
+                        'link': reverse_lazy('admin:apps_apprunartifact_changelist'),
+                    },
+                ],
+            },
+            {
+                'title': _('Auditoria'),
+                'separator': True,
+                'collapsible': True,
+                'items': [
+                    {
+                        'title': _('Comandos SSH'),
+                        'icon': 'security',
+                        'link': reverse_lazy('admin:logs_sshcommandaudit_changelist'),
+                    },
+                    {
+                        'title': _('Eventos interativos'),
+                        'icon': 'event_note',
+                        'link': reverse_lazy('admin:apps_interactiverunevent_changelist'),
+                    },
+                    {
+                        'title': _('Conteúdo auditado'),
+                        'icon': 'policy',
+                        'link': reverse_lazy('admin:apps_interactiverunauditchunk_changelist'),
+                    },
+                ],
+            },
+        ],
+    },
+}
 
 CSRF_TRUSTED_ORIGINS = _parse_csv_env('CSRF_TRUSTED_ORIGINS', DEFAULT_TRUSTED_ORIGINS)
 

@@ -1,12 +1,15 @@
 from django.contrib import admin
+from django.contrib.auth.admin import GroupAdmin as BaseGroupAdmin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from django.contrib.auth.models import Group
+from unfold.admin import ModelAdmin
 
 from core.auth_user.allowed_emails.admin import *  # noqa: F401, F403
 from core.auth_user.models import CLIToken, User
 
 
 @admin.register(User)
-class UserAdmin(BaseUserAdmin):
+class UserAdmin(BaseUserAdmin, ModelAdmin):
     """Admin customizado para o modelo User sem senha obrigatória."""
 
     list_display = ['id', 'email', 'name', 'is_active', 'is_staff', 'is_superuser', 'is_fabric', 'date_joined']
@@ -52,7 +55,7 @@ class UserAdmin(BaseUserAdmin):
 
 
 @admin.register(CLIToken)
-class CLITokenAdmin(admin.ModelAdmin):
+class CLITokenAdmin(ModelAdmin):
     list_display = ['id', 'user', 'name', 'token_short', 'created_at', 'last_used_at', 'is_active']
     list_filter = ['is_active', 'created_at']
     search_fields = ['user__email', 'user__name', 'name']
@@ -62,3 +65,12 @@ class CLITokenAdmin(admin.ModelAdmin):
     @admin.display(description='Token')
     def token_short(self, obj):
         return f'{obj.token[:8]}...' if obj.token else '-'
+
+
+if admin.site.is_registered(Group):
+    admin.site.unregister(Group)
+
+
+@admin.register(Group)
+class GroupAdmin(BaseGroupAdmin, ModelAdmin):
+    pass

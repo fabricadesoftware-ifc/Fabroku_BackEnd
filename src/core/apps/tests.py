@@ -1424,6 +1424,94 @@ class LinkServiceMixinTests(TestCase):
         mock_dokku.restart_app.assert_called_once_with(app.name_dokku)
 
 
+class DeleteServiceMixinTests(TestCase):
+    def setUp(self):
+        user = User.objects.create_user(
+            email='delete-service@example.com',
+            password='senha123',
+            name='Delete Service User',
+        )
+        project = Project.objects.create(name='Projeto Delete Service')
+        project.users.add(user)
+        self.user = user
+        self.app = App.objects.create(
+            name='app-delete-service',
+            name_dokku='app-delete-service',
+            git='https://github.com/org/delete-service.git',
+            branch='main',
+            project=project,
+            variables={'DATABASE_URL': 'postgres://db-delete-service'},
+        )
+        self.service = Service.objects.create(
+            name='db-delete-service',
+            user='postgres',
+            password='secret',
+            host='localhost',
+            port=5432,
+            app=self.app,
+            project=project,
+            service_type='postgres',
+            container_name='db-delete-service',
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    @patch('core.apps.views.ServiceMixin.delete_service.delay')
+    def test_delete_endpoint_persists_task_id_on_app(self, mock_delete_delay):
+        mock_delete_delay.return_value = Mock(id='task-delete-endpoint-123')
+
+        response = self.client.delete(f'/api/apps/services/{self.service.id}/')
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.data['task_id'], 'task-delete-endpoint-123')
+        self.app.refresh_from_db()
+        self.assertEqual(self.app.task_id, 'task-delete-endpoint-123')
+
+    @patch('core.apps.mixins.services.delete_service.DokkuAdapter')
+    def test_delete_service_uses_config_unset_when_unlink_fails(self, mock_dokku_cls):
+        mock_dokku = Mock()
+        mock_dokku.unlink_database.return_value = 'Failed to execute command: postgres:unlink'
+        mock_dokku.unset_config.return_value = 'Config vars removed'
+        mock_dokku.remove_postgres_container.return_value = 'Container removed'
+        mock_dokku.delete_database.return_value = 'Service destroyed'
+        mock_dokku_cls.return_value = mock_dokku
+
+        task = ServiceMixin.delete_service
+        with patch.object(task, 'update_state'):
+            task.request.id = 'task-delete-service-123'
+            result = task.run(service_id=self.service.id, deleted_by_id=self.user.id)
+
+        self.app.refresh_from_db()
+        self.service.refresh_from_db()
+        self.assertEqual(result['status'], 'deleted')
+        self.assertNotIn('DATABASE_URL', self.app.variables)
+        self.assertIsNotNone(self.service.deleted_at)
+        mock_dokku.unset_config.assert_called_once_with(
+            app_name=self.app.name_dokku,
+            keys=['DATABASE_URL'],
+            no_restart=False,
+        )
+
+    @patch('core.apps.mixins.services.delete_service.DokkuAdapter')
+    def test_delete_service_keeps_record_when_config_cleanup_fails(self, mock_dokku_cls):
+        mock_dokku = Mock()
+        mock_dokku.unlink_database.return_value = 'SSH Command Timeout after 120s'
+        mock_dokku.unset_config.return_value = 'SSH Connection Error: unavailable'
+        mock_dokku_cls.return_value = mock_dokku
+
+        task = ServiceMixin.delete_service
+        with patch.object(task, 'update_state'):
+            task.request.id = 'task-delete-service-failed'
+            with self.assertRaises(RuntimeError):
+                task.run(service_id=self.service.id, deleted_by_id=self.user.id)
+
+        self.app.refresh_from_db()
+        self.service.refresh_from_db()
+        self.assertIn('DATABASE_URL', self.app.variables)
+        self.assertIsNone(self.service.deleted_at)
+        mock_dokku.delete_database.assert_not_called()
+
+
 class ServiceCreateEndpointTests(APITestCase):
     def setUp(self):
         self.client = APIClient()

@@ -11,7 +11,10 @@ from core.logs.models import AppLogManager, LogCategory
 
 def dokku_output_failed(output: str) -> bool:
     output_lower = output.lower()
-    return 'failed' in output_lower or 'ssh connection error' in output_lower
+    return any(
+        marker in output_lower
+        for marker in ('failed', 'ssh connection error', 'ssh command timeout')
+    )
 
 
 def check_dokku_output(output: str, operation: str, *, allow_empty: bool = False):

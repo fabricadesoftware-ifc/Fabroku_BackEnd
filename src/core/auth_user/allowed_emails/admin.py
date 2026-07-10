@@ -1,10 +1,11 @@
 from django.contrib import admin
+from unfold.admin import ModelAdmin
 
 from .models import AllowedEmail
 
 
 @admin.register(AllowedEmail)
-class AllowedEmailAdmin(admin.ModelAdmin):
+class AllowedEmailAdmin(ModelAdmin):
     """Admin para gerenciar emails permitidos."""
 
     list_display = ['email', 'name', 'is_active', 'created_at', 'updated_at']

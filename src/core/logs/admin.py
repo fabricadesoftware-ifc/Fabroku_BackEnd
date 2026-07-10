@@ -1,10 +1,11 @@
 from django.contrib import admin
+from unfold.admin import ModelAdmin
 
 from .models import AppLog, SSHCommandAudit
 
 
 @admin.register(AppLog)
-class AppLogAdmin(admin.ModelAdmin):
+class AppLogAdmin(ModelAdmin):
     list_display = ['id', 'app', 'level', 'category', 'message_preview', 'progress', 'created_at']
     list_filter = ['level', 'category', 'app', 'created_at']
     search_fields = ['message', 'task_id', 'app__name']
@@ -19,7 +20,7 @@ class AppLogAdmin(admin.ModelAdmin):
 
 
 @admin.register(SSHCommandAudit)
-class SSHCommandAuditAdmin(admin.ModelAdmin):
+class SSHCommandAuditAdmin(ModelAdmin):
     list_display = [
         'id',
         'created_at',
