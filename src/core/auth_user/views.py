@@ -9,7 +9,7 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.viewsets import ModelViewSet
+from rest_framework.viewsets import ReadOnlyModelViewSet
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
@@ -22,9 +22,12 @@ from .serializers import UserAdminSerializer, UserRetrieveSerializer, UserSerial
 
 
 @extend_schema(tags=['users'])
-class UserViewSet(ModelViewSet):
+class UserViewSet(ReadOnlyModelViewSet):
+    """Consulta de usuarios; contas sao criadas somente pelo OAuth ou admin Django."""
+
     queryset = User.objects.all()
     serializer_class = UserSerializer
+    permission_classes = [IsAuthenticated]
     filter_backends = [SearchFilter, OrderingFilter]
     filterset_fields = ['id', 'name']
     search_fields = ['name', 'email']
