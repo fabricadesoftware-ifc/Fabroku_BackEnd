@@ -6,6 +6,7 @@ from core.adapters import DokkuAdapter
 from core.apps.mixins.services.service_dokku import (
     check_dokku_output,
     delete_dokku_service,
+    promote_remaining_database_if_needed,
     unlink_dokku_service,
 )
 from core.apps.models import Service
@@ -39,12 +40,13 @@ def _unlink_remote_service_if_needed(
     logger: AppLogManager | None,
 ):
     app = service.app
+    env_key = service.env_key or runtime.env_key
     dokku_service_name = service.container_name or service.name
     if not app:
         return
 
     if not app.name_dokku:
-        _remove_app_env_key(app, runtime.env_key)
+        _remove_app_env_key(app, env_key)
         return
 
     task.update_state(
@@ -69,27 +71,38 @@ def _unlink_remote_service_if_needed(
         except Exception as exc:
             if logger:
                 logger.warning(
-                    f'Unlink nao confirmado; aplicando limpeza direta de {runtime.env_key}: {str(exc)}',
+                    f'Unlink nao confirmado; aplicando limpeza direta de {env_key}: {str(exc)}',
                     category=LogCategory.DATABASE,
                     progress=35,
                 )
 
-    # O plugin remove a env durante o unlink, mas o unset explicito garante a
-    # limpeza mesmo quando o servico ja nao existe ou o unlink falha parcialmente.
-    unset_output = dokku_adapter.unset_config(
-        app_name=app.name_dokku,
-        keys=[runtime.env_key],
-        no_restart=unlink_succeeded,
-    )
-    if logger:
-        logger.dokku(
-            unset_output,
-            command=f'config:unset {app.name_dokku} {runtime.env_key}',
-            category=LogCategory.CONFIG,
-            progress=45,
+    # Evita remover uma DATABASE_URL que o proprio plugin ja tenha promovido
+    # para outro banco durante o unlink.
+    should_unset = bool(env_key) and not unlink_succeeded
+    if env_key and unlink_succeeded:
+        current_value = dokku_adapter.get_config(app.name_dokku, env_key).strip()
+        service_markers = tuple(
+            marker
+            for marker in (service.host, service.container_name, f'dokku-postgres-{service.container_name}')
+            if marker
         )
-    check_dokku_output(unset_output, f'config:unset {runtime.env_key}', allow_empty=True)
-    _remove_app_env_key(app, runtime.env_key)
+        should_unset = bool(current_value) and any(marker in current_value for marker in service_markers)
+
+    if env_key and should_unset:
+        unset_output = dokku_adapter.unset_config(
+            app_name=app.name_dokku,
+            keys=[env_key],
+            no_restart=unlink_succeeded,
+        )
+        if logger:
+            logger.dokku(
+                unset_output,
+                command=f'config:unset {app.name_dokku} {env_key}',
+                category=LogCategory.CONFIG,
+                progress=45,
+            )
+        check_dokku_output(unset_output, f'config:unset {env_key}', allow_empty=True)
+    _remove_app_env_key(app, env_key)
 
 
 def _delete_remote_service(task: Task, dokku_adapter, service: Service, runtime, logger: AppLogManager | None):
@@ -147,10 +160,22 @@ class DeleteServiceMixin:
         logger = _prepare_task_context(service, task_id)
 
         try:
+            linked_app = service.app
+            removed_env_key = service.env_key or runtime.env_key
             _unlink_remote_service_if_needed(task, dokku_adapter, service, runtime, logger)
             _delete_remote_service(task, dokku_adapter, service, runtime, logger)
 
             service.soft_delete(deleted_by_id=deleted_by_id)
+
+            if linked_app:
+                promote_remaining_database_if_needed(
+                    app=linked_app,
+                    removed_env_key=removed_env_key,
+                    excluded_service_id=service.id,
+                    dokku_adapter=dokku_adapter,
+                    logger=logger,
+                    progress=90,
+                )
 
             if logger:
                 logger.success(

@@ -5,6 +5,7 @@ from celery import Task, shared_task
 
 from core.adapters import DokkuAdapter
 from core.apps.models import App
+from core.apps.service_types import is_postgres_service_type
 from core.logs.models import AppLogManager, LogCategory
 
 # Comandos permitidos para seguranca (whitelist)
@@ -114,7 +115,7 @@ class RunCommandMixin:
 
             linked_services = Service.objects.filter(app=app, deleted_at__isnull=True)
             for svc in linked_services:
-                if svc.container_name and svc.service_type == 'postgres':
+                if svc.container_name and is_postgres_service_type(svc.service_type):
                     out = dokku_adapter.start_database(svc.container_name)
                     if 'failed' in out.lower():
                         if 'sethostname' in out.lower() or 'invalid argument' in out.lower():
@@ -189,7 +190,7 @@ class RunCommandMixin:
                         progress=10,
                     )
                     for svc in linked_services:
-                        if svc.container_name and svc.service_type == 'postgres':
+                        if svc.container_name and is_postgres_service_type(svc.service_type):
                             dokku_adapter.stop_database(svc.container_name)
                             time.sleep(2)
                             dokku_adapter.start_database(svc.container_name)

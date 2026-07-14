@@ -7,6 +7,7 @@ from pathlib import PurePosixPath
 from celery.result import AsyncResult
 from django.conf import settings
 from django.core.cache import cache
+from django.db import transaction
 from django.db.models import Prefetch, Q
 from django.http import HttpResponse, StreamingHttpResponse
 from django.utils import timezone
@@ -43,11 +44,13 @@ from core.apps.mixins.apps.run_data import (
     validate_manage_path,
 )
 from core.apps.mixins.services.service_dokku import dokku_output_failed
+from core.apps.mixins.services.service_env import allocate_service_env_key, postgres_service_types
 from core.apps.process_scale import (
     get_process_max_instances,
     sync_app_process_scales_from_dokku,
     validate_process_quantities,
 )
+from core.apps.service_types import get_service_runtime
 from core.auth_user.models import User
 from core.cache_versioning import APP_LAST_COMMIT_CACHE_NAMESPACE, build_versioned_cache_key, get_cache_ttl
 from core.logs.models import AppLogManager, LogCategory
@@ -64,7 +67,6 @@ from .models import (
     InteractiveRunSession,
     InteractiveRunSessionStatus,
     Service,
-    ServiceType,
 )
 from .serializers import AppProcessScaleSerializer, AppSerializer, ServiceSerializer
 
@@ -225,7 +227,7 @@ def _resolve_postgres_connect_service(app: App, service_id: int | None) -> Servi
     queryset = Service.objects.filter(
         app=app,
         project=app.project,
-        service_type=ServiceType.POSTGRES,
+        service_type__in=postgres_service_types(),
         deleted_at__isnull=True,
     )
 
@@ -1560,10 +1562,31 @@ class ServiceViewSet(ModelViewSet):
                 status=status.HTTP_409_CONFLICT,
             )
 
-        task_result = ServiceMixin.link_service.delay(service_id=service.id, app_id=int(app_id))  # type: ignore
+        try:
+            runtime = get_service_runtime(service.service_type)
+            with transaction.atomic():
+                locked_app = App.objects.select_for_update().get(id=app.id)
+                locked_service = Service.objects.select_for_update().get(id=service.id)
+                locked_service.env_key = allocate_service_env_key(
+                    app=locked_app,
+                    service_name=locked_service.name,
+                    runtime=runtime,
+                    exclude_service_id=locked_service.id,
+                )
+                locked_service.app = locked_app
+                locked_service.save(update_fields=['app', 'env_key'])
+
+            task_result = ServiceMixin.link_service.delay(  # type: ignore
+                service_id=service.id,
+                app_id=int(app_id),
+            )
+        except Exception:
+            Service.objects.filter(id=service.id, task_id__isnull=True).update(app=None, env_key=None)
+            raise
 
         app.task_id = task_result.id
         app.save(update_fields=['task_id'])
+        Service.objects.filter(id=service.id).update(task_id=task_result.id)
 
         return Response(
             {

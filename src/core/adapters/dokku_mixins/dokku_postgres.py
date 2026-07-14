@@ -1,3 +1,4 @@
+import shlex
 from abc import abstractmethod
 
 
@@ -14,22 +15,51 @@ class DokkuPostgresMixin:
         """Executa um comando no servidor Dokku enviando dados via stdin."""
         ...
 
-    def create_database(self, db_name: str, password: str) -> str:
+    def create_database(
+        self,
+        db_name: str,
+        password: str,
+        *,
+        image: str | None = None,
+        image_version: str | None = None,
+    ) -> str:
         """Cria um novo banco de dados PostgreSQL no Dokku."""
-        return self._run_command(f'postgres:create {db_name} -p {password}')
+        command = f'postgres:create {shlex.quote(db_name)} -p {shlex.quote(password)}'
+        if image:
+            command += f' --image {shlex.quote(image)}'
+        if image_version:
+            command += f' --image-version {shlex.quote(image_version)}'
+        return self._run_command(command)
+
+    def enable_postgis(self, db_name: str) -> str:
+        """Habilita e valida a extensão PostGIS no banco informado."""
+        sql = 'CREATE EXTENSION IF NOT EXISTS postgis;\nSELECT PostGIS_Version();\n'
+        return self._run_command_with_stdin(f'postgres:connect {shlex.quote(db_name)}', sql)
 
     def delete_database(self, db_name: str) -> str:
         """Deleta um banco de dados PostgreSQL do Dokku."""
         return self._run_command(f'postgres:destroy {db_name} --force')
 
-    def link_database(self, db_name: str, app_name: str, no_restart: bool = False) -> str:
+    def link_database(
+        self,
+        db_name: str,
+        app_name: str,
+        no_restart: bool = False,
+        alias: str | None = None,
+    ) -> str:
         """Vincula um banco de dados PostgreSQL a uma aplicação Dokku."""
         flags = ' --no-restart' if no_restart else ''
-        return self._run_command(f'postgres:link {db_name} {app_name}{flags}')
+        if alias:
+            flags += f' --alias {shlex.quote(alias)}'
+        return self._run_command(f'postgres:link {shlex.quote(db_name)} {shlex.quote(app_name)}{flags}')
 
     def unlink_database(self, db_name: str, app_name: str) -> str:
         """Desvincula um banco de dados PostgreSQL de uma aplicação Dokku."""
         return self._run_command(f'postgres:unlink {db_name} {app_name}')
+
+    def promote_database(self, db_name: str, app_name: str) -> str:
+        """Promove um banco vinculado para DATABASE_URL."""
+        return self._run_command(f'postgres:promote {shlex.quote(db_name)} {shlex.quote(app_name)}')
 
     def get_databases(self) -> str:
         """Lista todos os bancos de dados PostgreSQL no Dokku."""

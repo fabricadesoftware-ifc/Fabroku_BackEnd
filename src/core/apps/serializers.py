@@ -1,11 +1,13 @@
 import uuid
 
 from django.conf import settings
+from django.db import transaction
 from rest_framework import serializers
 
 from core.apps.mixins import AppMixin, ServiceMixin
-from core.apps.models import App, AppProcessScale, Service, ServiceType
-from core.apps.service_types import get_service_runtime, is_supported_service_type
+from core.apps.mixins.services.service_env import allocate_attached_service_name, allocate_service_env_key
+from core.apps.models import App, AppProcessScale, Service
+from core.apps.service_types import get_service_runtime, is_postgres_runtime, is_supported_service_type
 
 
 class ServiceSerializer(serializers.ModelSerializer):
@@ -20,6 +22,9 @@ class ServiceSerializer(serializers.ModelSerializer):
             'app',
             'project',
             'container_name',
+            'env_key',
+            'image',
+            'image_version',
             'host',
             'port',
             'task_id',
@@ -35,6 +40,9 @@ class ServiceSerializer(serializers.ModelSerializer):
             'host',
             'port',
             'container_name',
+            'env_key',
+            'image',
+            'image_version',
             'task_id',
             'created_at',
             'updated_at',
@@ -50,7 +58,7 @@ class ServiceSerializer(serializers.ModelSerializer):
         service_type = attrs.get('service_type')
 
         if service_type and not is_supported_service_type(service_type):
-            raise serializers.ValidationError('Apenas Postgres e Redis estao habilitados no momento.')
+            raise serializers.ValidationError('Apenas PostgreSQL, PostGIS e Redis estao habilitados no momento.')
 
         if app:
             if not project:
@@ -86,22 +94,49 @@ class ServiceSerializer(serializers.ModelSerializer):
         service_type = runtime.service_type
 
         if app:
-            task_result = ServiceMixin.create_service.delay(
-                app_id=app.id,
-                service_type=service_type,
-            )  # type: ignore
-            app.task_id = task_result.id
-            app.save(update_fields=['task_id'])
-            return Service(
-                name=f'{app.name}-{runtime.attached_suffix}',
-                service_type=service_type,
-                app=app,
-                project=app.project,
-                host='provisionando...',
-                port=runtime.port,
-            )
+            password = uuid.uuid4().hex if is_postgres_runtime(runtime) else ''
+            with transaction.atomic():
+                locked_app = App.objects.select_for_update().get(id=app.id)
+                service_name = allocate_attached_service_name(
+                    app=locked_app,
+                    base_name=f'{locked_app.name}-{runtime.attached_suffix}',
+                )
+                env_key = allocate_service_env_key(
+                    app=locked_app,
+                    service_name=service_name,
+                    runtime=runtime,
+                )
+                placeholder = Service.objects.create(
+                    name=service_name,
+                    service_type=service_type,
+                    user=runtime.user,
+                    password=password,
+                    host='provisionando...',
+                    port=runtime.port,
+                    app=locked_app,
+                    project=locked_app.project,
+                    env_key=env_key,
+                    image=runtime.image,
+                    image_version=runtime.image_version,
+                )
 
-        password = uuid.uuid4().hex if service_type == ServiceType.POSTGRES.value else ''
+            try:
+                task_result = ServiceMixin.create_service.delay(
+                    app_id=app.id,
+                    service_type=service_type,
+                    service_id=placeholder.id,
+                )  # type: ignore
+            except Exception:
+                placeholder.delete()
+                raise
+
+            placeholder.task_id = task_result.id
+            placeholder.save(update_fields=['task_id'])
+            locked_app.task_id = task_result.id
+            locked_app.save(update_fields=['task_id'])
+            return placeholder
+
+        password = uuid.uuid4().hex if is_postgres_runtime(runtime) else ''
         service_name = name or 'provisionando...'
         placeholder = Service.objects.create(
             name=service_name,
@@ -113,6 +148,8 @@ class ServiceSerializer(serializers.ModelSerializer):
             app=None,
             project=project,
             container_name=None,
+            image=runtime.image,
+            image_version=runtime.image_version,
             task_id=None,
         )
         task_result = ServiceMixin.create_service_standalone.delay(

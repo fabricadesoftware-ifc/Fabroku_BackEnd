@@ -83,6 +83,7 @@ class App(models.Model):
 
 class ServiceType(models.TextChoices):
     POSTGRES = 'postgres', 'Postgres'
+    POSTGIS = 'postgis', 'PostGIS'
     RABBITMQ = 'rabbitmq', 'RabbitMQ'
     REDIS = 'redis', 'Redis'
 
@@ -99,6 +100,9 @@ class Service(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     service_type = models.CharField(max_length=50, choices=ServiceType.choices)
     container_name = models.CharField(max_length=255, null=True, blank=True)
+    env_key = models.CharField(max_length=255, null=True, blank=True, db_index=True)
+    image = models.CharField(max_length=255, null=True, blank=True)
+    image_version = models.CharField(max_length=100, null=True, blank=True)
     task_id = models.CharField(max_length=255, null=True, blank=True)
     deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
     deleted_by = models.ForeignKey(
@@ -122,6 +126,18 @@ class Service(models.Model):
         db_table = 'services'
         verbose_name = 'Service'
         verbose_name_plural = 'Services'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['app', 'env_key'],
+                condition=(
+                    models.Q(deleted_at__isnull=True)
+                    & models.Q(app__isnull=False)
+                    & models.Q(env_key__isnull=False)
+                    & ~models.Q(env_key='')
+                ),
+                name='unique_active_service_env_key_per_app',
+            ),
+        ]
 
 
 class CacheVersionIndex(models.Model):

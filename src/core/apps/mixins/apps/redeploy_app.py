@@ -10,6 +10,7 @@ from core.adapters.git_utils import build_github_auth_url, mask_git_credentials,
 from core.apps.github_integration import resolve_git_sync_plan
 from core.apps.models import App
 from core.apps.process_scale import reapply_saved_process_scales
+from core.apps.service_types import is_postgres_service_type
 from core.auth_user.models import User
 from core.logs.models import AppLogManager, LogCategory
 
@@ -127,7 +128,7 @@ class RedeployAppMixin:
             from core.apps.models import Service  # noqa: PLC0415
 
             for svc in Service.objects.filter(app=app, deleted_at__isnull=True):
-                if svc.container_name and svc.service_type == 'postgres':
+                if svc.container_name and is_postgres_service_type(svc.service_type):
                     try:
                         start_output = dokku_adapter.start_database(svc.container_name)
                         logger.dokku(

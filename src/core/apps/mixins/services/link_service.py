@@ -1,6 +1,7 @@
 from typing import cast
 
 from celery import Task, shared_task
+from django.db import transaction
 
 from core.adapters import DokkuAdapter
 from core.apps.mixins.services.service_dokku import (
@@ -8,6 +9,7 @@ from core.apps.mixins.services.service_dokku import (
     link_dokku_service,
     sync_service_url_from_dokku,
 )
+from core.apps.mixins.services.service_env import allocate_service_env_key
 from core.apps.models import App, Service
 from core.apps.service_types import get_service_runtime
 from core.logs.models import AppLogManager, LogCategory
@@ -29,7 +31,7 @@ def _load_service_and_app(service_id: int, app_id: int) -> tuple[Service | None,
     if service and app:
         if service.project_id != app.project_id:
             error = {'status': 'error', 'message': 'Servico e app devem pertencer ao mesmo projeto'}
-        elif service.app_id:
+        elif service.app_id and service.app_id != app.id:
             error = {'status': 'error', 'message': f'Servico ja vinculado ao app {service.app_id}'}
         elif not app.name_dokku:
             error = {'status': 'error', 'message': 'App sem name_dokku configurado'}
@@ -58,6 +60,17 @@ class LinkServiceMixin:
         except ValueError as exc:
             return {'status': 'error', 'message': str(exc)}
 
+        if not service.env_key:
+            with transaction.atomic():
+                locked_app = App.objects.select_for_update().get(id=app.id)
+                service.env_key = allocate_service_env_key(
+                    app=locked_app,
+                    service_name=service.name,
+                    runtime=runtime,
+                    exclude_service_id=service.id,
+                )
+                service.save(update_fields=['env_key'])
+
         app.task_id = task_id
         app.save(update_fields=['task_id'])
 
@@ -82,6 +95,7 @@ class LinkServiceMixin:
                 dokku_service_name,
                 app.name_dokku,
                 no_restart=True,
+                env_key=service.env_key,
             )
             logger.dokku(link_output, command=link_command, category=LogCategory.DATABASE, progress=50)
             if 'already linked' not in link_output.lower():
@@ -96,11 +110,13 @@ class LinkServiceMixin:
                 dokku_adapter=dokku_adapter,
                 logger=logger,
                 runtime=runtime,
+                env_key=service.env_key,
                 progress=80,
             )
 
             service.app = app
-            service.save(update_fields=['app'])
+            service.task_id = None
+            service.save(update_fields=['app', 'env_key', 'task_id'])
 
             task.update_state(
                 state='PROGRESS',
@@ -124,6 +140,7 @@ class LinkServiceMixin:
                 'status': 'linked',
                 'service_id': service_id,
                 'app_id': app_id,
+                'env_key': service.env_key,
             }
 
         except Exception as e:
