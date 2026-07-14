@@ -10,10 +10,11 @@ from core.adapters import DokkuAdapter
 from core.apps.mixins.services.service_dokku import (
     check_dokku_output,
     create_dokku_service,
+    initialize_dokku_service,
     start_dokku_service,
 )
-from core.apps.models import Project, Service, ServiceType
-from core.apps.service_types import ServiceRuntime, get_service_runtime
+from core.apps.models import Project, Service
+from core.apps.service_types import ServiceRuntime, get_service_runtime, is_postgres_runtime
 from core.apps.utils import slugify_dokku
 
 logger = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ class ServiceRecordInput:
 def _service_password(runtime: ServiceRuntime, password: str | None) -> str:
     if password is not None:
         return password
-    return uuid.uuid4().hex if runtime.service_type == ServiceType.POSTGRES.value else ''
+    return uuid.uuid4().hex if is_postgres_runtime(runtime) else ''
 
 
 def _prepare_service_record(payload: ServiceRecordInput) -> Service:
@@ -47,6 +48,8 @@ def _prepare_service_record(payload: ServiceRecordInput) -> Service:
             app=None,
             project=payload.project,
             container_name=None,
+            image=payload.runtime.image,
+            image_version=payload.runtime.image_version,
             task_id=payload.task_id,
         )
 
@@ -57,7 +60,20 @@ def _prepare_service_record(payload: ServiceRecordInput) -> Service:
     service.user = payload.runtime.user
     service.password = payload.password
     service.port = payload.runtime.port
-    service.save(update_fields=['task_id', 'name', 'service_type', 'user', 'password', 'port'])
+    service.image = payload.runtime.image
+    service.image_version = payload.runtime.image_version
+    service.save(
+        update_fields=[
+            'task_id',
+            'name',
+            'service_type',
+            'user',
+            'password',
+            'port',
+            'image',
+            'image_version',
+        ]
+    )
     return service
 
 
@@ -139,8 +155,13 @@ class CreateServiceStandaloneMixin:
             )
             start_output = start_dokku_service(dokku_adapter, runtime, dokku_service_name)
             check_dokku_output(start_output, f'{runtime.default_prefix}:start', allow_empty=True)
-            if runtime.service_type == ServiceType.POSTGRES.value:
+            if is_postgres_runtime(runtime):
                 time.sleep(2)
+
+            initialized = initialize_dokku_service(dokku_adapter, runtime, dokku_service_name)
+            if initialized:
+                _output, _command = initialized
+                logger.info('Extensao PostGIS habilitada e validada em %s', dokku_service_name)
 
             service.task_id = None
             service.save(update_fields=['task_id'])

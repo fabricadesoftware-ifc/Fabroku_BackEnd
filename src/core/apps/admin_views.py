@@ -10,6 +10,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from core.adapters import DokkuAdapter
+from core.apps.mixins.services.service_env import postgres_service_types
 from core.apps.models import App, Service
 from core.cache_versioning import (
     ADMIN_STORAGE_USAGE_CACHE_NAMESPACE,
@@ -92,7 +93,7 @@ def storage_usage(request):
 
     services = list(
         Service.objects.filter(
-            service_type='postgres',
+            service_type__in=postgres_service_types(),
             container_name__isnull=False,
             deleted_at__isnull=True,
         )

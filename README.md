@@ -14,6 +14,8 @@ No servidor que vai hospedar os apps dos usuarios:
 - Instale e configure o Dokku.
 - Instale os plugins de servico que a instalacao vai oferecer, por exemplo
   Postgres e Redis.
+- Para oferecer PostGIS, use o mesmo plugin Postgres; o Fabroku cria o servico
+  com uma imagem PostGIS configurada pela instalacao.
 - Garanta que o usuario SSH configurado no Fabroku consiga executar comandos
   Dokku sem senha interativa.
 - Cadastre a chave publica correspondente a `DOKKU_SSH_KEY` no servidor.
@@ -54,6 +56,9 @@ GITHUB_CLIENT_ID=seu-client-id
 GITHUB_CLIENT_SECRET=seu-client-secret
 GITHUB_REDIRECT_URI=https://fabroku-api.example.com/api/auth/github/callback
 GITHUB_WEBHOOK_SECRET=um-segredo-para-webhooks
+
+FABROKU_POSTGIS_IMAGE=postgis/postgis
+FABROKU_POSTGIS_IMAGE_VERSION=17-3.5
 ```
 
 Se usar cookies entre subdominios, configure tambem:
@@ -145,5 +150,7 @@ outros ambientes usando variaveis de ambiente:
 - `FABROKU_PRIVILEGED_ROLE_LABEL`: label publico para usuarios com `is_fabric=True`.
 - `FABROKU_REGULAR_ROLE_LABEL`: label publico para usuarios comuns.
 - `FABROKU_APP_DOMAIN_SUFFIX`: sufixo mostrado na criacao de apps.
+- `FABROKU_POSTGIS_IMAGE` e `FABROKU_POSTGIS_IMAGE_VERSION`: imagem usada ao
+  criar novos servicos PostGIS. Defaults: `postgis/postgis` e `17-3.5`.
 - `CSRF_TRUSTED_ORIGIN_REGEXES`, `CORS_ALLOWED_ORIGIN_REGEXES` e `AUTH_COOKIE_DOMAIN`: ajustam dominios publicos da instalacao.
 - `SERVICE_PROXY_POSTGRES_HOST`, `SERVICE_PROXY_POSTGRES_PORT`, `SERVICE_PROXY_REDIS_HOST`, `SERVICE_PROXY_REDIS_PORT`, `SERVICE_PROXY_RABBITMQ_HOST` e `SERVICE_PROXY_RABBITMQ_PORT`: hosts e portas dos proxies de servicos, quando usados.

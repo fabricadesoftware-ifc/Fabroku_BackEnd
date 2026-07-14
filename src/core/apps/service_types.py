@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from django.conf import settings
+
 from core.apps.models import ServiceType
 
 
@@ -15,6 +17,10 @@ class ServiceRuntime:
     port: int
     host_prefix: str
     env_key: str
+    dokku_plugin: str
+    image: str | None = None
+    image_version: str | None = None
+    required_extension: str | None = None
 
 
 SERVICE_RUNTIMES = {
@@ -27,6 +33,21 @@ SERVICE_RUNTIMES = {
         port=5432,
         host_prefix='dokku-postgres-',
         env_key='DATABASE_URL',
+        dokku_plugin='postgres',
+    ),
+    ServiceType.POSTGIS.value: ServiceRuntime(
+        service_type=ServiceType.POSTGIS.value,
+        label='PostGIS',
+        default_prefix='postgis',
+        attached_suffix='geo-db',
+        user='postgres',
+        port=5432,
+        host_prefix='dokku-postgres-',
+        env_key='DATABASE_URL',
+        dokku_plugin='postgres',
+        image=settings.FABROKU_POSTGIS_IMAGE,
+        image_version=settings.FABROKU_POSTGIS_IMAGE_VERSION,
+        required_extension='postgis',
     ),
     ServiceType.REDIS.value: ServiceRuntime(
         service_type=ServiceType.REDIS.value,
@@ -37,6 +58,7 @@ SERVICE_RUNTIMES = {
         port=6379,
         host_prefix='dokku-redis-',
         env_key='REDIS_URL',
+        dokku_plugin='redis',
     ),
 }
 
@@ -58,3 +80,16 @@ def is_supported_service_type(service_type: str | ServiceType | None) -> bool:
     if not service_type:
         return False
     return normalize_service_type(service_type) in SERVICE_RUNTIMES
+
+
+def is_postgres_runtime(runtime: ServiceRuntime) -> bool:
+    return runtime.dokku_plugin == 'postgres'
+
+
+def is_postgres_service_type(service_type: str | ServiceType | None) -> bool:
+    if not service_type:
+        return False
+    try:
+        return is_postgres_runtime(get_service_runtime(service_type))
+    except ValueError:
+        return False

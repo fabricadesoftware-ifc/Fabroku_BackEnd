@@ -1,6 +1,7 @@
 from django.conf import settings
 
 from core.apps.models import Service, ServiceType
+from core.apps.service_types import is_postgres_service_type
 
 
 class ServiceProxyMixin:
@@ -8,7 +9,7 @@ class ServiceProxyMixin:
 
     def get_service_proxy_url(self, service: Service) -> str:
         """Retorna a URL de proxy do servico."""
-        if service.service_type == ServiceType.POSTGRES:
+        if is_postgres_service_type(service.service_type):
             return (
                 f'postgres://{service.user}:{service.password}@'
                 f'{settings.SERVICE_PROXY_POSTGRES_HOST}:{settings.SERVICE_PROXY_POSTGRES_PORT}/{service.name}'

@@ -4,6 +4,7 @@ from celery import Task, shared_task
 
 from core.adapters import DokkuAdapter
 from core.apps.models import App
+from core.apps.service_types import is_postgres_service_type
 from core.logs.models import AppLogManager, LogCategory
 
 ActionType = Literal['start', 'stop', 'restart']
@@ -54,7 +55,7 @@ class ManageAppMixin:
                 from core.apps.models import Service  # noqa: PLC0415
 
                 for svc in Service.objects.filter(app=app, deleted_at__isnull=True):
-                    if svc.container_name and svc.service_type == 'postgres':
+                    if svc.container_name and is_postgres_service_type(svc.service_type):
                         try:
                             dokku_adapter.start_database(svc.container_name)
                         except Exception:

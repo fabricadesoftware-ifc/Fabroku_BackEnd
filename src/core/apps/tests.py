@@ -16,6 +16,7 @@ from config.asgi import application
 from core.adapters.dokku_mixins.dokku_apps import DokkuAppsMixin
 from core.adapters.dokku_mixins.dokku_config import DokkuConfigMixin
 from core.adapters.dokku_mixins.dokku_git import DokkuGitMixin
+from core.adapters.dokku_mixins.dokku_postgres import DokkuPostgresMixin
 from core.adapters.git_utils import build_github_auth_url, mask_git_credentials, parse_github_repo_name
 from core.adapters.ssh import SSHAdapter
 from core.apps.github_integration import GitSyncPlan
@@ -37,6 +38,7 @@ from core.apps.mixins.apps.run_data import (
     validate_loaddata_fixture_path,
     validate_manage_path,
 )
+from core.apps.mixins.services.service_dokku import initialize_dokku_service
 from core.apps.models import (
     App,
     AppProcessScale,
@@ -53,6 +55,7 @@ from core.apps.models import (
     Service,
 )
 from core.apps.process_scale import parse_ps_scale_output, validate_process_quantities
+from core.apps.service_types import get_service_runtime
 from core.auth_user.models import CLIToken, User
 from core.cache_versioning import APP_LAST_COMMIT_CACHE_NAMESPACE, get_cache_ttl
 from core.logs.models import redact_sensitive_log_message
@@ -65,6 +68,47 @@ class FakeStatus:
         self.description = description
         self.created_at = created_at
         self.context = context
+
+
+class RecordingPostgresAdapter(DokkuPostgresMixin):
+    def __init__(self):
+        self.commands = []
+        self.stdin_calls = []
+
+    def _run_command(self, command):
+        self.commands.append(command)
+        return 'ok'
+
+    def _run_command_with_stdin(self, command, stdin_data):
+        self.stdin_calls.append((command, stdin_data))
+        return ' postgis_version\n-----------------\n 3.5 USE_GEOS=1\n'
+
+
+class PostGISAdapterTests(SimpleTestCase):
+    def test_create_database_uses_configured_postgis_image(self):
+        adapter = RecordingPostgresAdapter()
+
+        adapter.create_database(
+            'mapas-db',
+            'secret',
+            image='postgis/postgis',
+            image_version='17-3.5',
+        )
+
+        self.assertEqual(
+            adapter.commands,
+            ['postgres:create mapas-db -p secret --image postgis/postgis --image-version 17-3.5'],
+        )
+
+    def test_initialize_postgis_enables_and_validates_extension(self):
+        adapter = RecordingPostgresAdapter()
+
+        result = initialize_dokku_service(adapter, get_service_runtime('postgis'), 'mapas-db')
+
+        self.assertIsNotNone(result)
+        self.assertEqual(adapter.stdin_calls[0][0], 'postgres:connect mapas-db')
+        self.assertIn('CREATE EXTENSION IF NOT EXISTS postgis;', adapter.stdin_calls[0][1])
+        self.assertIn('SELECT PostGIS_Version();', adapter.stdin_calls[0][1])
 
 
 class FakeCommit:
@@ -425,6 +469,32 @@ class InteractiveRunEndpointTests(APITestCase):
         self.assertIn('websocket_url', response.data)
         session = InteractiveRunSession.objects.get(id=response.data['session_id'])
         self.assertEqual(session.command_kind, InteractiveRunCommandKind.POSTGRES_CONNECT)
+        self.assertEqual(session.service_id, service.id)
+
+    def test_create_postgres_connect_session_accepts_linked_postgis_service(self):
+        service = Service.objects.create(
+            name='postgis-interactive',
+            user='postgres',
+            password='secret',
+            host='dokku-postgres-postgis-interactive',
+            port=5432,
+            app=self.app,
+            project=self.project,
+            service_type='postgis',
+            container_name='postgis-interactive',
+            env_key='DATABASE_URL',
+            image='postgis/postgis',
+            image_version='17-3.5',
+        )
+
+        response = self.client.post(
+            f'/api/apps/apps/{self.app.id}/interactive_sessions/',
+            {'command_kind': 'postgres_connect', 'service_id': service.id},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 202)
+        session = InteractiveRunSession.objects.get(id=response.data['session_id'])
         self.assertEqual(session.service_id, service.id)
 
     def test_create_postgres_connect_session_rejects_non_postgres_service(self):
@@ -1160,6 +1230,17 @@ class EnvVarFlowTests(TestCase):
             service_type='postgres',
             container_name='db-redeploy-teste',
         )
+        Service.objects.create(
+            name='geo-redeploy-teste',
+            user='postgres',
+            password='secret',
+            host='localhost',
+            port=5432,
+            app=app,
+            project=project,
+            service_type='postgis',
+            container_name='geo-redeploy-teste',
+        )
 
         fake_dokku = FakeRedeployDokkuAdapter()
         mock_dokku_cls.return_value = fake_dokku
@@ -1173,7 +1254,7 @@ class EnvVarFlowTests(TestCase):
 
         self.assertEqual(result['status'], 'success')
         self.assertTrue(mock_update_state.called)
-        self.assertEqual(fake_dokku.start_database_calls, ['db-redeploy-teste'])
+        self.assertEqual(fake_dokku.start_database_calls, ['db-redeploy-teste', 'geo-redeploy-teste'])
         self.assertEqual(fake_dokku.set_config_calls, [
             {
                 'app_name': 'app-redeploy-teste',
@@ -1423,6 +1504,65 @@ class LinkServiceMixinTests(TestCase):
         )
         mock_dokku.restart_app.assert_called_once_with(app.name_dokku)
 
+    @patch('core.apps.mixins.services.link_service.DokkuAdapter')
+    def test_link_additional_postgis_uses_automatic_alias(self, mock_dokku_cls):
+        user = User.objects.create_user(email='postgis-link@example.com', password='senha123', name='PostGIS User')
+        project = Project.objects.create(name='Projeto PostGIS Link')
+        project.users.add(user)
+        app = App.objects.create(
+            name='app-postgis-link',
+            name_dokku='app-postgis-link',
+            git='https://github.com/org/postgis.git',
+            branch='main',
+            project=project,
+            variables={'DATABASE_URL': 'postgres://primary'},
+        )
+        Service.objects.create(
+            name='primary-db',
+            user='postgres',
+            password='secret',
+            host='dokku-postgres-primary-db',
+            port=5432,
+            app=app,
+            project=project,
+            service_type='postgres',
+            container_name='primary-db',
+            env_key='DATABASE_URL',
+        )
+        postgis = Service.objects.create(
+            name='mapas-db',
+            user='postgres',
+            password='secret',
+            host='dokku-postgres-mapas-db',
+            port=5432,
+            project=project,
+            service_type='postgis',
+            container_name='mapas-db',
+        )
+
+        mock_dokku = Mock()
+        mock_dokku.link_database.return_value = 'linked'
+        mock_dokku.get_config.return_value = 'postgres://postgis'
+        mock_dokku.restart_app.return_value = 'restart ok'
+        mock_dokku_cls.return_value = mock_dokku
+
+        task = ServiceMixin.link_service
+        with patch.object(task, 'update_state'):
+            task.request.id = 'task-postgis-link'
+            result = task.run(service_id=postgis.id, app_id=app.id)
+
+        postgis.refresh_from_db()
+        app.refresh_from_db()
+        self.assertEqual(result['env_key'], 'MAPAS_DB_URL')
+        self.assertEqual(postgis.env_key, 'MAPAS_DB_URL')
+        self.assertEqual(app.variables['MAPAS_DB_URL'], 'postgres://postgis')
+        mock_dokku.link_database.assert_called_once_with(
+            db_name='mapas-db',
+            app_name='app-postgis-link',
+            no_restart=True,
+            alias='MAPAS_DB',
+        )
+
 
 class DeleteServiceMixinTests(TestCase):
     def setUp(self):
@@ -1511,6 +1651,49 @@ class DeleteServiceMixinTests(TestCase):
         self.assertIsNone(self.service.deleted_at)
         mock_dokku.delete_database.assert_not_called()
 
+    @patch('core.apps.mixins.services.delete_service.DokkuAdapter')
+    def test_delete_primary_database_promotes_oldest_remaining_database(self, mock_dokku_cls):
+        self.service.env_key = 'DATABASE_URL'
+        self.service.host = 'dokku-postgres-db-delete-service'
+        self.service.save(update_fields=['env_key', 'host'])
+        postgis = Service.objects.create(
+            name='mapas-db',
+            user='postgres',
+            password='secret',
+            host='dokku-postgres-mapas-db',
+            port=5432,
+            app=self.app,
+            project=self.app.project,
+            service_type='postgis',
+            container_name='mapas-db',
+            env_key='MAPAS_DB_URL',
+            image='postgis/postgis',
+            image_version='17-3.5',
+        )
+        self.app.variables['MAPAS_DB_URL'] = 'postgres://mapas'
+        self.app.save(update_fields=['variables'])
+
+        mock_dokku = Mock()
+        mock_dokku.unlink_database.return_value = 'unlinked'
+        mock_dokku.get_config.side_effect = ['', '', 'postgres://promoted-mapas']
+        mock_dokku.remove_postgres_container.return_value = 'removed'
+        mock_dokku.delete_database.return_value = 'destroyed'
+        mock_dokku.promote_database.return_value = 'promoted'
+        mock_dokku_cls.return_value = mock_dokku
+
+        task = ServiceMixin.delete_service
+        with patch.object(task, 'update_state'):
+            task.request.id = 'task-promote-postgis'
+            result = task.run(service_id=self.service.id, deleted_by_id=self.user.id)
+
+        self.app.refresh_from_db()
+        postgis.refresh_from_db()
+        self.assertEqual(result['status'], 'deleted')
+        self.assertEqual(postgis.env_key, 'DATABASE_URL')
+        self.assertEqual(self.app.variables['DATABASE_URL'], 'postgres://promoted-mapas')
+        self.assertNotIn('MAPAS_DB_URL', self.app.variables)
+        mock_dokku.promote_database.assert_called_once_with('mapas-db', self.app.name_dokku)
+
 
 class ServiceCreateEndpointTests(APITestCase):
     def setUp(self):
@@ -1566,7 +1749,145 @@ class ServiceCreateEndpointTests(APITestCase):
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data['name'], 'app-service-create-db')
-        mock_delay.assert_called_once_with(app_id=self.app.id, service_type='postgres')
+        self.assertEqual(response.data['env_key'], 'DATABASE_URL')
+        service = Service.objects.get(id=response.data['id'])
+        mock_delay.assert_called_once_with(
+            app_id=self.app.id,
+            service_type='postgres',
+            service_id=service.id,
+        )
+
+    @patch('core.apps.serializers.ServiceMixin.create_service.delay')
+    def test_create_attached_postgis_reserves_alias_and_image(self, mock_delay):
+        self.user.custom_max_services = 5
+        self.user.save(update_fields=['custom_max_services'])
+        mock_delay.side_effect = [
+            Mock(id='task-attached-postgis'),
+            Mock(id='task-attached-postgis-2'),
+        ]
+        Service.objects.create(
+            name='primary-db',
+            user='postgres',
+            password='secret',
+            host='dokku-postgres-primary-db',
+            port=5432,
+            app=self.app,
+            project=self.project,
+            service_type='postgres',
+            container_name='primary-db',
+            env_key='DATABASE_URL',
+        )
+
+        response = self.client.post(
+            '/api/apps/services/',
+            {'app': self.app.id, 'service_type': 'postgis'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['service_type'], 'postgis')
+        self.assertEqual(response.data['env_key'], 'APP_SERVICE_CREATE_GEO_DB_URL')
+        self.assertEqual(response.data['image'], 'postgis/postgis')
+        self.assertEqual(response.data['image_version'], '17-3.5')
+
+        second_response = self.client.post(
+            '/api/apps/services/',
+            {'app': self.app.id, 'service_type': 'postgis'},
+            format='json',
+        )
+
+        self.assertEqual(second_response.status_code, 201)
+        self.assertEqual(second_response.data['name'], 'app-service-create-geo-db-2')
+        self.assertEqual(second_response.data['env_key'], 'APP_SERVICE_CREATE_GEO_DB_2_URL')
+
+
+class CreatePostGISServiceTaskTests(TestCase):
+    def setUp(self):
+        user = User.objects.create_user(email='postgis-create@example.com', password='senha123', name='PostGIS')
+        project = Project.objects.create(name='Projeto PostGIS Create')
+        project.users.add(user)
+        self.app = App.objects.create(
+            name='geo-api',
+            name_dokku='geo-api',
+            git='https://github.com/org/geo-api.git',
+            branch='main',
+            project=project,
+            variables={},
+        )
+        self.service = Service.objects.create(
+            name='geo-api-geo-db',
+            user='postgres',
+            password='secret',
+            host='provisionando...',
+            port=5432,
+            app=self.app,
+            project=project,
+            service_type='postgis',
+            env_key='DATABASE_URL',
+            image='postgis/postgis',
+            image_version='17-3.5',
+            task_id='task-create-postgis',
+        )
+
+    @patch('core.apps.mixins.services.create_service.time.sleep')
+    @patch('core.apps.mixins.services.create_service.DokkuAdapter')
+    def test_create_postgis_enables_extension_before_completion(self, mock_dokku_cls, _mock_sleep):
+        mock_dokku = Mock()
+        mock_dokku.create_database.return_value = 'created'
+        mock_dokku.link_database.return_value = 'linked'
+        mock_dokku.get_config.return_value = 'postgres://geo-api'
+        mock_dokku.start_database.return_value = 'already started'
+        mock_dokku.enable_postgis.return_value = ' postgis_version\n 3.5 USE_GEOS=1'
+        mock_dokku.restart_app.return_value = 'restarted'
+        mock_dokku_cls.return_value = mock_dokku
+
+        task = ServiceMixin.create_service
+        with patch.object(task, 'update_state'):
+            task.request.id = 'task-create-postgis'
+            result = task.run(
+                app_id=self.app.id,
+                service_type='postgis',
+                service_id=self.service.id,
+            )
+
+        self.service.refresh_from_db()
+        self.app.refresh_from_db()
+        self.assertEqual(result['status'], 'created')
+        self.assertIsNone(self.service.task_id)
+        self.assertEqual(self.service.container_name, f'geo-api-geo-db-{self.app.id}')
+        self.assertEqual(self.app.variables['DATABASE_URL'], 'postgres://geo-api')
+        mock_dokku.enable_postgis.assert_called_once_with(self.service.container_name)
+        mock_dokku.create_database.assert_called_once_with(
+            db_name=self.service.container_name,
+            password='secret',
+            image='postgis/postgis',
+            image_version='17-3.5',
+        )
+
+    @patch('core.apps.mixins.services.create_service.time.sleep')
+    @patch('core.apps.mixins.services.create_service.DokkuAdapter')
+    def test_postgis_extension_failure_keeps_service_for_inspection(self, mock_dokku_cls, _mock_sleep):
+        mock_dokku = Mock()
+        mock_dokku.create_database.return_value = 'created'
+        mock_dokku.link_database.return_value = 'linked'
+        mock_dokku.get_config.return_value = 'postgres://geo-api'
+        mock_dokku.start_database.return_value = 'already started'
+        mock_dokku.enable_postgis.return_value = 'Failed to execute command: postgres:connect'
+        mock_dokku_cls.return_value = mock_dokku
+
+        task = ServiceMixin.create_service
+        with patch.object(task, 'update_state'):
+            task.request.id = 'task-create-postgis'
+            with self.assertRaises(RuntimeError):
+                task.run(
+                    app_id=self.app.id,
+                    service_type='postgis',
+                    service_id=self.service.id,
+                )
+
+        self.service.refresh_from_db()
+        self.assertIsNotNone(self.service.container_name)
+        self.assertEqual(self.service.task_id, 'task-create-postgis')
 
 
 class RunCommandTests(TestCase):

@@ -1,3 +1,4 @@
+import shlex
 from abc import abstractmethod
 
 
@@ -17,10 +18,18 @@ class DokkuRedisMixin:
         """Deleta uma instância do serviço Redis."""
         return self._run_command(f'redis:destroy {service_name} --force')
 
-    def link_redis(self, service_name: str, app_name: str, no_restart: bool = False) -> str:
+    def link_redis(
+        self,
+        service_name: str,
+        app_name: str,
+        no_restart: bool = False,
+        alias: str | None = None,
+    ) -> str:
         """Vincula uma instância do Redis a uma aplicação Dokku."""
         flags = ' --no-restart' if no_restart else ''
-        return self._run_command(f'redis:link {service_name} {app_name}{flags}')
+        if alias:
+            flags += f' --alias {shlex.quote(alias)}'
+        return self._run_command(f'redis:link {shlex.quote(service_name)} {shlex.quote(app_name)}{flags}')
 
     def unlink_redis(self, service_name: str, app_name: str) -> str:
         """Desvincula uma instância do Redis de uma aplicação Dokku."""
