@@ -134,7 +134,14 @@ class GitRepoMixin:
 
         raise Exception(f'Falha ao criar deploy key para {repo_name}: HTTP {status_code} - {response_body}')
 
-    def create_webhook(self, repo_name: str, app_id: int, user_id: int) -> dict:
+    def create_webhook(
+        self,
+        repo_name: str,
+        app_id: int,
+        user_id: int,
+        *,
+        force_update: bool = False,
+    ) -> dict:
         """Cria ou repara o webhook de deploy automatico no GitHub."""
         from core.auth_user.models import User  # noqa: PLC0415
 
@@ -189,7 +196,7 @@ class GitRepoMixin:
             is_active = bool(hook.active)
             uses_json = hook.config.get('content_type') == 'json'
             has_push_event = 'push' in events
-            should_update = not is_active or not uses_json or not has_push_event or bool(webhook_secret)
+            should_update = force_update or not is_active or not uses_json or not has_push_event
 
             if not should_update:
                 return {'status': 'webhook ja existe', 'hook_id': hook.id, 'url': webhook_url}

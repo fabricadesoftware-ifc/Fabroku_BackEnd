@@ -4,32 +4,18 @@ import json
 import logging
 
 from django.conf import settings
+from django.core.cache import cache
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 
-from core.adapters import GitHubAdapter
 from core.adapters.git_utils import parse_github_branch_from_ref
-from core.apps.github_integration import find_project_user_for_github_repo
 from core.apps.mixins import AppMixin
 from core.apps.models import App
 
 logger = logging.getLogger(__name__)
-
-
-def _get_git_token_for_app(app: App) -> str | None:
-    access = find_project_user_for_github_repo(app)
-    if access.user and access.token:
-        logger.info(
-            'Token valido para repo %s via usuario %s',
-            access.repo_name,
-            access.user.username or access.user.id,
-        )
-        return access.token
-
-    logger.warning('Nenhum token com acesso ao repo %s. Tentativas: %s', access.repo_name, access.attempts)
-    return None
+WEBHOOK_DELIVERY_CACHE_TTL_SECONDS = 24 * 60 * 60
 
 
 def verify_github_signature(payload_body: bytes, signature: str | None, secret: str) -> bool:
@@ -95,6 +81,27 @@ def github_webhook(request, app_id: int):
             'message': f'Push na branch {branch}, app configurado para {app.branch}',
         })
 
+    delivery_id = request.headers.get('X-GitHub-Delivery')
+    delivery_key = None
+    if delivery_id:
+        delivery_key = f'github-webhook-delivery:{app.id}:{delivery_id}'
+        try:
+            is_new_delivery = cache.add(
+                delivery_key,
+                app.id,
+                timeout=WEBHOOK_DELIVERY_CACHE_TTL_SECONDS,
+            )
+        except Exception:
+            logger.exception('Falha ao verificar deduplicacao da entrega GitHub %s', delivery_id)
+        else:
+            if not is_new_delivery:
+                logger.info('Entrega GitHub duplicada ignorada: delivery=%s app=%s', delivery_id, app.name)
+                return JsonResponse({
+                    'status': 'duplicate',
+                    'message': 'Entrega do GitHub ja processada.',
+                    'delivery_id': delivery_id,
+                })
+
     # Extrai informações do commit
     commit = payload.get('after', payload.get('head_commit', {}).get('id'))
     pusher = payload.get('pusher', {}).get('name', 'unknown')
@@ -107,21 +114,19 @@ def github_webhook(request, app_id: int):
         pusher,
     )
 
-    # --- Setar commit status PENDING imediatamente (síncrono, sem depender do Celery) ---
-    if commit:
-        git_token = _get_git_token_for_app(app)
-        if git_token:
+    # O status do commit e atualizado pela task. O endpoint precisa responder
+    # rapidamente ao GitHub e nao deve depender de uma segunda chamada externa.
+    try:
+        task_result = AppMixin.redeploy_app.delay(app_id=app.id, commit=commit)  # type: ignore
+    except Exception:
+        # O GitHub pode reenviar a entrega. Se nem sequer conseguimos colocar
+        # a task na fila, ela ainda nao foi processada e deve poder ser tentada novamente.
+        if delivery_key:
             try:
-                github_adapter = GitHubAdapter()
-                ok = github_adapter.set_deploy_pending(git_token, app.git, commit, app.name)
-                logger.info('Commit status pending setado no webhook: ok=%s commit=%s', ok, commit[:7])
-            except Exception as e:
-                logger.warning('Falha ao setar commit status pending no webhook: %s', e)
-        else:
-            logger.warning('Nenhum git_token disponível para setar commit status no webhook (app=%s)', app.name)
-
-    # Dispara a task de redeploy
-    task_result = AppMixin.redeploy_app.delay(app_id=app.id, commit=commit)  # type: ignore
+                cache.delete(delivery_key)
+            except Exception:
+                logger.exception('Falha ao liberar entrega GitHub apos erro de enfileiramento: %s', delivery_id)
+        raise
 
     logger.info('Task de redeploy disparada: task_id=%s app=%s', task_result.id, app.name)
 

@@ -5,7 +5,7 @@ description = "Default template for PDM package"
 authors = [
     {name = "jonatasperaza", email = "jonatassilvaperaza@gmail.com"},
 ]
-dependencies = ["django>=5.2.16,<6.0", "djangorestframework>=3.16.1", "dj-database-url>=3.0.1", "psycopg2-binary>=2.9.11", "django-celery-results>=2.6.0", "djangorestframework-simplejwt>=5.5.1", "python-dotenv>=1.2.2", "drf-spectacular>=0.29.0", "celery>=5.5.3", "whitenoise>=6.11.0", "requests>=2.34.2", "gunicorn>=23.0.0", "paramiko>=5.0.0", "ruff>=0.14.6", "django-cors-headers>=4.9.0", "django-filter>=25.2", "pygithub>=2.8.1", "click>=8.1.0", "flower>=2.0.1", "channels>=4.0.0", "channels-redis>=4.0.0", "daphne>=4.2.2", "django-unfold>=0.100.0"]
+dependencies = ["django>=5.2.16,<6.0", "djangorestframework>=3.16.1", "dj-database-url>=3.0.1", "psycopg2-binary>=2.9.11", "django-celery-results>=2.6.0", "djangorestframework-simplejwt>=5.5.1", "python-dotenv>=1.2.2", "drf-spectacular>=0.29.0", "celery>=5.5.3", "whitenoise>=6.11.0", "requests>=2.34.2", "gunicorn>=23.0.0", "paramiko>=5.0.0", "ruff>=0.14.6", "django-cors-headers>=4.9.0", "django-filter>=25.2", "pygithub>=2.8.1", "click>=8.1.0", "flower>=2.0.1", "channels>=4.0.0", "channels-redis>=4.0.0", "daphne>=4.2.2", "django-unfold>=0.100.0", "pygraphviz>=2.0", "django-extensions>=4.1", "pydot>=4.0.1"]
 requires-python = ">=3.13"
 readme = "README.md"
 license = {text = "MIT"}
@@ -70,7 +70,7 @@ makemigrations = "python src/manage.py makemigrations"
 shell = "python src/manage.py shell"
 celery = "celery -A src.config worker --loglevel=INFO --concurrency=10 -n worker1.%h --pool=solo"
 beat = "celery -A src.config beat --loglevel=INFO"
-model = "python src/manage.py graph_models -a -g -o models.png"
+model = "python src/manage.py graph_models adapters logs project apps auth_user -g --no-inheritance --hide-edge-labels --rankdir LR --layout dot --pydot -o core_models.svg"
 startapp = "python src/manage.py startapp {args}"
 loaddata = "python src/manage.py loaddata {args}"
 dumpdata = "python src/manage.py dumpdata {args}"

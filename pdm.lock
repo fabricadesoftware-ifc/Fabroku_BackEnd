@@ -5,7 +5,7 @@
 groups = ["default"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:68e21860ca3978acbaf278edeebb6b72d038a302393670dfb3c5d7bbdad40a03"
+content_hash = "sha256:51aa0c0a0c9687d8e7e9c91f32be42c362dc4dff23df614b731dcebb758e4834"
 
 [[metadata.targets]]
 requires_python = ">=3.13"
@@ -577,6 +577,20 @@ files = [
 ]
 
 [[package]]
+name = "django-extensions"
+version = "4.1"
+requires_python = ">=3.9"
+summary = "Extensions for Django"
+groups = ["default"]
+dependencies = [
+    "django>=4.2",
+]
+files = [
+    {file = "django_extensions-4.1-py3-none-any.whl", hash = "sha256:0699a7af28f2523bf8db309a80278519362cd4b6e1fd0a8cd4bf063e1e023336"},
+    {file = "django_extensions-4.1.tar.gz", hash = "sha256:7b70a4d28e9b840f44694e3f7feb54f55d495f8b3fa6c5c0e5e12bcb2aa3cdeb"},
+]
+
+[[package]]
 name = "django-filter"
 version = "25.2"
 requires_python = ">=3.10"
@@ -949,6 +963,20 @@ files = [
 ]
 
 [[package]]
+name = "pydot"
+version = "4.0.1"
+requires_python = ">=3.8"
+summary = "Python interface to Graphviz's Dot"
+groups = ["default"]
+dependencies = [
+    "pyparsing>=3.1.0",
+]
+files = [
+    {file = "pydot-4.0.1-py3-none-any.whl", hash = "sha256:869c0efadd2708c0be1f916eb669f3d664ca684bc57ffb7ecc08e70d5e93fee6"},
+    {file = "pydot-4.0.1.tar.gz", hash = "sha256:c2148f681c4a33e08bf0e26a9e5f8e4099a82e0e2a068098f32ce86577364ad5"},
+]
+
+[[package]]
 name = "pygithub"
 version = "2.9.1"
 requires_python = ">=3.9"
@@ -964,6 +992,26 @@ dependencies = [
 files = [
     {file = "pygithub-2.9.1-py3-none-any.whl", hash = "sha256:2ec78fca30092d51a42d76f4ddb02131b6f0c666a35dfdf364cf302cdda115b9"},
     {file = "pygithub-2.9.1.tar.gz", hash = "sha256:59771d7ff63d54d427be2e7d0dad2208dfffc2b0a045fec959263787739b611c"},
+]
+
+[[package]]
+name = "pygraphviz"
+version = "2.0"
+requires_python = ">=3.10"
+summary = "Python interface to Graphviz"
+groups = ["default"]
+files = [
+    {file = "pygraphviz-2.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:498034a876b6cf4644f98d10fcaf9747a424eaf53b678b58516d4af17e6a1b2c"},
+    {file = "pygraphviz-2.0-cp313-cp313-macosx_11_0_x86_64.whl", hash = "sha256:31a53620080f51b9648d166c3c665c404b3d4c016759bd9499ff6a7372bc72ff"},
+    {file = "pygraphviz-2.0-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:1067ea3c02881216747d2a501c27b7fc5346ec57f52b11a1bfe43382ae666f2a"},
+    {file = "pygraphviz-2.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:60b6f99e1d0dcabe22079ea83fe9bb7619cd821c036c660f530bb45ba82b8d59"},
+    {file = "pygraphviz-2.0-cp313-cp313-win_amd64.whl", hash = "sha256:998673e0db6d0fcc88cc8f6dcdef106dd7ae4102410aa6b3dcb25b33f96d767e"},
+    {file = "pygraphviz-2.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:055093dafa6dd2511eb1611f3a798c9e95e82614a910e93219388206895e691f"},
+    {file = "pygraphviz-2.0-cp314-cp314-macosx_11_0_x86_64.whl", hash = "sha256:26a3c528bde427934de0a93c63c218837e4961ae13b67dcd4dd7e02b1baa3384"},
+    {file = "pygraphviz-2.0-cp314-cp314-manylinux_2_28_aarch64.whl", hash = "sha256:d30c252d1df3bf26206b4ee565f88dc7d39e6052d14d09b412a5f2300ac68945"},
+    {file = "pygraphviz-2.0-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:13e465d170193930333b8c7a0c701cf261c8e99b38ddfad296a3b1cb1876b3f4"},
+    {file = "pygraphviz-2.0-cp314-cp314-win_amd64.whl", hash = "sha256:bf0ff0ca2e693723a619561ba8c135520b69bf3b5eb9905dec48ee29ef2f3802"},
+    {file = "pygraphviz-2.0.tar.gz", hash = "sha256:7cc6cfff4bfa6c1bf389cbbf72f5995a717c69de69c18763544c04b41181f59e"},
 ]
 
 [[package]]
@@ -1047,6 +1095,17 @@ dependencies = [
 files = [
     {file = "pyopenssl-26.3.0-py3-none-any.whl", hash = "sha256:46367f8f66b92271e6d218da9c87607e1ef5a0bc5c8dea5bb3db82f395c385a3"},
     {file = "pyopenssl-26.3.0.tar.gz", hash = "sha256:589de7fae1c9ea670d18422ed00fc04da787bbde8e1454aea872aa57b49ad341"},
+]
+
+[[package]]
+name = "pyparsing"
+version = "3.3.2"
+requires_python = ">=3.9"
+summary = "pyparsing - Classes and methods to define and execute parsing grammars"
+groups = ["default"]
+files = [
+    {file = "pyparsing-3.3.2-py3-none-any.whl", hash = "sha256:850ba148bd908d7e2411587e247a1e4f0327839c40e2e5e6d05a007ecc69911d"},
+    {file = "pyparsing-3.3.2.tar.gz", hash = "sha256:c777f4d763f140633dcb6d8a3eda953bf7a214dc4eff598413c070bcdc117cbc"},
 ]
 
 [[package]]

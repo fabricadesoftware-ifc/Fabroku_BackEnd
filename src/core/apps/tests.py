@@ -1193,6 +1193,75 @@ class EnvVarFlowTests(TestCase):
         adapter.set_config.assert_called_once_with(app_name='my-app', env_vars=env_vars, no_restart=True)
         self.assertIn('--no-restart', logger.dokku.call_args.kwargs['command'])
 
+
+class WebhookLifecycleTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='webhook-lifecycle@example.com',
+            password='senha123',
+            name='Webhook Lifecycle',
+            git_token='fake-token',
+        )
+        self.project = Project.objects.create(name='Projeto Webhook Lifecycle')
+        self.project.users.add(self.user)
+        self.app = App.objects.create(
+            name='app-webhook-lifecycle',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=self.project,
+        )
+
+    def test_create_app_reconciles_webhook_when_dokku_app_already_exists(self):
+        task = CreateAppMixin.create_app
+
+        with (
+            patch('core.apps.mixins.apps.create_app.AppLogManager'),
+            patch('core.apps.mixins.apps.create_app.DokkuAdapter'),
+            patch('core.apps.mixins.apps.create_app.GitHubAdapter') as mock_github_cls,
+            patch.object(CreateAppMixin, '_ensure_dokku_app', return_value=True),
+            patch.object(CreateAppMixin, '_setup_webhook') as mock_setup_webhook,
+        ):
+            task.request.id = 'task-existing-app-webhook'
+            result = task.run(app_id=self.app.id, user_id=self.user.id)
+
+        self.assertEqual(result['status'], 'already_exists')
+        mock_setup_webhook.assert_called_once_with(
+            mock_github_cls.return_value,
+            self.user,
+            self.app,
+            ANY,
+            progress=99,
+        )
+
+    def test_create_app_reconciles_webhook_before_git_sync_failure(self):
+        task = CreateAppMixin.create_app
+
+        with (
+            patch('core.apps.mixins.apps.create_app.AppLogManager'),
+            patch('core.apps.mixins.apps.create_app.DokkuAdapter'),
+            patch('core.apps.mixins.apps.create_app.GitHubAdapter'),
+            patch.object(CreateAppMixin, '_ensure_dokku_app', return_value=False),
+            patch.object(CreateAppMixin, '_apply_env_vars'),
+            patch.object(CreateAppMixin, '_setup_webhook') as mock_setup_webhook,
+            patch.object(
+                CreateAppMixin,
+                '_handle_deploy_keys',
+                return_value='https://github.com/org/repo.git',
+            ),
+            patch.object(CreateAppMixin, '_get_head_sha', return_value=None),
+            patch.object(CreateAppMixin, '_configure_git', side_effect=RuntimeError('build failed')),
+        ):
+            task.request.id = 'task-failed-build-webhook'
+            with self.assertRaisesRegex(RuntimeError, 'build failed'):
+                task.run(app_id=self.app.id, user_id=self.user.id)
+
+        mock_setup_webhook.assert_called_once()
+        self.assertEqual(mock_setup_webhook.call_args.kwargs['progress'], 26)
+
+
+class EnvVarRedeployFlowTests(TestCase):
+
+    @patch('core.apps.mixins.apps.redeploy_app.reconcile_github_webhook')
     @patch('core.apps.mixins.apps.redeploy_app.AppLogManager')
     @patch('core.apps.mixins.apps.redeploy_app.DokkuAdapter')
     @patch(
@@ -1205,7 +1274,7 @@ class EnvVarFlowTests(TestCase):
         ),
     )
     def test_redeploy_syncs_env_vars_without_restart_and_logs_preflight(
-        self, mock_resolve_git_sync_plan, mock_dokku_cls, mock_logger_cls,
+        self, mock_resolve_git_sync_plan, mock_dokku_cls, mock_logger_cls, mock_reconcile_webhook,
     ):
         user = User.objects.create_user(email='redeploy@example.com', password='senha123', name='Redeploy User')
         project = Project.objects.create(name='Projeto Redeploy')
@@ -1266,7 +1335,15 @@ class EnvVarFlowTests(TestCase):
         self.assertIn('dokku postgres:start db-redeploy-teste', commands)
         self.assertIn('dokku apps:list', commands)
         self.assertIn('dokku config:set --no-restart app-redeploy-teste [vars: SECRET_KEY]', commands)
+        mock_reconcile_webhook.assert_called_once_with(
+            app,
+            preferred_user=None,
+            github_adapter=ANY,
+            app_logger=mock_logger,
+            progress=6,
+        )
 
+    @patch('core.apps.mixins.apps.redeploy_app.reconcile_github_webhook')
     @patch('core.apps.mixins.apps.redeploy_app.AppLogManager')
     @patch('core.apps.mixins.apps.redeploy_app.DokkuAdapter')
     @patch(
@@ -1282,7 +1359,7 @@ class EnvVarFlowTests(TestCase):
         ),
     )
     def test_redeploy_uses_requested_user_token_for_github_sync(
-        self, mock_resolve_git_sync_plan, mock_dokku_cls, mock_logger_cls,
+        self, mock_resolve_git_sync_plan, mock_dokku_cls, mock_logger_cls, mock_reconcile_webhook,
     ):
         requester = User.objects.create_user(
             email='requester-private@example.com',
@@ -1321,7 +1398,9 @@ class EnvVarFlowTests(TestCase):
             == 'https://x-access-token:token-requester-private@github.com/org/private-repo.git'
         )
         mock_resolve_git_sync_plan.assert_called_once_with(app, preferred_user=requester)
+        mock_reconcile_webhook.assert_called_once()
 
+    @patch('core.apps.mixins.apps.redeploy_app.reconcile_github_webhook')
     @patch('core.apps.mixins.apps.redeploy_app.AppLogManager')
     @patch('core.apps.mixins.apps.redeploy_app.DokkuAdapter')
     @patch(
@@ -1339,7 +1418,7 @@ class EnvVarFlowTests(TestCase):
         ),
     )
     def test_redeploy_private_repo_without_valid_token_does_not_call_git_sync(
-        self, mock_resolve_git_sync_plan, mock_dokku_cls, mock_logger_cls,
+        self, mock_resolve_git_sync_plan, mock_dokku_cls, mock_logger_cls, mock_reconcile_webhook,
     ):
         user = User.objects.create_user(email='private-no-token@example.com', password='senha123', name='Private User')
         project = Project.objects.create(name='Projeto Repo Privado Sem Token')
@@ -1366,7 +1445,9 @@ class EnvVarFlowTests(TestCase):
         assert fake_dokku.sync_git_calls == []
         app.refresh_from_db()
         self.assertEqual(app.status, 'ERROR')
+        mock_reconcile_webhook.assert_called_once()
 
+    @patch('core.apps.mixins.apps.redeploy_app.reconcile_github_webhook')
     @patch('core.apps.mixins.apps.redeploy_app.AppLogManager')
     @patch('core.apps.mixins.apps.redeploy_app.DokkuAdapter')
     @patch(
@@ -1379,7 +1460,7 @@ class EnvVarFlowTests(TestCase):
         ),
     )
     def test_redeploy_fails_fast_when_config_step_times_out(
-        self, mock_resolve_git_sync_plan, mock_dokku_cls, mock_logger_cls,
+        self, mock_resolve_git_sync_plan, mock_dokku_cls, mock_logger_cls, mock_reconcile_webhook,
     ):
         user = User.objects.create_user(email='redeploy-timeout@example.com', password='senha123', name='Timeout User')
         project = Project.objects.create(name='Projeto Timeout')
@@ -2939,6 +3020,7 @@ class StorageUsageTests(APITestCase):
 @override_settings(BACKEND_URL='https://backend.example.com', GITHUB_WEBHOOK_SECRET=None)
 class WebhookSetupTests(APITestCase):
     def setUp(self):
+        cache.clear()
         self.client = APIClient()
         self.request_user = User.objects.create_user(
             email='requester@example.com',
@@ -2984,6 +3066,25 @@ class WebhookSetupTests(APITestCase):
         self.assertEqual(response.data['configured_by'], 'Owner')
         self.assertEqual(mock_create_webhook.call_args_list[0].kwargs['user_id'], self.request_user.id)
         self.assertEqual(mock_create_webhook.call_args_list[1].kwargs['user_id'], self.project_user.id)
+        self.assertTrue(mock_create_webhook.call_args_list[0].kwargs['force_update'])
+
+    @patch('core.apps.github_integration.GitHubAdapter.create_webhook')
+    def test_setup_webhook_tries_next_project_token_after_unexpected_error(self, mock_create_webhook):
+        mock_create_webhook.side_effect = [
+            RuntimeError('temporary GitHub failure'),
+            {
+                'status': 'webhook criado',
+                'hook_id': 456,
+                'url': f'https://backend.example.com/api/webhooks/github/{self.app.id}/',
+            },
+        ]
+
+        response = self.client.post(f'/api/apps/apps/{self.app.id}/setup_webhook/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['hook_id'], 456)
+        self.assertEqual(response.data['attempts'][0]['status'], 'erro inesperado')
+        self.assertEqual(mock_create_webhook.call_count, 2)
 
     @patch('core.apps.github_integration.GitHubAdapter.create_webhook')
     def test_setup_webhook_returns_clear_error_when_no_project_token_can_configure(self, mock_create_webhook):
@@ -3058,9 +3159,8 @@ class WebhookSetupTests(APITestCase):
         self.assertEqual(webhook_check['usable_hooks'], 0)
         self.assertIn('precisa ser reparado', webhook_check['message'])
 
-    @patch('core.adapters.utils.git_webhook._get_git_token_for_app', return_value=None)
     @patch('core.adapters.utils.git_webhook.AppMixin.redeploy_app.delay')
-    def test_github_webhook_accepts_branch_names_with_slashes(self, mock_redeploy, mock_get_git_token):
+    def test_github_webhook_accepts_branch_names_with_slashes(self, mock_redeploy):
         mock_redeploy.return_value = Mock(id='task-webhook-123')
         self.app.branch = 'feature/auto-deploy'
         self.app.save(update_fields=['branch'])
@@ -3079,6 +3179,70 @@ class WebhookSetupTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['status'], 'deploy_started')
         mock_redeploy.assert_called_once_with(app_id=self.app.id, commit='abc123def4567890')
+
+    @patch('core.adapters.utils.git_webhook.AppMixin.redeploy_app.delay')
+    def test_github_webhook_ignores_repeated_delivery_id(self, mock_redeploy):
+        mock_redeploy.return_value = Mock(id='task-webhook-deduplicated')
+        payload = json.dumps({
+            'ref': 'refs/heads/main',
+            'after': 'abc123def4567890',
+            'pusher': {'name': 'student'},
+        })
+        headers = {
+            'content_type': 'application/json',
+            'HTTP_X_GITHUB_EVENT': 'push',
+            'HTTP_X_GITHUB_DELIVERY': 'delivery-test-123',
+        }
+
+        first_response = self.client.post(
+            f'/api/webhooks/github/{self.app.id}/',
+            data=payload,
+            **headers,
+        )
+        duplicate_response = self.client.post(
+            f'/api/webhooks/github/{self.app.id}/',
+            data=payload,
+            **headers,
+        )
+
+        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(first_response.json()['status'], 'deploy_started')
+        self.assertEqual(duplicate_response.status_code, 200)
+        self.assertEqual(duplicate_response.json()['status'], 'duplicate')
+        mock_redeploy.assert_called_once_with(app_id=self.app.id, commit='abc123def4567890')
+
+    @patch('core.adapters.utils.git_webhook.AppMixin.redeploy_app.delay')
+    def test_github_webhook_releases_delivery_when_task_cannot_be_queued(self, mock_redeploy):
+        payload = json.dumps({
+            'ref': 'refs/heads/main',
+            'after': 'abc123def4567890',
+            'pusher': {'name': 'student'},
+        })
+        headers = {
+            'content_type': 'application/json',
+            'HTTP_X_GITHUB_EVENT': 'push',
+            'HTTP_X_GITHUB_DELIVERY': 'delivery-queue-failure-123',
+        }
+        mock_redeploy.side_effect = RuntimeError('broker unavailable')
+
+        with self.assertRaisesRegex(RuntimeError, 'broker unavailable'):
+            self.client.post(
+                f'/api/webhooks/github/{self.app.id}/',
+                data=payload,
+                **headers,
+            )
+
+        mock_redeploy.side_effect = None
+        mock_redeploy.return_value = Mock(id='task-webhook-retry')
+        retry_response = self.client.post(
+            f'/api/webhooks/github/{self.app.id}/',
+            data=payload,
+            **headers,
+        )
+
+        self.assertEqual(retry_response.status_code, 200)
+        self.assertEqual(retry_response.json()['status'], 'deploy_started')
+        self.assertEqual(mock_redeploy.call_count, 2)
 
     @patch('core.adapters.git_mixins.repo.Github')
     def test_create_webhook_repairs_incomplete_existing_hook(self, mock_github_cls):
@@ -3099,3 +3263,29 @@ class WebhookSetupTests(APITestCase):
         self.assertTrue(hook.active)
         self.assertEqual(hook.events, ['push'])
         self.assertEqual(hook.config['content_type'], 'json')
+
+    @patch('core.adapters.git_mixins.repo.Github')
+    def test_create_webhook_only_rewrites_valid_hook_when_forced(self, mock_github_cls):
+        from core.adapters import GitHubAdapter
+
+        expected_url = f'https://backend.example.com/api/webhooks/github/{self.app.id}/'
+        hook = FakeHook(100, expected_url)
+        mock_github_cls.return_value.get_repo.return_value = FakeRepo(expected_url, hooks=[hook])
+        adapter = GitHubAdapter()
+
+        existing_result = adapter.create_webhook(
+            repo_name='org/repo',
+            app_id=self.app.id,
+            user_id=self.request_user.id,
+        )
+        self.assertEqual(existing_result['status'], 'webhook ja existe')
+        self.assertFalse(hook.edited)
+
+        updated_result = adapter.create_webhook(
+            repo_name='org/repo',
+            app_id=self.app.id,
+            user_id=self.request_user.id,
+            force_update=True,
+        )
+        self.assertEqual(updated_result['status'], 'webhook atualizado')
+        self.assertTrue(hook.edited)

@@ -1160,7 +1160,7 @@ class AppViewSet(ModelViewSet):
         app = self.get_object()
         user = request.user
 
-        result = ensure_github_webhook(app, preferred_user=user)
+        result = ensure_github_webhook(app, preferred_user=user, force_update=True)
         if result.get('ok'):
             return Response(result)
 

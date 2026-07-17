@@ -5,7 +5,7 @@ from celery import Task, shared_task
 
 from core.adapters import DokkuAdapter, GitHubAdapter
 from core.adapters.git_utils import build_github_auth_url, mask_git_credentials, parse_github_repo_name
-from core.apps.github_integration import ensure_github_webhook
+from core.apps.github_integration import reconcile_github_webhook
 from core.apps.models import App
 from core.apps.process_scale import reapply_saved_process_scales
 from core.apps.utils import slugify_dokku
@@ -82,12 +82,17 @@ class CreateAppMixin:
 
         try:
             if CreateAppMixin._ensure_dokku_app(task, dokku_adapter, app, dokku_app_name, logger):
+                CreateAppMixin._setup_webhook(github_adapter, user, app, logger, progress=99)
                 logger.warning(
                     f'Aplicação {dokku_app_name} já existe no Dokku', category=LogCategory.CREATE, progress=100
                 )
                 return {'status': 'already_exists', 'app_id': app.id}  # type: ignore
 
             CreateAppMixin._apply_env_vars(task, dokku_adapter, dokku_app_name, env_vars, logger)
+
+            # O webhook independe do build. Configurá-lo cedo permite que um
+            # push corrija automaticamente um primeiro deploy com falha.
+            CreateAppMixin._setup_webhook(github_adapter, user, app, logger, progress=26)
 
             git_url = CreateAppMixin._handle_deploy_keys(
                 task, github_adapter, user, app.git, logger
@@ -108,9 +113,6 @@ class CreateAppMixin:
                     category=LogCategory.DEPLOY,
                     progress=86,
                 )
-
-            # Configura webhook para deploy automático
-            CreateAppMixin._setup_webhook(github_adapter, user, app, logger)
 
             CreateAppMixin._set_letsencrypt(self, dokku_app_name, logger)
 
@@ -381,36 +383,21 @@ class CreateAppMixin:
             return None
 
     @staticmethod
-    def _setup_webhook(gh_adapter: GitHubAdapter, user: User, app: App, logger: AppLogManager):
-        logger.info('Configurando webhook para deploy automatico...', category=LogCategory.GIT, progress=86)
-        try:
-            result = ensure_github_webhook(app, preferred_user=user, github_adapter=gh_adapter)
-            if result.get('status') == 'webhook atualizado':
-                logger.success('Webhook reparado e atualizado', category=LogCategory.GIT, progress=87)
-            elif result.get('status') == 'webhook criado':
-                logger.success(
-                    f"Webhook configurado! Deploys automaticos ativados para branch '{app.branch}'",
-                    category=LogCategory.GIT,
-                    progress=87,
-                )
-            elif result.get('ok'):
-                logger.info(
-                    f'Webhook ja estava configurado ({result.get("configured_by", "usuario desconhecido")})',
-                    category=LogCategory.GIT,
-                    progress=87,
-                )
-            else:
-                logger.warning(
-                    f'Webhook nao configurado: {result.get("error", result.get("status", "status desconhecido"))}',
-                    category=LogCategory.GIT,
-                    progress=87,
-                )
-        except Exception as e:
-            logger.warning(
-                f'Nao foi possivel configurar webhook automatico: {str(e)}',
-                category=LogCategory.GIT,
-                progress=87,
-            )
+    def _setup_webhook(
+        gh_adapter: GitHubAdapter,
+        user: User,
+        app: App,
+        logger: AppLogManager,
+        *,
+        progress: int = 26,
+    ) -> dict:
+        return reconcile_github_webhook(
+            app,
+            preferred_user=user,
+            github_adapter=gh_adapter,
+            app_logger=logger,
+            progress=progress,
+        )
 
     def _set_letsencrypt(self, dokku_app_name: str, logger: AppLogManager):
         """Configura Let's Encrypt para a aplicação."""
