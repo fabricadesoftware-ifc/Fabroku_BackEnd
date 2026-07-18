@@ -111,6 +111,57 @@ class AdminUnfoldSmokeTests(APITestCase):
         self.assertContains(response, 'Auditoria')
 
 
+class UserEndpointSecurityTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='user-route-security@example.com',
+            password='senha123',
+            name='User Route Security',
+        )
+
+    def test_anonymous_user_cannot_create_account(self):
+        response = self.client.post(
+            '/api/auth/users/',
+            {'email': 'anonymous-created@example.com', 'name': 'Anonymous'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertFalse(User.objects.filter(email='anonymous-created@example.com').exists())
+
+    def test_authenticated_user_cannot_create_account(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(
+            '/api/auth/users/',
+            {'email': 'authenticated-created@example.com', 'name': 'Authenticated'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 405)
+        self.assertFalse(User.objects.filter(email='authenticated-created@example.com').exists())
+
+    def test_authenticated_user_cannot_modify_or_delete_another_account(self):
+        target = User.objects.create_user(
+            email='target-route-security@example.com',
+            password='senha123',
+            name='Target Route Security',
+        )
+        self.client.force_authenticate(user=self.user)
+
+        patch_response = self.client.patch(
+            f'/api/auth/users/{target.id}/',
+            {'is_active': False},
+            format='json',
+        )
+        delete_response = self.client.delete(f'/api/auth/users/{target.id}/')
+
+        self.assertEqual(patch_response.status_code, 405)
+        self.assertEqual(delete_response.status_code, 405)
+        target.refresh_from_db()
+        self.assertTrue(target.is_active)
+
+
 class UserAdminListTests(APITestCase):
     def setUp(self):
         self.client = APIClient()

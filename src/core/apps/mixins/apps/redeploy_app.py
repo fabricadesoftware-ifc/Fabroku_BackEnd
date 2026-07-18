@@ -7,7 +7,7 @@ from celery import Task, shared_task
 
 from core.adapters import DokkuAdapter, GitHubAdapter
 from core.adapters.git_utils import build_github_auth_url, mask_git_credentials, parse_github_repo_name
-from core.apps.github_integration import resolve_git_sync_plan
+from core.apps.github_integration import reconcile_github_webhook, resolve_git_sync_plan
 from core.apps.models import App
 from core.apps.process_scale import reapply_saved_process_scales
 from core.apps.service_types import is_postgres_service_type
@@ -93,6 +93,13 @@ class RedeployAppMixin:
         # --- GitHub Commit Status ---
         github_adapter = GitHubAdapter()
         requested_by = RedeployAppMixin._get_requested_by(requested_by_id)
+        reconcile_github_webhook(
+            app,
+            preferred_user=requested_by,
+            github_adapter=github_adapter,
+            app_logger=logger,
+            progress=6,
+        )
         git_sync_plan = resolve_git_sync_plan(app, preferred_user=requested_by)
         git_token = git_sync_plan.token
         if not git_token:

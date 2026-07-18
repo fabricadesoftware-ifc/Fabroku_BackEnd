@@ -110,6 +110,7 @@ def ensure_github_webhook(
     preferred_user: User | None = None,
     *,
     github_adapter: GitHubAdapter | None = None,
+    force_update: bool = False,
 ) -> dict:
     """
     Cria ou repara o webhook de um app tentando todos os tokens do projeto.
@@ -149,11 +150,26 @@ def ensure_github_webhook(
     attempts = []
 
     for candidate_user in candidate_users:
-        result = adapter.create_webhook(
-            repo_name=repo_name,
-            app_id=app.id,
-            user_id=candidate_user.id,
-        )
+        try:
+            result = adapter.create_webhook(
+                repo_name=repo_name,
+                app_id=app.id,
+                user_id=candidate_user.id,
+                force_update=force_update,
+            )
+        except Exception as exc:
+            logger.exception(
+                'Erro inesperado ao configurar webhook do app %s via %s',
+                app.name,
+                display_user(candidate_user),
+            )
+            attempts.append({
+                'user': display_user(candidate_user),
+                'status': 'erro inesperado',
+                'error': str(exc),
+            })
+            continue
+
         status_value = result.get('status', 'unknown')
 
         logger.info(
@@ -193,6 +209,84 @@ def ensure_github_webhook(
         'webhook_url': webhook_url,
         'attempts': attempts,
     }
+
+
+def reconcile_github_webhook(
+    app: App,
+    preferred_user: User | None = None,
+    *,
+    github_adapter: GitHubAdapter | None = None,
+    app_logger: Any | None = None,
+    progress: int = 0,
+) -> dict:
+    """Cria ou repara o webhook sem transformar a falha em falha de deploy."""
+    if app_logger:
+        from core.logs.models import LogCategory  # noqa: PLC0415
+
+        app_logger.info(
+            'Configurando webhook para deploy automatico...',
+            category=LogCategory.GIT,
+            progress=progress,
+        )
+
+    try:
+        result = ensure_github_webhook(
+            app,
+            preferred_user=preferred_user,
+            github_adapter=github_adapter,
+        )
+    except Exception as exc:
+        logger.exception('Falha inesperada ao reconciliar webhook do app %s', app.name)
+        result = {
+            'ok': False,
+            'status': 'erro inesperado',
+            'error': str(exc),
+            'attempts': [],
+        }
+
+    if not app_logger:
+        return result
+
+    from core.logs.models import LogCategory  # noqa: PLC0415
+
+    log_progress = min(progress + 1, 100)
+    metadata = {
+        'status': result.get('status'),
+        'configured_by': result.get('configured_by'),
+        'hook_id': result.get('hook_id'),
+        'attempts': result.get('attempts', []),
+    }
+
+    if result.get('status') == 'webhook atualizado':
+        app_logger.success(
+            'Webhook reparado e atualizado',
+            category=LogCategory.GIT,
+            progress=log_progress,
+            metadata=metadata,
+        )
+    elif result.get('status') == 'webhook criado':
+        app_logger.success(
+            f"Webhook configurado! Deploys automaticos ativados para branch '{app.branch}'",
+            category=LogCategory.GIT,
+            progress=log_progress,
+            metadata=metadata,
+        )
+    elif result.get('ok'):
+        app_logger.info(
+            f'Webhook ja estava configurado ({result.get("configured_by", "usuario desconhecido")})',
+            category=LogCategory.GIT,
+            progress=log_progress,
+            metadata=metadata,
+        )
+    else:
+        app_logger.warning(
+            f'Webhook nao configurado: {result.get("error", result.get("status", "status desconhecido"))}',
+            category=LogCategory.GIT,
+            progress=log_progress,
+            metadata=metadata,
+        )
+
+    return result
 
 
 def resolve_git_sync_plan(app: App, preferred_user: User | None = None) -> GitSyncPlan:

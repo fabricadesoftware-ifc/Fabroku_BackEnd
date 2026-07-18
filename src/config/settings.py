@@ -77,28 +77,38 @@ ASGI_APPLICATION = 'config.asgi.application'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 INSTALLED_APPS = [
-    'daphne',
-    'unfold',
-    'unfold.contrib.filters',
-    'unfold.contrib.inlines',
-    'django.contrib.admin',
-    'django.contrib.auth',
-    'django.contrib.contenttypes',
-    'django.contrib.sessions',
-    'django.contrib.messages',
-    'django.contrib.staticfiles',
-    'rest_framework',
-    'rest_framework_simplejwt',
-    'corsheaders',
-    'drf_spectacular',
-    'django_filters',
-    'channels',
-    'django_celery_results',
-    'core.adapters',
-    'core.logs',
-    'core.project',
-    'core.apps',
-    'core.auth_user',
+    # ASGI
+    "daphne",
+
+    # Django Unfold — precisa vir antes do admin
+    "unfold",
+    "unfold.contrib.filters",
+    "unfold.contrib.inlines",
+
+    # Django
+    "django.contrib.admin",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
+
+    # Bibliotecas externas
+    "rest_framework",
+    "rest_framework_simplejwt",
+    "corsheaders",
+    "drf_spectacular",
+    "django_extensions",
+    "django_filters",
+    "channels",
+    "django_celery_results",
+
+    # Aplicações do projeto
+    "core.auth_user",
+    "core.adapters",
+    "core.logs",
+    "core.project",
+    "core.apps",
 ]
 
 MIDDLEWARE = [
