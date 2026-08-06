@@ -43,4 +43,4 @@ jobs:
         run: python src/manage.py makemigrations --check --dry-run
 
       - name: Run Django tests
-        run: python src/manage.py test core.apps.tests core.auth_user.tests core.logs.tests core.project.tests
+        run: python src/manage.py test core.apps.tests core.auth_user.tests core.logs.tests projects.tests

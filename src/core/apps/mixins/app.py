@@ -1,25 +1,13 @@
-from .apps.create_app import CreateAppMixin
-from .apps.delete_app import DeleteAppMixin
 from .apps.interactive_run import InteractiveRunMixin
-from .apps.manage_app import ManageAppMixin
-from .apps.process_scale import ProcessScaleMixin
-from .apps.redeploy_app import RedeployAppMixin
-from .apps.run_command import RunCommandMixin
-from .apps.run_data import RunDataMixin
-from .apps.update_app import UpdateAppMixin
 
 
-class AppMixin(
-    CreateAppMixin,
-    DeleteAppMixin,
-    RedeployAppMixin,
-    UpdateAppMixin,
-    ManageAppMixin,
-    ProcessScaleMixin,
-    RunCommandMixin,
-    RunDataMixin,
-    InteractiveRunMixin,
-):
-    """Mixin agregador para operacoes de aplicacoes."""
+class AppMixin(InteractiveRunMixin):
+    """Mixin agregador para operacoes de aplicacoes.
+
+    Create/delete/redeploy/update/manage/run_command/run_data/process_scale ja
+    foram portados para use cases (applications/use_cases/, applications/tasks.py)
+    e removidos daqui. A sessao interativa (loop de execucao SSH) ainda nao tem
+    use case equivalente — ver ADJUSTS_REFACTOR.md, Fase E.
+    """
 
     pass
