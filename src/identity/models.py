@@ -84,14 +84,15 @@ class User(AbstractUser):
     def apps_count(self) -> int:
         """Conta o total de apps em projetos do usuário."""
         from applications.models import App  # noqa: PLC0415
-
+        print(self.pk)
+        if self.pk == 163762424:
+            breakpoint()
         return App.objects.filter(project__users=self, deleted_at__isnull=True).distinct().count()
 
     @property
     def services_count(self) -> int:
         """Conta o total de serviços em projetos do usuário."""
         from service_mgmt.models import Service  # noqa: PLC0415
-
         return Service.objects.filter(project__users=self, deleted_at__isnull=True).distinct().count()
 
     def can_create_app(self) -> bool:

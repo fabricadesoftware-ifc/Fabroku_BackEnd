@@ -2,7 +2,7 @@ import hashlib
 
 from django.conf import settings
 from django.core.cache import cache
-from django.db.models import Count
+from django.db.models import Count, Q
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.decorators import action, api_view, permission_classes
@@ -49,8 +49,16 @@ class UserViewSet(ReadOnlyModelViewSet):
 
     def _get_admin_queryset(self):
         return User.objects.annotate(
-            annotated_apps_count=Count('projects__app__id', distinct=True),
-            annotated_services_count=Count('projects__service__id', distinct=True),
+            annotated_apps_count=Count(
+                'projects__app__id',
+                distinct=True,
+                filter=Q(projects__app__deleted_at__isnull=True),
+            ),
+            annotated_services_count=Count(
+                'projects__service__id',
+                distinct=True,
+                filter=Q(projects__service__deleted_at__isnull=True),
+            ),
         )
 
     def _admin_list_cache_suffix(self, request) -> str:
