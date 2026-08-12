@@ -1,7 +1,7 @@
 from channels.db import database_sync_to_async
 from django.contrib.auth.models import AnonymousUser
 
-from core.auth_user.models import CLIToken
+from identity.models import CLIToken
 
 
 def _authorization_header(scope) -> str:

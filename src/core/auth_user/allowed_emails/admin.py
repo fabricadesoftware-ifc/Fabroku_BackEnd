@@ -1,7 +1,7 @@
 from django.contrib import admin
 from unfold.admin import ModelAdmin
 
-from .models import AllowedEmail
+from identity.models import AllowedEmail
 
 
 @admin.register(AllowedEmail)

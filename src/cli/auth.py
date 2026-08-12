@@ -83,7 +83,7 @@ def login(api_url):
     port = _find_free_port()
     login_url = f'{base_url}/api/auth/cli/login/?port={port}'
 
-    click.echo(f'🔐 Abrindo browser para autenticação...')
+    click.echo('🔐 Abrindo browser para autenticação...')
     click.echo(f'   URL: {login_url}')
     click.echo(f'   Aguardando callback na porta {port}...\n')
 
@@ -114,7 +114,7 @@ def login(api_url):
     )
 
     click.echo(f'✅ Autenticado como {click.style(_CallbackHandler.user, fg="green", bold=True)}')
-    click.echo(f'   Token salvo em ~/.fabroku/config.json')
+    click.echo('   Token salvo em ~/.fabroku/config.json')
 
 
 @click.command()

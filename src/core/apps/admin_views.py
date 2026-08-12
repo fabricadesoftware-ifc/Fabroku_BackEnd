@@ -9,14 +9,15 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from core.adapters import DokkuAdapter
+from applications.models import App
 from core.apps.mixins.services.service_env import postgres_service_types
-from core.apps.models import App, Service
-from core.cache_versioning import (
+from infrastructure.adapters import DokkuAdapter
+from infrastructure.cache_versioning import (
     ADMIN_STORAGE_USAGE_CACHE_NAMESPACE,
     build_versioned_cache_key,
     get_cache_ttl,
 )
+from service_mgmt.models import Service
 
 
 def _format_size(bytes_val: int) -> str:
@@ -28,6 +29,7 @@ def _format_size(bytes_val: int) -> str:
             return f'{bytes_val:.1f} {unit}'
         bytes_val /= 1024
     return f'{bytes_val:.1f} PB'
+
 
 def _storage_usage_max_workers(total_services: int) -> int:
     configured = max(1, int(getattr(settings, 'ADMIN_STORAGE_USAGE_MAX_WORKERS', 6)))

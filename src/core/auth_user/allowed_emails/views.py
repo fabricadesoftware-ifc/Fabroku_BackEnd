@@ -3,7 +3,8 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 
-from .models import AllowedEmail
+from identity.models import AllowedEmail
+
 from .serializers import AllowedEmailCreateSerializer, AllowedEmailSerializer
 
 

@@ -1,7 +1,8 @@
 import re
 
-from core.apps.models import App, Service
-from core.apps.service_types import ServiceRuntime, is_postgres_service_type
+from applications.models import App
+from service_mgmt.models import Service
+from service_mgmt.service_types import ServiceRuntime, is_postgres_service_type
 
 ENV_KEY_MAX_LENGTH = 255
 ENV_KEY_INVALID_CHARS = re.compile(r'[^A-Z0-9_]+')

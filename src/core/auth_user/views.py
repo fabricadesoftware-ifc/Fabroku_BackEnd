@@ -14,10 +14,10 @@ from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from core.adapters.utils.git_callback import set_auth_cookies
-from core.cache_versioning import ADMIN_USERS_LIST_CACHE_NAMESPACE, build_versioned_cache_key, get_cache_ttl
+from identity.models import User
+from infrastructure.adapters.utils.git_callback import set_auth_cookies
+from infrastructure.cache_versioning import ADMIN_USERS_LIST_CACHE_NAMESPACE, build_versioned_cache_key, get_cache_ttl
 
-from .models import User
 from .serializers import UserAdminSerializer, UserRetrieveSerializer, UserSerializer
 
 

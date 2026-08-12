@@ -1,13 +1,11 @@
 import logging
 import re
 import shlex
-import socket
 import time
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import cast
 
-import paramiko
 from asgiref.sync import async_to_sync
 from celery import Task, shared_task
 from channels.layers import get_channel_layer
@@ -15,9 +13,10 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from core.adapters import DokkuAdapter
-from core.apps.interactive_crypto import decrypt_interactive_text, encrypt_interactive_text
-from core.apps.models import (
+from applications.ports.i_dokku import IDokkuPort
+from infrastructure.adapters import DokkuAdapter
+from interactive_sessions.interactive_crypto import decrypt_interactive_text, encrypt_interactive_text
+from interactive_sessions.models import (
     InteractiveRunAuditChunk,
     InteractiveRunAuditDirection,
     InteractiveRunCommandKind,
@@ -26,10 +25,9 @@ from core.apps.models import (
     InteractiveRunSession,
     InteractiveRunSessionStatus,
 )
-from core.logs.models import AppLogManager, LogCategory
+from observability.models import AppLogManager, LogCategory
 
 INTERACTIVE_RUN_POLL_INTERVAL = 0.2
-INTERACTIVE_RUN_OUTPUT_CHUNK_SIZE = 4096
 INTERACTIVE_SUCCESS_MARKERS = (
     'superuser created successfully',
     'superusuario criado com sucesso',
@@ -567,43 +565,16 @@ def _flush_output_buffer(
     return trailing_fragment
 
 
-def _read_channel_output(channel) -> str:
-    parts = []
-
-    while channel.recv_ready():
-        parts.append(channel.recv(INTERACTIVE_RUN_OUTPUT_CHUNK_SIZE).decode('utf-8', errors='replace'))
-
-    while channel.recv_stderr_ready():
-        parts.append(channel.recv_stderr(INTERACTIVE_RUN_OUTPUT_CHUNK_SIZE).decode('utf-8', errors='replace'))
-
-    return ''.join(parts)
-
-
-def _open_interactive_command(dokku_adapter: DokkuAdapter, full_command: str):
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    pkey = dokku_adapter._get_pkey()
-    client.connect(
-        dokku_adapter.host,
-        port=dokku_adapter.port,
-        username=dokku_adapter.username,
-        pkey=pkey,
-    )
-    stdin, stdout, stderr = client.exec_command(full_command, get_pty=True)
-    stdout.channel.settimeout(INTERACTIVE_RUN_POLL_INTERVAL)
-    stderr.channel.settimeout(INTERACTIVE_RUN_POLL_INTERVAL)
-    return client, stdin, stdout, stderr
-
-
 def _run_interactive_command_loop(
     session: InteractiveRunSession,
     driver,
-    dokku_adapter: DokkuAdapter,
+    dokku_port: IDokkuPort,
     logger: AppLogManager,
 ):
     command = driver.build_command(session.manage_path)
     full_command = f'run {session.app.name_dokku} {command}'
-    client, stdin, stdout, _stderr = _open_interactive_command(dokku_adapter, full_command)
+    channel = dokku_port.open_interactive_channel(full_command)
+    channel.settimeout(INTERACTIVE_RUN_POLL_INTERVAL)
     buffer = ''
     output_state = {'saw_success_output': False}
     sensitive_values: set[str] = set()
@@ -617,10 +588,7 @@ def _run_interactive_command_loop(
             if control_state.expires_at <= timezone.now():
                 raise InteractiveRunExpired('Sessao expirada por inatividade.')
 
-            try:
-                output = _read_channel_output(stdout.channel)
-            except socket.timeout:
-                output = ''
+            output = channel.read_output()
 
             if output:
                 buffer = _normalize_terminal_output(buffer + output)
@@ -642,11 +610,10 @@ def _run_interactive_command_loop(
                         suppressed_echoes.add(stripped_answer)
                         if control_state.awaiting_prompt_secret:
                             sensitive_values.add(stripped_answer)
-                    stdin.write(answer + '\n')
-                    stdin.flush()
+                    channel.write(answer + '\n')
 
-            if stdout.channel.exit_status_ready():
-                trailing_output = _read_channel_output(stdout.channel)
+            if channel.exit_status_ready():
+                trailing_output = channel.read_output()
                 if trailing_output:
                     buffer = _normalize_terminal_output(buffer + trailing_output)
                     buffer = _flush_output_buffer(
@@ -674,26 +641,23 @@ def _run_interactive_command_loop(
 
             time.sleep(INTERACTIVE_RUN_POLL_INTERVAL)
 
-        return stdout.channel.recv_exit_status(), output_state
+        return channel.exit_status(), output_state
     finally:
-        try:
-            stdin.close()
-        except Exception:
-            pass
-        client.close()
+        channel.close()
 
 
 def _run_postgres_connect_loop(
     session: InteractiveRunSession,
     driver: PostgresConnectDriver,
-    dokku_adapter: DokkuAdapter,
+    dokku_port: IDokkuPort,
 ) -> int:
     service = session.service
     if not service or not service.container_name:
         raise RuntimeError('Servico Postgres sem container_name configurado.')
 
     command = driver.build_command(service.container_name)
-    client, stdin, stdout, _stderr = _open_interactive_command(dokku_adapter, command)
+    channel = dokku_port.open_interactive_channel(command)
+    channel.settimeout(INTERACTIVE_RUN_POLL_INTERVAL)
 
     try:
         while True:
@@ -703,33 +667,25 @@ def _run_postgres_connect_loop(
             if control_state.expires_at <= timezone.now():
                 raise InteractiveRunExpired('Sessao Postgres expirada por inatividade.')
 
-            try:
-                output = _read_channel_output(stdout.channel)
-            except socket.timeout:
-                output = ''
+            output = channel.read_output()
 
             if output:
                 _record_terminal_output(str(session.id), output)
 
             for input_value in _consume_terminal_input_chunks(str(session.id)):
-                stdin.write(input_value)
-                stdin.flush()
+                channel.write(input_value)
 
-            if stdout.channel.exit_status_ready():
-                trailing_output = _read_channel_output(stdout.channel)
+            if channel.exit_status_ready():
+                trailing_output = channel.read_output()
                 if trailing_output:
                     _record_terminal_output(str(session.id), trailing_output)
                 break
 
             time.sleep(INTERACTIVE_RUN_POLL_INTERVAL)
 
-        return stdout.channel.recv_exit_status()
+        return channel.exit_status()
     finally:
-        try:
-            stdin.close()
-        except Exception:
-            pass
-        client.close()
+        channel.close()
 
 
 def execute_interactive_session(session_id: str, *, task_id: str | None = None, runner_id: str | None = None) -> dict:

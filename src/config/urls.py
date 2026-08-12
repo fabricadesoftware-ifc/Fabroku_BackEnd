@@ -13,15 +13,15 @@ from rest_framework.response import Response
 from rest_framework.reverse import reverse
 from rest_framework.routers import DefaultRouter
 
-from core.adapters.utils.git_callback import github_callback
 from core.apps.admin_views import storage_usage
-from core.adapters.utils.git_redirect import github_login
-from core.adapters.utils.git_repos import get_git_repos
-from core.adapters.utils.git_webhook import github_webhook
 from core.auth_user.allowed_emails.views import AllowedEmailViewSet
 from core.auth_user.cli_auth import cli_login
 from core.auth_user.views import CustomTokenRefreshView
-from core.platform_config import platform_config
+from infrastructure.adapters.utils.git_callback import github_callback
+from infrastructure.adapters.utils.git_redirect import github_login
+from infrastructure.adapters.utils.git_repos import get_git_repos
+from infrastructure.adapters.utils.git_webhook import github_webhook
+from infrastructure.platform_config import platform_config
 
 # Router para AllowedEmails
 allowed_emails_router = DefaultRouter()
@@ -44,9 +44,10 @@ urlpatterns = [
     path('api/', api_root, name='api-root'),
     path('api/', include(allowed_emails_router.urls)),
     path('api/auth/', include('core.auth_user.urls')),
-    path('api/apps/', include('core.apps.urls')),
-    path('api/projects/', include('core.project.urls')),
-    path('api/logs/', include('core.logs.urls')),
+    path('api/apps/', include('applications.urls')),
+    path('api/apps/', include('service_mgmt.urls')),
+    path('api/projects/', include('projects.urls')),
+    path('api/logs/', include('observability.urls')),
     path('api/platform/config/', platform_config, name='platform-config'),
     path('api/token/refresh/', CustomTokenRefreshView.as_view(), name='token_refresh'),
     path('api/admin/', django_admin.site.urls),
