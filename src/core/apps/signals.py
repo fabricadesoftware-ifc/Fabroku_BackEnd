@@ -1,15 +1,16 @@
 from django.db.models.signals import m2m_changed, post_delete, post_save
 from django.dispatch import receiver
 
-from core.apps.models import App, Service
-from core.auth_user.models import User
-from core.cache_versioning import (
-    APP_LAST_COMMIT_CACHE_NAMESPACE,
+from applications.models import App
+from identity.models import User
+from infrastructure.cache_versioning import (
     ADMIN_STORAGE_USAGE_CACHE_NAMESPACE,
     ADMIN_USERS_LIST_CACHE_NAMESPACE,
+    APP_LAST_COMMIT_CACHE_NAMESPACE,
     bump_cache_version,
 )
-from core.project.models import Project
+from projects.models import Project
+from service_mgmt.models import Service
 
 
 def _invalidate_admin_users_cache():

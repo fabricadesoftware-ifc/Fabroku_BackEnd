@@ -1,8 +1,8 @@
 import time
 from typing import Protocol
 
-from core.apps.models import App
-from core.logs.models import AppLogManager, LogCategory
+from applications.models import App
+from observability.models import AppLogManager, LogCategory
 
 
 class ServiceConfigAdapter(Protocol):

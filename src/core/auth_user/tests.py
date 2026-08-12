@@ -6,11 +6,11 @@ from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rest_framework.test import APIClient, APITestCase
 
-from core.adapters.utils.git_email import verify_git_email
-from core.apps.models import App, Service
-from core.auth_user.allowed_emails.models import AllowedEmail
-from core.auth_user.models import User
-from core.project.models import Project
+from applications.models import App
+from identity.models import AllowedEmail, User
+from infrastructure.adapters.utils.git_email import verify_git_email
+from projects.models import Project
+from service_mgmt.models import Service
 
 
 class GitEmailPolicyTests(APITestCase):

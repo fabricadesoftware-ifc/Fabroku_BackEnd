@@ -1,6 +1,11 @@
 import re
 
 
+def has_global_access(user) -> bool:
+    """Retorna True para perfis com visibilidade administrativa global."""
+    return bool(getattr(user, 'is_superuser', False))
+
+
 def slugify_dokku(name: str) -> str:
     """Converte um nome em um slug válido para Dokku."""
 

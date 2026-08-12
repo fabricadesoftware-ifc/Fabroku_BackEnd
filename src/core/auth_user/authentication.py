@@ -54,7 +54,7 @@ class CLITokenAuthentication(BaseAuthentication):
         if not token:
             return None
 
-        from core.auth_user.models import CLIToken
+        from identity.models import CLIToken
 
         try:
             cli_token = CLIToken.objects.select_related('user').get(token=token, is_active=True)

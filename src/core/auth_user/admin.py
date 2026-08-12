@@ -5,7 +5,7 @@ from django.contrib.auth.models import Group
 from unfold.admin import ModelAdmin
 
 from core.auth_user.allowed_emails.admin import *  # noqa: F401, F403
-from core.auth_user.models import CLIToken, User
+from identity.models import CLIToken, User
 
 
 @admin.register(User)

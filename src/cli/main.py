@@ -53,13 +53,13 @@ def whoami():
         user_data = api.get_user_me()
         click.echo(f'   Email: {user_data.get("email")}')
         if user_data.get('is_fabric'):
-            click.echo(f'   🏭 Perfil privilegiado')
+            click.echo('   🏭 Perfil privilegiado')
         if user_data.get('is_superuser'):
-            click.echo(f'   🔑 Administrador')
-        click.echo(f'   ✅ Token válido')
+            click.echo('   🔑 Administrador')
+        click.echo('   ✅ Token válido')
     except APIError as e:
         if e.status_code == 401:  # noqa: PLR2004
-            click.echo(f'   ❌ Token expirado ou inválido')
+            click.echo('   ❌ Token expirado ou inválido')
         else:
             click.echo(f'   ⚠️  Erro ao verificar: {e.detail}')
 

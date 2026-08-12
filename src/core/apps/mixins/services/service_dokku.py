@@ -1,12 +1,13 @@
 import time
 
+from applications.models import App
 from core.apps.mixins.services.database_url import (
     sync_config_url_from_dokku,
 )
 from core.apps.mixins.services.service_env import dokku_alias_for_env_key, postgres_service_types
-from core.apps.models import App, Service
-from core.apps.service_types import ServiceRuntime, is_postgres_runtime
-from core.logs.models import AppLogManager, LogCategory
+from observability.models import AppLogManager, LogCategory
+from service_mgmt.models import Service
+from service_mgmt.service_types import ServiceRuntime, is_postgres_runtime
 
 
 def dokku_output_failed(output: str) -> bool:

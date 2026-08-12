@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import AllowedEmail
+from identity.models import AllowedEmail
 
 
 class AllowedEmailSerializer(serializers.ModelSerializer):

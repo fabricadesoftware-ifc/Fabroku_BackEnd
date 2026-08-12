@@ -14,7 +14,7 @@ from pathlib import Path
 
 import click
 
-from .config import get_token, is_authenticated
+from .config import is_authenticated
 
 # Arquivos necessários por tipo
 REQUIRED_FILES = {

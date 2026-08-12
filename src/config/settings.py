@@ -105,10 +105,18 @@ INSTALLED_APPS = [
 
     # Aplicações do projeto
     "core.auth_user",
-    "core.adapters",
     "core.logs",
     "core.project",
     "core.apps",
+    "applications",
+
+    # Fase 3 — bounded contexts novos (ainda sem models; migração incremental)
+    "identity",
+    "projects",
+    "service_mgmt",
+    "interactive_sessions",
+    "observability",
+    "infrastructure",
 ]
 
 MIDDLEWARE = [
@@ -119,7 +127,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'core.logs.middleware.SSHCommandAuditContextMiddleware',
+    'observability.middleware.SSHCommandAuditContextMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -224,22 +232,22 @@ UNFOLD = {
                     {
                         'title': _('Projetos'),
                         'icon': 'folder_open',
-                        'link': reverse_lazy('admin:project_project_changelist'),
+                        'link': reverse_lazy('admin:projects_project_changelist'),
                     },
                     {
                         'title': _('Apps'),
                         'icon': 'deployed_code',
-                        'link': reverse_lazy('admin:apps_app_changelist'),
+                        'link': reverse_lazy('admin:applications_app_changelist'),
                     },
                     {
                         'title': _('Serviços'),
                         'icon': 'database',
-                        'link': reverse_lazy('admin:apps_service_changelist'),
+                        'link': reverse_lazy('admin:service_mgmt_service_changelist'),
                     },
                     {
                         'title': _('Escala de processos'),
                         'icon': 'dynamic_feed',
-                        'link': reverse_lazy('admin:apps_appprocessscale_changelist'),
+                        'link': reverse_lazy('admin:applications_appprocessscale_changelist'),
                     },
                 ],
             },
@@ -251,17 +259,17 @@ UNFOLD = {
                     {
                         'title': _('Usuários'),
                         'icon': 'group',
-                        'link': reverse_lazy('admin:auth_user_user_changelist'),
+                        'link': reverse_lazy('admin:identity_user_changelist'),
                     },
                     {
                         'title': _('E-mails permitidos'),
                         'icon': 'mark_email_read',
-                        'link': reverse_lazy('admin:auth_user_allowedemail_changelist'),
+                        'link': reverse_lazy('admin:identity_allowedemail_changelist'),
                     },
                     {
                         'title': _('Tokens da CLI'),
                         'icon': 'key',
-                        'link': reverse_lazy('admin:auth_user_clitoken_changelist'),
+                        'link': reverse_lazy('admin:identity_clitoken_changelist'),
                     },
                     {
                         'title': _('Grupos e permissões'),
@@ -278,22 +286,22 @@ UNFOLD = {
                     {
                         'title': _('Logs dos apps'),
                         'icon': 'terminal',
-                        'link': reverse_lazy('admin:logs_applog_changelist'),
+                        'link': reverse_lazy('admin:observability_applog_changelist'),
                     },
                     {
                         'title': _('Sessões interativas'),
                         'icon': 'developer_mode',
-                        'link': reverse_lazy('admin:apps_interactiverunsession_changelist'),
+                        'link': reverse_lazy('admin:interactive_sessions_interactiverunsession_changelist'),
                     },
                     {
                         'title': _('Runners interativos'),
                         'icon': 'memory',
-                        'link': reverse_lazy('admin:apps_interactiverunrunner_changelist'),
+                        'link': reverse_lazy('admin:interactive_sessions_interactiverunrunner_changelist'),
                     },
                     {
                         'title': _('Artefatos de comandos'),
                         'icon': 'inventory_2',
-                        'link': reverse_lazy('admin:apps_apprunartifact_changelist'),
+                        'link': reverse_lazy('admin:applications_apprunartifact_changelist'),
                     },
                 ],
             },
@@ -305,17 +313,17 @@ UNFOLD = {
                     {
                         'title': _('Comandos SSH'),
                         'icon': 'security',
-                        'link': reverse_lazy('admin:logs_sshcommandaudit_changelist'),
+                        'link': reverse_lazy('admin:observability_sshcommandaudit_changelist'),
                     },
                     {
                         'title': _('Eventos interativos'),
                         'icon': 'event_note',
-                        'link': reverse_lazy('admin:apps_interactiverunevent_changelist'),
+                        'link': reverse_lazy('admin:interactive_sessions_interactiverunevent_changelist'),
                     },
                     {
                         'title': _('Conteúdo auditado'),
                         'icon': 'policy',
-                        'link': reverse_lazy('admin:apps_interactiverunauditchunk_changelist'),
+                        'link': reverse_lazy('admin:interactive_sessions_interactiverunauditchunk_changelist'),
                     },
                 ],
             },
@@ -337,8 +345,8 @@ CORS_ALLOWED_ORIGIN_REGEXES = _parse_csv_env('CORS_ALLOWED_ORIGIN_REGEXES', [
 ])
 
 AUTH_COOKIE_DOMAIN = _optional_env('AUTH_COOKIE_DOMAIN', '.fabricadesoftware.ifc.edu.br')
-AUTH_COOKIE_SAMESITE = 'None'
-AUTH_COOKIE_SECURE = True
+AUTH_COOKIE_SAMESITE = os.getenv('AUTH_COOKIE_SAMESITE', 'None')
+AUTH_COOKIE_SECURE = _parse_bool_env('AUTH_COOKIE_SECURE', True)
 
 CORS_ALLOW_CREDENTIALS = True
 
@@ -386,6 +394,7 @@ REST_FRAMEWORK = {
         'rest_framework.parsers.FormParser',
         'rest_framework.parsers.MultiPartParser',
     ],
+    'EXCEPTION_HANDLER': 'config.exception_handlers.fabroku_exception_handler',
 }
 
 SIMPLE_JWT = {
@@ -407,7 +416,7 @@ SPECTACULAR_SETTINGS = {
     'VERSION': '1.0.0',
 }
 
-AUTH_USER_MODEL = 'auth_user.User'
+AUTH_USER_MODEL = 'identity.User'
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
@@ -470,6 +479,7 @@ SSH_AUDIT_ENABLED = _parse_bool_env('SSH_AUDIT_ENABLED', True)
 SSH_AUDIT_RETENTION_DAYS = int(os.getenv('SSH_AUDIT_RETENTION_DAYS', '7'))
 
 CELERY_TIMEZONE = 'America/Sao_Paulo'
+CELERY_CONTROL_QUEUE_EXCLUSIVE = True
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30 * 60
 CELERY_RESULT_BACKEND = 'django-db'
