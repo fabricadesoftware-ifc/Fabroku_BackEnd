@@ -89,6 +89,7 @@ class SSHAdapter:
         self.command_timeout = command_timeout
         self.audit_context = audit_context or {}
         self._temp_key_file = None
+        self._client: paramiko.SSHClient | None = None
 
     @staticmethod
     def _successful_command_output(output: str, error_output: str) -> str:
@@ -122,21 +123,54 @@ class SSHAdapter:
 
         raise ValueError('Não foi possível carregar a chave SSH. Formato não suportado.')
 
-    def _run_command(self, command: str) -> str:
-        audit = begin_ssh_audit(command, self.audit_context)
+    def _get_client(self) -> paramiko.SSHClient:
+        """
+        Retorna uma conexão SSH já autenticada, reaproveitando a existente quando possível.
+
+        Uma operação Dokku (criação, redeploy, escala de processos etc.) encadeia vários
+        comandos em sequência. Sem reuso, cada um pagaria um handshake TCP + autenticação
+        por chave do zero; reaproveitar a mesma sessão enquanto ela estiver ativa evita
+        esse custo repetido a cada `_run_command*`.
+        """
+        if self._client is not None:
+            transport = self._client.get_transport()
+            if transport is not None and transport.is_active():
+                return self._client
+            self.close()
+
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        pkey = self._get_pkey()
+        client.connect(
+            self.host,
+            port=self.port,
+            username=self.username,
+            pkey=pkey,
+            timeout=self.connect_timeout,
+            banner_timeout=self.connect_timeout,
+            auth_timeout=self.connect_timeout,
+        )
+        self._client = client
+        return client
+
+    def close(self) -> None:
+        """Encerra a conexão SSH reaproveitada, se houver uma aberta."""
+        client = getattr(self, '_client', None)
+        if client is None:
+            return
         try:
-            pkey = self._get_pkey()
-            client.connect(
-                self.host,
-                port=self.port,
-                username=self.username,
-                pkey=pkey,
-                timeout=self.connect_timeout,
-                banner_timeout=self.connect_timeout,
-                auth_timeout=self.connect_timeout,
-            )
+            client.close()
+        except Exception:
+            pass
+        self._client = None
+
+    def __del__(self) -> None:
+        self.close()
+
+    def _run_command(self, command: str) -> str:
+        audit = begin_ssh_audit(command, self.audit_context)
+        try:
+            client = self._get_client()
             stdin, stdout, stderr = client.exec_command(command)
             stdout.channel.settimeout(self.command_timeout)
             stderr.channel.settimeout(self.command_timeout)
@@ -155,6 +189,7 @@ class SSHAdapter:
             finish_ssh_audit(audit, status='success', exit_status=exit_status)
             return self._successful_command_output(output, error_output)
         except socket.timeout:
+            self.close()
             finish_ssh_audit(
                 audit,
                 status='timeout',
@@ -162,19 +197,15 @@ class SSHAdapter:
             )
             return f'SSH Command Timeout after {self.command_timeout}s while executing: {command}'
         except Exception as e:
+            self.close()
             finish_ssh_audit(audit, status='error', error_summary=str(e))
             return f'SSH Connection Error: {e}'
-        finally:
-            client.close()
 
     def _run_command_with_stdin(self, command: str, stdin_data: str) -> str:
         """Executa um comando via SSH enviando dados no stdin."""
         audit = begin_ssh_audit(command, self.audit_context)
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
-            pkey = self._get_pkey()
-            client.connect(self.host, port=self.port, username=self.username, pkey=pkey)
+            client = self._get_client()
             stdin, stdout, stderr = client.exec_command(command)
             stdin.write(stdin_data)
             stdin.channel.shutdown_write()
@@ -193,10 +224,9 @@ class SSHAdapter:
             finish_ssh_audit(audit, status='success', exit_status=exit_status)
             return self._successful_command_output(output, error_output)
         except Exception as e:
+            self.close()
             finish_ssh_audit(audit, status='error', error_summary=str(e))
             return f'SSH Connection Error: {e}'
-        finally:
-            client.close()
 
     def _run_command_streaming(self, command: str) -> Generator[str, None, int]:
         """
@@ -208,13 +238,10 @@ class SSHAdapter:
                 print(line)
         """
         audit = begin_ssh_audit(command, self.audit_context)
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         exit_status = -1
 
         try:
-            pkey = self._get_pkey()
-            client.connect(self.host, port=self.port, username=self.username, pkey=pkey)
+            client = self._get_client()
             stdin, stdout, stderr = client.exec_command(command, get_pty=True)
 
             for line in iter(stdout.readline, ''):
@@ -230,11 +257,9 @@ class SSHAdapter:
                 finish_ssh_audit(audit, status='success', exit_status=exit_status)
 
         except Exception as e:
+            self.close()
             finish_ssh_audit(audit, status='error', error_summary=str(e))
             yield f'[SSH ERROR] {e}'
-
-        finally:
-            client.close()
 
         return exit_status
 
@@ -247,23 +272,12 @@ class SSHAdapter:
     ) -> Generator[str, None, int]:
         """Executa comando streaming permitindo encerrar quando `should_stop` retornar True."""
         audit = begin_ssh_audit(command, self.audit_context)
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         exit_status = -1
         text_buffer = ''
         stopped_by_request = False
 
         try:
-            pkey = self._get_pkey()
-            client.connect(
-                self.host,
-                port=self.port,
-                username=self.username,
-                pkey=pkey,
-                timeout=self.connect_timeout,
-                banner_timeout=self.connect_timeout,
-                auth_timeout=self.connect_timeout,
-            )
+            client = self._get_client()
             _stdin, stdout, stderr = client.exec_command(command, get_pty=get_pty)
             channel = stdout.channel
             channel.settimeout(1)
@@ -308,10 +322,9 @@ class SSHAdapter:
                     error_summary=error_output.strip(),
                 )
         except Exception as e:
+            self.close()
             finish_ssh_audit(audit, status='error', error_summary=str(e))
             yield f'[SSH ERROR] {e}'
-        finally:
-            client.close()
 
         return exit_status
 
