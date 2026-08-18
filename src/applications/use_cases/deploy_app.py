@@ -96,10 +96,7 @@ class DeployAppUseCase:
         )
 
         requested_by = User.objects.filter(id=cmd.user_id).first() if cmd.user_id else None
-
-        self._reconcile_webhook(
-            app, preferred_user=requested_by, github_adapter=self.github_port, app_logger=self.log_manager, progress=6
-        )
+        self._reconcile_webhook_if_manual(app, requested_by)
 
         git_sync_plan = self._resolve_sync_plan(app, preferred_user=requested_by)
         git_token = git_sync_plan.token
@@ -186,6 +183,26 @@ class DeployAppUseCase:
             if cmd.commit_sha and git_token:
                 self.github_port.set_deploy_failure(git_token, app.git, cmd.commit_sha, app.name, str(e)[:100])
             raise
+
+    def _reconcile_webhook_if_manual(self, app: App, requested_by: User | None) -> None:
+        """Reconcile the GitHub webhook only for a manual redeploy.
+
+        A redeploy triggered by the webhook itself (`requested_by is None`) is already
+        proof the webhook is configured and firing — reconciling again here would just
+        repeat the same GitHub API calls (`get_repo` + list hooks) that the incoming push
+        just validated, on every single automatic deploy. Manual redeploys still reconcile
+        so a user clicking "Redeploy" can self-heal a broken webhook right away.
+        """
+        if requested_by is None:
+            return
+
+        self._reconcile_webhook(
+            app,
+            preferred_user=requested_by,
+            github_adapter=self.github_port,
+            app_logger=self.log_manager,
+            progress=6,
+        )
 
     def _start_linked_databases(self, app: App) -> None:
         """Best-effort warm-up of linked Postgres services before redeploying against them."""

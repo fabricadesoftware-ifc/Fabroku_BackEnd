@@ -135,6 +135,12 @@ def save_desired_process_quantities(app: App, processes: dict[str, int]) -> None
 
 def reapply_saved_process_scales(app: App, dokku_adapter, logger=None, *, progress: int = 92) -> dict[str, int]:
     existing_saved_processes = get_saved_process_quantities(app)
+    if not existing_saved_processes:
+        # Nada foi escalado manualmente para este app ainda, entao nao ha nada para
+        # reaplicar. Evita pagar um round-trip SSH (`ps:scale` report) so para descobrir
+        # isso de novo em toda criacao/redeploy.
+        return {}
+
     detected_scales = sync_app_process_scales_from_dokku(app, dokku_adapter)
     current_quantities = {
         process_scale.process_name: process_scale.current_quantity
