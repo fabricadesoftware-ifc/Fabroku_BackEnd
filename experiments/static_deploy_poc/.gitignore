@@ -1,0 +1,3 @@
+data/releases/*
+data/current
+!data/releases/.gitkeep
