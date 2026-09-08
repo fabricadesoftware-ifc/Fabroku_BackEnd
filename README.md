@@ -137,6 +137,9 @@ AUTH_ALLOW_ALL_VERIFIED_EMAILS=True
 - Backend consegue conectar por SSH no Dokku.
 - `BACKEND_URL` e publico, para webhooks do GitHub funcionarem.
 - Cookies, CORS e CSRF apontam para os dominios publicos corretos.
+- `BACKEND_URL` tambem precisa estar certo para o servidor MCP remoto
+  (`/api/mcp/<token>/`, ver `docs/adr/0002-mcp-remoto-token-na-url.md`); com
+  o host errado, esse endpoint responde 421 mesmo com token valido.
 
 ## Configuracao por instalacao
 
