@@ -241,3 +241,58 @@ class GitRepoMixin:
             if e.status == 422:
                 return {'status': 'erro ao criar webhook', 'error': self._format_github_error(e.data)}
             raise
+
+    def delete_webhook(self, repo_name: str, app_id: int, user_id: int) -> dict:
+        """Remove o webhook de deploy automatico do app no GitHub, se existir."""
+        from identity.models import User  # noqa: PLC0415
+
+        user = User.objects.get(id=user_id)
+        gh = Github(user.git_token)
+        webhook_url = f'{settings.BACKEND_URL}/api/webhooks/github/{app_id}/'
+
+        try:
+            repo = gh.get_repo(repo_name)
+        except GithubException as e:
+            if e.status in {403, 404}:
+                return {
+                    'status': 'repositorio nao encontrado ou sem acesso',
+                    'error': (
+                        f'Nao foi possivel acessar o repositorio "{repo_name}" para remover o webhook. '
+                        f'Detalhes: {self._format_github_error(e.data)}'
+                    ),
+                }
+            raise
+
+        try:
+            existing_hooks = list(repo.get_hooks())
+        except GithubException as e:
+            if e.status in {403, 404}:
+                return {
+                    'status': 'sem permissao para listar webhooks',
+                    'error': (
+                        f'O token atual nao consegue listar os webhooks de "{repo_name}". '
+                        f'Detalhes: {self._format_github_error(e.data)}'
+                    ),
+                }
+            raise
+
+        expected_url = normalize_webhook_url(webhook_url)
+        for hook in existing_hooks:
+            if normalize_webhook_url(hook.config.get('url')) != expected_url:
+                continue
+
+            try:
+                hook.delete()
+                return {'status': 'webhook removido', 'hook_id': hook.id, 'url': webhook_url}
+            except GithubException as e:
+                if e.status in {403, 404}:
+                    return {
+                        'status': 'sem permissao para remover webhook',
+                        'error': (
+                            f'O token atual nao tem permissao para remover webhooks em "{repo_name}". '
+                            f'Detalhes: {self._format_github_error(e.data)}'
+                        ),
+                    }
+                return {'status': 'erro ao remover webhook', 'error': self._format_github_error(e.data)}
+
+        return {'status': 'webhook nao encontrado', 'url': webhook_url}

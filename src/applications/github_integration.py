@@ -211,6 +211,68 @@ def ensure_github_webhook(
     }
 
 
+def remove_github_webhook(
+    app: App,
+    preferred_user: User | None = None,
+    *,
+    github_adapter: GitHubAdapter | None = None,
+) -> dict:
+    """
+    Remove o webhook de auto-deploy de um app, tentando todos os tokens do projeto.
+
+    Best-effort: chamado na deleção do app, nunca deve impedi-la de completar.
+    """
+    repo_name = parse_github_repo_name(app.git) if app.git else None
+    if not repo_name:
+        return {'ok': False, 'status': 'git_url ausente ou invalida', 'attempts': []}
+
+    candidate_users = list(iter_project_users_with_git_token(app, preferred_user=preferred_user))
+    if not candidate_users:
+        return {
+            'ok': False,
+            'status': 'sem token github',
+            'error': 'Nenhum usuario do projeto tem token GitHub salvo para remover o webhook.',
+            'repo': repo_name,
+            'attempts': [],
+        }
+
+    adapter = github_adapter or GitHubAdapter()
+    attempts = []
+
+    for candidate_user in candidate_users:
+        try:
+            result = adapter.delete_webhook(repo_name=repo_name, app_id=app.id, user_id=candidate_user.id)
+        except Exception as exc:
+            logger.exception(
+                'Erro inesperado ao remover webhook do app %s via %s', app.name, display_user(candidate_user)
+            )
+            attempts.append({'user': display_user(candidate_user), 'status': 'erro inesperado', 'error': str(exc)})
+            continue
+
+        status_value = result.get('status', 'unknown')
+        if status_value in {'webhook removido', 'webhook nao encontrado'}:
+            return {
+                'ok': True,
+                'status': status_value,
+                'repo': repo_name,
+                'removed_by': display_user(candidate_user),
+                'attempts': attempts,
+            }
+
+        attempts.append({'user': display_user(candidate_user), 'status': status_value, 'error': result.get('error')})
+
+    return {
+        'ok': False,
+        'status': 'webhook nao removido',
+        'error': (
+            'Nao foi possivel remover o webhook com nenhum token do projeto. '
+            'Verifique se ao menos um membro tem permissao de Webhooks no repositorio GitHub.'
+        ),
+        'repo': repo_name,
+        'attempts': attempts,
+    }
+
+
 def reconcile_github_webhook(
     app: App,
     preferred_user: User | None = None,

@@ -64,6 +64,14 @@ class FakeGitHubPort(IGitHubPort):
         self.webhooks[repo_name] = webhook
         return webhook
 
+    def delete_webhook(self, repo_name: str, app_id: int, user_id: int) -> dict:
+        """Remove the auto-deploy webhook for a repository, if one exists."""
+        self._log_call('delete_webhook', {'repo_name': repo_name, 'app_id': app_id, 'user_id': user_id})
+        if repo_name in self.webhooks:
+            del self.webhooks[repo_name]
+            return {'status': 'webhook removido', 'repo_name': repo_name}
+        return {'status': 'webhook nao encontrado', 'repo_name': repo_name}
+
     def set_deploy_pending(self, git_token: str, git_url: str, sha: str, app_name: str = '') -> bool:
         """Mark a commit's deploy status as PENDING."""
         self._log_call('set_deploy_pending', {'git_url': git_url, 'sha': sha, 'app_name': app_name})

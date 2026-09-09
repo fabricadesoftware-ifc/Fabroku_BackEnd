@@ -34,6 +34,10 @@ class IGitHubPort(ABC):
         """Create or repair the auto-deploy webhook for a GitHub repository."""
 
     @abstractmethod
+    def delete_webhook(self, repo_name: str, app_id: int, user_id: int) -> dict:
+        """Remove the auto-deploy webhook for a GitHub repository, if one exists."""
+
+    @abstractmethod
     def set_deploy_pending(self, git_token: str, git_url: str, sha: str, app_name: str = '') -> bool:
         """Mark a commit's deploy status as PENDING."""
 

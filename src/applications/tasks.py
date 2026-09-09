@@ -89,7 +89,7 @@ def delete_app_task(self, app_id: int, deleted_by_id: int | None = None) -> dict
     app = App.objects.get(id=app_id)
     log_manager = AppLogManager(app, self.request.id)
 
-    use_case = DeleteAppUseCase(dokku_port=DokkuAdapter(), log_manager=log_manager)
+    use_case = DeleteAppUseCase(dokku_port=DokkuAdapter(), log_manager=log_manager, github_port=GitHubAdapter())
     result = use_case.execute(
         DeleteAppCommand(app_id=app_id, task_id=self.request.id, deleted_by_id=deleted_by_id)
     )
