@@ -15,9 +15,12 @@ value instead of becoming a raised exception.
 """
 from dataclasses import dataclass
 
+from applications.github_integration import remove_github_webhook
 from applications.models import App
 from applications.ports.i_dokku import IDokkuPort
+from applications.ports.i_github import IGitHubPort
 from core.apps.mixins.services.service_dokku import delete_dokku_service, dokku_output_failed, unlink_dokku_service
+from identity.models import User
 from observability.models import AppLogManager, LogCategory
 from service_mgmt.models import Service
 from service_mgmt.service_types import get_service_runtime
@@ -40,9 +43,10 @@ class AppDeleted:
 class DeleteAppUseCase:
     """Delete an App: unlink/delete its services, delete the Dokku container, soft-delete both."""
 
-    def __init__(self, dokku_port: IDokkuPort, log_manager: AppLogManager):
+    def __init__(self, dokku_port: IDokkuPort, log_manager: AppLogManager, github_port: IGitHubPort | None = None):
         self.dokku_port = dokku_port
         self.log_manager = log_manager
+        self.github_port = github_port
 
     def execute(self, cmd: DeleteAppCommand) -> AppDeleted:
         try:
@@ -85,12 +89,40 @@ class DeleteAppUseCase:
                     f'Erro ao deletar app no Dokku: {e}', category=LogCategory.DEPLOY, progress=80
                 )
 
+        self._remove_github_webhook(app, cmd.deleted_by_id)
+
         self.log_manager.success(
             f'Aplicação {app.name} removida com sucesso!', category=LogCategory.DEPLOY, progress=100
         )
         app.soft_delete(deleted_by_id=cmd.deleted_by_id)
 
         return AppDeleted(app_id=app.id, dokku_app_name=dokku_app_name)
+
+    def _remove_github_webhook(self, app: App, deleted_by_id: int | None) -> None:
+        """Best-effort: sem isso, o GitHub continua mandando push events pro app apagado."""
+        if not self.github_port or not app.git:
+            return
+
+        preferred_user = User.objects.filter(id=deleted_by_id).first() if deleted_by_id else None
+
+        try:
+            result = remove_github_webhook(app, preferred_user=preferred_user, github_adapter=self.github_port)
+        except Exception as e:
+            self.log_manager.warning(
+                f'Erro ao remover webhook do GitHub: {e}', category=LogCategory.GIT, progress=90
+            )
+            return
+
+        if result.get('ok'):
+            self.log_manager.info(
+                f'Webhook do GitHub removido ({result.get("status")})', category=LogCategory.GIT, progress=90
+            )
+        else:
+            self.log_manager.warning(
+                f'Nao foi possivel remover o webhook do GitHub: {result.get("error", result.get("status"))}',
+                category=LogCategory.GIT,
+                progress=90,
+            )
 
     def _delete_linked_service(
         self, service: Service, dokku_app_name: str | None, deleted_by_id: int | None, progress: int
