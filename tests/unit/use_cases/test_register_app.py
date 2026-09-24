@@ -2,7 +2,7 @@
 import pytest
 from django.utils import timezone
 
-from applications.domain.exceptions import AppLimitExceeded, AppNameConflict
+from applications.domain.exceptions import AppLimitExceeded, AppNameConflict, InvalidEnvVar
 from applications.models import App, AppStatus
 from applications.use_cases.register_app import RegisterAppCommand, RegisterAppUseCase
 from tests.factories.models import AppFactory, ProjectFactory, UserFactory
@@ -81,6 +81,59 @@ def test_register_app_name_conflict_is_case_insensitive():
                 project_id=str(project.id),
                 app_name='taken-name',
                 git_url='https://github.com/owner/repo.git',
+            )
+        )
+
+
+def test_register_app_rejects_name_not_in_canonical_slug_form():
+    """`Meu App`/`meu_app`/`meu-app` must not be able to collide once slugified — reject
+    anything that isn't already in its own canonical slug form."""
+    user = UserFactory()
+    project = ProjectFactory(users=[user])
+    use_case = RegisterAppUseCase()
+
+    with pytest.raises(InvalidEnvVar):
+        use_case.execute(
+            RegisterAppCommand(
+                user_id=user.id,
+                project_id=str(project.id),
+                app_name='Meu App',
+                git_url='https://github.com/owner/repo.git',
+            )
+        )
+
+
+def test_register_app_rejects_reserved_name():
+    user = UserFactory()
+    project = ProjectFactory(users=[user])
+    use_case = RegisterAppUseCase()
+
+    with pytest.raises(AppNameConflict):
+        use_case.execute(
+            RegisterAppCommand(
+                user_id=user.id,
+                project_id=str(project.id),
+                app_name='fabroku-api',
+                git_url='https://github.com/owner/repo.git',
+            )
+        )
+
+
+def test_register_app_custom_name_dokku_conflicting_with_existing_slug_is_rejected():
+    """A privileged custom `name_dokku` must not be able to steal another app's resolved slug."""
+    user = UserFactory(is_fabric=True)
+    project = ProjectFactory(users=[user])
+    AppFactory(project=project, name='someone-elses-app')
+    use_case = RegisterAppUseCase()
+
+    with pytest.raises(AppNameConflict):
+        use_case.execute(
+            RegisterAppCommand(
+                user_id=user.id,
+                project_id=str(project.id),
+                app_name='my-new-app',
+                git_url='https://github.com/owner/repo.git',
+                name_dokku='someone-elses-app',
             )
         )
 

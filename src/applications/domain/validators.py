@@ -5,7 +5,8 @@ Raise ApplicationDomainError subclasses when validation fails.
 """
 import re
 
-from applications.domain.exceptions import InvalidEnvVar
+from applications.domain.exceptions import AppNameConflict, InvalidEnvVar
+from core.apps.utils import slugify_dokku
 
 # Environment variable constraints (from core/apps/views.py)
 ENV_VAR_KEY_PATTERN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
@@ -17,6 +18,11 @@ ENV_VAR_MAX_ITEMS = 100
 APP_NAME_MIN_LENGTH = 2
 APP_NAME_MAX_LENGTH = 60
 APP_NAME_PATTERN = re.compile(r'^[a-z0-9\-]+$')  # lowercase alphanumeric + hyphen
+
+# Names (and name prefixes) reserved for Fabroku's own infrastructure. `fabroku-api`
+# runs on the same Dokku host as student apps — a student app claiming this name
+# would resolve to the same Dokku container the platform itself runs in.
+RESERVED_APP_NAME_PREFIXES = ('fabroku',)
 
 
 def validate_app_name(name: str) -> None:
@@ -39,6 +45,27 @@ def validate_app_name(name: str) -> None:
 
     if not APP_NAME_PATTERN.match(name):
         raise InvalidEnvVar('name', 'must contain only lowercase alphanumeric characters and hyphens')
+
+    if slugify_dokku(name) != name:
+        raise InvalidEnvVar(
+            'name',
+            f'must already be in its canonical Dokku slug form (try "{slugify_dokku(name)}")',
+        )
+
+
+def validate_app_name_available(name: str) -> None:
+    """Reject names reserved for Fabroku's own infrastructure (e.g. `fabroku-api`).
+
+    Args:
+        name: App name (or resolved Dokku slug) to check.
+
+    Raises:
+        AppNameConflict: If the name is reserved.
+    """
+    lowered = name.lower()
+    for prefix in RESERVED_APP_NAME_PREFIXES:
+        if lowered == prefix or lowered.startswith(f'{prefix}-'):
+            raise AppNameConflict(name)
 
 
 def validate_env_var_key(key: str) -> None:

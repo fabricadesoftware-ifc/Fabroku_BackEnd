@@ -124,9 +124,19 @@ class CreateServiceUseCase:
         service = self._prepare_standalone_service_record(
             project, runtime, service_name, password, cmd.task_id, cmd.service_id
         )
+        # True only if THIS Service row already owned this exact container name before
+        # this call (a retry of a prior run). A Dokku container with this name that we
+        # don't already own belongs to something else — never silently adopt it.
+        previously_owned = service.container_name == dokku_service_name
 
         output, _command, operation = create_dokku_service(self.dokku_port, runtime, dokku_service_name, password)
-        if 'already exists' not in output.lower():
+        if 'already exists' in output.lower():
+            if not previously_owned:
+                raise DeploymentFailed(
+                    reason=f'Já existe um serviço "{dokku_service_name}" no servidor que não pertence a este projeto.',
+                    step='create_standalone_service',
+                )
+        else:
             check_dokku_output(output, operation)
 
         service.container_name = dokku_service_name
@@ -154,12 +164,22 @@ class CreateServiceUseCase:
         password: str,
         service: Service | None,
     ) -> None:
+        # True only if THIS Service row already owned this exact container name before
+        # this call (a retry of a prior run). A Dokku container with this name that we
+        # don't already own belongs to something else — never silently adopt it.
+        previously_owned = bool(service and service.container_name == dokku_service_name)
+
         log_manager.info(
             f'Criando serviço {runtime.label}: {dokku_service_name}...', category=LogCategory.DATABASE, progress=10
         )
         output, _command, operation = create_dokku_service(self.dokku_port, runtime, dokku_service_name, password)
         log_manager.dokku(output, category=LogCategory.DATABASE, progress=40)
         if 'already exists' in output.lower():
+            if not previously_owned:
+                raise DeploymentFailed(
+                    reason=f'Já existe um serviço "{dokku_service_name}" no servidor que não pertence a este app.',
+                    step='create_remote_service',
+                )
             log_manager.info(
                 f'Serviço {dokku_service_name} já existe, reutilizando...', category=LogCategory.DATABASE, progress=40
             )
