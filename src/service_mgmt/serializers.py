@@ -74,8 +74,8 @@ class ServiceSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         request = self.context.get('request')
-        if request and request.user:
-            user = request.user
+        user = request.user if request and request.user else None
+        if user:
             if not user.can_create_service():
                 max_services = user.max_services
                 current = user.services_count
@@ -115,6 +115,7 @@ class ServiceSerializer(serializers.ModelSerializer):
                     port=runtime.port,
                     app=locked_app,
                     project=locked_app.project,
+                    created_by=user,
                     env_key=env_key,
                     image=runtime.image,
                     image_version=runtime.image_version,
@@ -147,6 +148,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             port=runtime.port,
             app=None,
             project=project,
+            created_by=user,
             container_name=None,
             image=runtime.image,
             image_version=runtime.image_version,

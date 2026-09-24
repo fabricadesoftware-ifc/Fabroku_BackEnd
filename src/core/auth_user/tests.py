@@ -192,6 +192,7 @@ class UserAdminListTests(APITestCase):
                 git='https://github.com/org/repo.git',
                 branch='main',
                 project=project,
+                created_by=user,
                 status='RUNNING',
             )
             Service.objects.create(
@@ -202,6 +203,7 @@ class UserAdminListTests(APITestCase):
                 port=5432,
                 app=app,
                 project=project,
+                created_by=user,
                 service_type='postgres',
                 container_name=f'db-user-{index}',
             )

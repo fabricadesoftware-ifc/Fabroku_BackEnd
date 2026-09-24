@@ -56,7 +56,7 @@ def test_create_success_dispatches_task_and_sets_starting(mock_create_app_task):
 def test_create_quota_exceeded_raises_validation_error_with_same_shape_as_before(mock_create_app_task):
     user = UserFactory()
     project = ProjectFactory(users=[user])
-    AppFactory.create_batch(user.DEFAULT_MAX_APPS, project=project)
+    AppFactory.create_batch(user.DEFAULT_MAX_APPS, project=project, created_by=user)
 
     serializer = build_serializer(
         user, {'name': 'one-too-many', 'git': 'https://github.com/owner/repo.git', 'project': str(project.id)}

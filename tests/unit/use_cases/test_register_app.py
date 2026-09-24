@@ -33,7 +33,7 @@ def test_register_app_success():
 def test_register_app_exceeds_limit():
     user = UserFactory()
     project = ProjectFactory(users=[user])
-    AppFactory.create_batch(user.DEFAULT_MAX_APPS, project=project)
+    AppFactory.create_batch(user.DEFAULT_MAX_APPS, project=project, created_by=user)
     use_case = RegisterAppUseCase()
 
     with pytest.raises(AppLimitExceeded) as exc_info:

@@ -7,7 +7,9 @@ from interactive_sessions.admin import ReadOnlyAdminMixin
 
 @admin.register(App)
 class AppAdmin(ModelAdmin):
-    list_display = ('id', 'name', 'project', 'status', 'deleted_at', 'deleted_by', 'created_at', 'updated_at')
+    list_display = (
+        'id', 'name', 'project', 'created_by', 'status', 'deleted_at', 'deleted_by', 'created_at', 'updated_at',
+    )
     list_filter = ('status', 'deleted_at', 'created_at', 'updated_at')
     search_fields = ('name', 'project__name', 'domain')
     readonly_fields = ('created_at', 'updated_at', 'deleted_at', 'deleted_by')

@@ -25,6 +25,13 @@ class App(models.Model):
     git = models.URLField()
     branch = models.CharField(max_length=255, default='main')
     project = models.ForeignKey(Project, on_delete=models.CASCADE)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_apps',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     status = models.CharField(max_length=50, choices=AppStatus.choices, default=AppStatus.STOPPED)

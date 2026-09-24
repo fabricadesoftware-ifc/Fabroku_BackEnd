@@ -50,14 +50,14 @@ class UserViewSet(ReadOnlyModelViewSet):
     def _get_admin_queryset(self):
         return User.objects.annotate(
             annotated_apps_count=Count(
-                'projects__app__id',
+                'created_apps__id',
                 distinct=True,
-                filter=Q(projects__app__deleted_at__isnull=True),
+                filter=Q(created_apps__deleted_at__isnull=True),
             ),
             annotated_services_count=Count(
-                'projects__service__id',
+                'created_services__id',
                 distinct=True,
-                filter=Q(projects__service__deleted_at__isnull=True),
+                filter=Q(created_services__deleted_at__isnull=True),
             ),
         )
 
