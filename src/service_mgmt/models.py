@@ -21,6 +21,13 @@ class Service(models.Model):
     port = models.IntegerField()
     app = models.ForeignKey(App, on_delete=models.SET_NULL, null=True, blank=True, related_name='services')
     project = models.ForeignKey(Project, on_delete=models.CASCADE)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_services',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     service_type = models.CharField(max_length=50, choices=ServiceType.choices)

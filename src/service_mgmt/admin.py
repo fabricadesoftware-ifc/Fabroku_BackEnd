@@ -11,6 +11,7 @@ class ServiceAdmin(ModelAdmin):
         'name',
         'service_type',
         'app',
+        'created_by',
         'env_key',
         'image_version',
         'host',

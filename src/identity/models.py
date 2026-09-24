@@ -82,15 +82,15 @@ class User(AbstractUser):
 
     @property
     def apps_count(self) -> int:
-        """Conta o total de apps em projetos do usuário."""
+        """Conta os apps criados por este usuário (não os de colegas no mesmo projeto)."""
         from applications.models import App  # noqa: PLC0415
-        return App.objects.filter(project__users=self, deleted_at__isnull=True).distinct().count()
+        return App.objects.filter(created_by=self, deleted_at__isnull=True).count()
 
     @property
     def services_count(self) -> int:
-        """Conta o total de serviços em projetos do usuário."""
+        """Conta os serviços criados por este usuário (não os de colegas no mesmo projeto)."""
         from service_mgmt.models import Service  # noqa: PLC0415
-        return Service.objects.filter(project__users=self, deleted_at__isnull=True).distinct().count()
+        return Service.objects.filter(created_by=self, deleted_at__isnull=True).count()
 
     def can_create_app(self) -> bool:
         """Verifica se o usuário pode criar mais apps."""

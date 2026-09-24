@@ -48,6 +48,7 @@ class RegisterAppUseCase:
             git=cmd.git_url,
             branch=cmd.git_branch,
             project=project,
+            created_by=user,
             status=AppStatus.STARTING,
             variables=cmd.env_vars or {},
         )
