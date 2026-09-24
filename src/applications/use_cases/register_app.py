@@ -13,7 +13,9 @@ use case's App row exists) by `CreateAppUseCase` / `create_app_task`.
 from dataclasses import dataclass
 
 from applications.domain.exceptions import AppLimitExceeded, AppNameConflict
+from applications.domain.validators import validate_app_name, validate_app_name_available
 from applications.models import App, AppStatus
+from core.apps.utils import slugify_dokku
 from identity.models import User
 from projects.models import Project
 
@@ -39,12 +41,27 @@ class RegisterAppUseCase:
         if not user.can_create_app():
             raise AppLimitExceeded(current=user.apps_count, limit=user.max_apps)
 
+        validate_app_name(cmd.app_name)
+        validate_app_name_available(cmd.app_name)
+
         if App.objects.filter(name__iexact=cmd.app_name, deleted_at__isnull=True).exists():
             raise AppNameConflict(cmd.app_name)
+        if App.objects.filter(name_dokku__iexact=cmd.app_name, deleted_at__isnull=True).exists():
+            raise AppNameConflict(cmd.app_name)
+
+        name_dokku = None
+        if cmd.name_dokku:
+            name_dokku = slugify_dokku(cmd.name_dokku)
+            validate_app_name(name_dokku)
+            validate_app_name_available(name_dokku)
+            if App.objects.filter(name__iexact=name_dokku, deleted_at__isnull=True).exists():
+                raise AppNameConflict(name_dokku)
+            if App.objects.filter(name_dokku__iexact=name_dokku, deleted_at__isnull=True).exists():
+                raise AppNameConflict(name_dokku)
 
         return App.objects.create(
             name=cmd.app_name,
-            name_dokku=cmd.name_dokku,
+            name_dokku=name_dokku,
             git=cmd.git_url,
             branch=cmd.git_branch,
             project=project,

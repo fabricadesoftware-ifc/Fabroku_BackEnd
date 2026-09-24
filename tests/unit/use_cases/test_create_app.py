@@ -1,6 +1,7 @@
 """Unit tests for CreateAppUseCase, using fake ports (no SSH/GitHub/Celery)."""
 import pytest
 
+from applications.domain.exceptions import DeploymentFailed
 from applications.models import AppStatus
 from applications.use_cases.create_app import AppCreated, CreateAppCommand, CreateAppUseCase
 from observability.models import AppLogManager
@@ -69,11 +70,16 @@ def test_create_app_applies_env_vars():
     assert dokku.apps[result.dokku_app_name]['env_vars'] == {'DATABASE_URL': 'postgres://x'}
 
 
-def test_create_app_already_exists_in_dokku_is_idempotent():
+def test_create_app_retry_of_own_dokku_app_is_idempotent():
+    """A retry (this App row already owns `name_dokku` from a prior run) is not a hijack."""
     user = UserFactory()
     project = ProjectFactory(users=[user])
     app = AppFactory(
-        project=project, name='existing-app', git='https://github.com/owner/repo.git', status=AppStatus.STARTING
+        project=project,
+        name='existing-app',
+        name_dokku='existing-app',
+        git='https://github.com/owner/repo.git',
+        status=AppStatus.STARTING,
     )
     use_case, dokku, github = make_use_case(app)
     dokku.create_app('existing-app')
@@ -84,6 +90,24 @@ def test_create_app_already_exists_in_dokku_is_idempotent():
     app.refresh_from_db()
     assert app.status == AppStatus.STARTING  # provisioning steps beyond ensure_app never ran, status untouched
     assert app.domain is None
+
+
+def test_create_app_refuses_to_adopt_unrelated_dokku_app():
+    """A fresh App row whose resolved name collides with an app it never owned must fail,
+    not silently adopt that Dokku app (e.g. `fabroku-api` or a colleague's app)."""
+    user = UserFactory()
+    project = ProjectFactory(users=[user])
+    app = AppFactory(
+        project=project, name='fabroku-api', git='https://github.com/owner/repo.git', status=AppStatus.STARTING
+    )
+    use_case, dokku, github = make_use_case(app)
+    dokku.create_app('fabroku-api')
+
+    with pytest.raises(DeploymentFailed):
+        use_case.execute(CreateAppCommand(app_id=app.id, user_id=user.id))
+
+    app.refresh_from_db()
+    assert app.status == AppStatus.ERROR
 
 
 def test_create_app_git_sync_failure_marks_app_error():

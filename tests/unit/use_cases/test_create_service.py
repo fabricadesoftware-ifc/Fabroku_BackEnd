@@ -80,3 +80,45 @@ def test_create_standalone_service_has_no_app():
     assert isinstance(result, ServiceCreated)
     assert result.service_name in dokku.databases
     assert dokku.databases[result.service_name]['linked_apps'] == {}
+
+
+def test_create_standalone_refuses_to_adopt_unrelated_dokku_service():
+    """A fresh, unrelated Service row must not be able to claim a container that already
+    exists in Dokku (e.g. someone else's database with a guessable/chosen name)."""
+    project = ProjectFactory()
+    use_case, dokku = make_use_case()
+    dokku.create_database = lambda **kwargs: 'Postgres container victim-db already exists'
+
+    with pytest.raises(DeploymentFailed):
+        use_case.execute_standalone(
+            CreateServiceStandaloneCommand(project_id=project.id, service_type='postgres', name='victim-db')
+        )
+
+
+def test_create_standalone_retry_of_own_service_is_idempotent():
+    """A retry (this Service row already owns `container_name` from a prior run) is not a hijack."""
+    project = ProjectFactory()
+    service = ServiceFactory(
+        app=None, project=project, service_type='postgres', name='my-db', container_name='my-db'
+    )
+    use_case, dokku = make_use_case()
+    dokku.create_database = lambda **kwargs: 'Postgres container my-db already exists'
+
+    result = use_case.execute_standalone(
+        CreateServiceStandaloneCommand(
+            project_id=project.id, service_type='postgres', name='my-db', service_id=service.id
+        )
+    )
+
+    assert result.service_id == service.id
+
+
+def test_create_attached_refuses_to_adopt_unrelated_dokku_service():
+    project = ProjectFactory()
+    app = AppFactory(project=project, name_dokku='my-app')
+    use_case, dokku = make_use_case()
+    dokku.create_app('my-app')
+    dokku.create_database = lambda **kwargs: 'Postgres container victim-db already exists'
+
+    with pytest.raises(DeploymentFailed):
+        use_case.execute_attached(CreateServiceCommand(app_id=app.id, service_type='postgres'))

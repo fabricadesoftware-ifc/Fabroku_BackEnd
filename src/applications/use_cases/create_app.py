@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass
 from typing import Callable
 
+from applications.domain.exceptions import DeploymentFailed
 from applications.domain.validators import validate_env_vars
 from applications.github_integration import reconcile_github_webhook
 from applications.models import App, AppStatus
@@ -85,14 +86,12 @@ class CreateAppUseCase:
 
         self.log_manager.info('Iniciando criação da aplicação...', category=LogCategory.CREATE, progress=2)
 
-        dokku_app_name = self._resolve_dokku_name(app, user)
-        app.name_dokku = dokku_app_name
-        app.save(update_fields=['name_dokku'])
+        dokku_app_name, previously_owned = self._assign_dokku_name(app, user)
 
         head_sha: str | None = None
 
         try:
-            if self._ensure_dokku_app(dokku_app_name):
+            if self._ensure_dokku_app(dokku_app_name, previously_owned=previously_owned):
                 self._setup_webhook(user, app, progress=99)
                 self.log_manager.warning(
                     f'Aplicação {dokku_app_name} já existe no Dokku', category=LogCategory.CREATE, progress=100
@@ -168,6 +167,17 @@ class CreateAppUseCase:
 
             raise
 
+    def _assign_dokku_name(self, app: App, user: User) -> tuple[str, bool]:
+        """Resolve and persist the Dokku name, reporting whether this App row already
+        owned it (a retry of this same use case) before this call overwrote it — the
+        signal `_ensure_dokku_app` uses to tell a legitimate retry from a name collision.
+        """
+        dokku_app_name = self._resolve_dokku_name(app, user)
+        previously_owned = app.name_dokku == dokku_app_name
+        app.name_dokku = dokku_app_name
+        app.save(update_fields=['name_dokku'])
+        return dokku_app_name, previously_owned
+
     def _resolve_dokku_name(self, app: App, user: User) -> str:
         """Privileged users may bring a custom name_dokku; everyone else gets the app's own name."""
         can_customize = getattr(user, 'is_fabric', False) or user.is_superuser
@@ -175,13 +185,28 @@ class CreateAppUseCase:
             return slugify_dokku(app.name_dokku)
         return slugify_dokku(app.name)
 
-    def _ensure_dokku_app(self, dokku_app_name: str) -> bool:
-        """Create the container if it doesn't exist. Returns True if it already existed."""
+    def _ensure_dokku_app(self, dokku_app_name: str, *, previously_owned: bool) -> bool:
+        """Create the container if it doesn't exist. Returns True if it already existed.
+
+        A Dokku app with this name that this App row didn't already own (from a prior
+        run of this same use case) was never provisioned by this registration — it
+        belongs to something else (another app, a colleague's app, or Fabroku's own
+        infrastructure). Adopting it would hand the caller control over that container,
+        so this refuses instead of silently treating it as idempotent success.
+        """
         self.log_manager.info(
             'Verificando se a aplicação já existe no Dokku...', category=LogCategory.CREATE, progress=5
         )
 
         if self.dokku_port.exists_app(dokku_app_name):
+            if not previously_owned:
+                raise DeploymentFailed(
+                    reason=(
+                        f'Já existe uma aplicação "{dokku_app_name}" no servidor que não pertence a este app. '
+                        'Escolha outro nome.'
+                    ),
+                    step='ensure_dokku_app',
+                )
             return True
 
         self.log_manager.info(f'Criando container {dokku_app_name}...', category=LogCategory.CREATE, progress=10)
