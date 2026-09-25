@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+from django.conf import settings
 from django.core.cache import cache
 from django.db import connection
 from django.test import override_settings
@@ -9,6 +10,7 @@ from rest_framework.test import APIClient, APITestCase
 from applications.models import App
 from identity.models import AllowedEmail, User
 from infrastructure.adapters.utils.git_email import verify_git_email
+from infrastructure.adapters.utils.oauth_state import consume_oauth_state, generate_oauth_state
 from projects.models import Project
 from service_mgmt.models import Service
 
@@ -90,6 +92,66 @@ class PlatformConfigTests(APITestCase):
         self.assertEqual(response.data['privileged_role_label'], 'Equipe interna')
         self.assertEqual(response.data['regular_role_label'], 'Usuario')
         self.assertEqual(response.data['app_domain_suffix'], '.apps.example.com')
+
+
+class CliLoginTests(APITestCase):
+    """`port` must be validated before it ever reaches a redirect — see
+    infrastructure/adapters/utils/oauth_state.py for why."""
+
+    def test_rejects_missing_port(self):
+        response = self.client.get('/api/auth/cli/login/')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data['error'], 'invalid_port')
+
+    def test_rejects_non_numeric_port(self):
+        response = self.client.get('/api/auth/cli/login/', {'port': '1@evil.com'})
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_rejects_out_of_range_port(self):
+        response = self.client.get('/api/auth/cli/login/', {'port': '80'})
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_valid_port_redirects_to_github_with_opaque_state(self):
+        response = self.client.get('/api/auth/cli/login/', {'port': '9876'})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('github.com/login/oauth/authorize', response.url)
+        self.assertNotIn('state=cli:', response.url)
+        self.assertNotIn('9876', response.url)
+
+
+class GithubCallbackStateTests(APITestCase):
+    """The callback must never trust a `state` it didn't mint itself via
+    generate_oauth_state — this is what makes a forged/replayed state harmless."""
+
+    def test_missing_state_redirects_to_frontend_with_error(self):
+        response = self.client.get('/api/auth/github/callback/', {'code': 'whatever'})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.url.startswith(settings.FRONTEND_URL))
+        self.assertIn('error=invalid_state', response.url)
+
+    def test_forged_legacy_style_state_is_rejected(self):
+        """The old `state=cli:<port>` scheme must no longer be trusted for anything."""
+        response = self.client.get(
+            '/api/auth/github/callback/', {'code': 'whatever', 'state': 'cli:1@evil.com'}
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('error=invalid_state', response.url)
+        self.assertNotIn('evil.com', response.url)
+
+    def test_reused_state_is_rejected(self):
+        state = generate_oauth_state(cli_port=9876)
+        consume_oauth_state(state)  # simulate the state already being used once
+
+        response = self.client.get('/api/auth/github/callback/', {'code': 'whatever', 'state': state})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('error=invalid_state', response.url)
 
 
 class AdminUnfoldSmokeTests(APITestCase):

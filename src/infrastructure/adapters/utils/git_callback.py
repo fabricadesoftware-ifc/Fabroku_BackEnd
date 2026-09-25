@@ -9,6 +9,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from identity.models import CLIToken, User
 from infrastructure.adapters.utils.git_email import verify_git_email
+from infrastructure.adapters.utils.oauth_state import consume_oauth_state
 
 
 def set_auth_cookies(response, access_token: str, refresh_token: str):
@@ -42,9 +43,15 @@ def set_auth_cookies(response, access_token: str, refresh_token: str):
 @permission_classes([AllowAny])
 def github_callback(request):
     """Callback OAuth do GitHub — funciona tanto para Web quanto para CLI."""
-    state = request.GET.get('state', '')
-    is_cli = state.startswith('cli:')
-    cli_port = state.split(':', 1)[1] if is_cli else None
+    state_data = consume_oauth_state(request.GET.get('state', ''))
+    if state_data is None:
+        return redirect(f'{settings.FRONTEND_URL}/callback?' + urlencode({
+            'error': 'invalid_state',
+            'message': 'Sessão de login inválida ou expirada. Tente novamente.',
+        }))
+
+    cli_port = state_data.get('cli_port')
+    is_cli = cli_port is not None
 
     def _error_redirect(params: dict):
         """Redireciona erro para CLI (localhost) ou Frontend."""
@@ -125,7 +132,8 @@ def github_callback(request):
 
         if is_cli:
             cli_token = CLIToken.objects.create(user=user, name='CLI Login')
-            return redirect(f'http://localhost:{cli_port}/callback?token={cli_token.token}&user={user.name}')
+            qs = urlencode({'token': cli_token.token, 'user': user.name or ''})
+            return redirect(f'http://localhost:{cli_port}/callback?{qs}')
 
         refresh = RefreshToken.for_user(user)
         response = redirect(f'{settings.FRONTEND_URL}/callback')
