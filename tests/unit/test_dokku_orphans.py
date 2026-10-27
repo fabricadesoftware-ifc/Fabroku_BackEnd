@@ -49,3 +49,14 @@ def test_lists_only_dokku_apps_without_active_record():
     assert 'sem registro no banco' in output
     assert 'solto-db' in output
     assert 'Total de orfaos: 3' in output
+
+
+def test_skips_fabroku_own_resources_without_exclude():
+    output = run_command(
+        apps='=====> My Apps\nfabroku\nfabroku-api\naluno-app\n',
+        databases='=====> Postgres services\nfabroku-api\n',
+    )
+
+    assert 'fabroku' not in output
+    assert 'aluno-app' in output
+    assert 'Total de orfaos: 1' in output

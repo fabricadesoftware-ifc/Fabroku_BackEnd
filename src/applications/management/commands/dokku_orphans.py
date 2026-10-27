@@ -1,5 +1,6 @@
 from django.core.management.base import BaseCommand, CommandError
 
+from applications.domain.validators import RESERVED_APP_NAME_PREFIXES
 from applications.models import App
 from infrastructure.adapters.dokku import DokkuAdapter
 from service_mgmt.models import Service
@@ -19,6 +20,12 @@ def parse_dokku_list(output: str) -> list[str]:
         if token not in HEADER_TOKENS:
             names.append(token)
     return names
+
+
+def is_reserved(name: str) -> bool:
+    """Recursos do proprio Fabroku (fabroku-api, banco, redis) rodam no mesmo Dokku e nunca sao orfaos."""
+    lowered = name.lower()
+    return any(lowered == prefix or lowered.startswith(f'{prefix}-') for prefix in RESERVED_APP_NAME_PREFIXES)
 
 
 def last_deleted(queryset, field: str, name: str):
@@ -52,7 +59,9 @@ class Command(BaseCommand):
             if queryset.model is Service:
                 # Services antigos sem container_name usam o name como nome no Dokku.
                 active |= set(queryset.filter(deleted_at=None).values_list('name', flat=True))
-            orphans = [n for n in parse_dokku_list(output) if n not in active and n not in exclude]
+            orphans = [
+                n for n in parse_dokku_list(output) if n not in active and n not in exclude and not is_reserved(n)
+            ]
             for name in orphans:
                 record = last_deleted(queryset, field, name)
                 if record:
