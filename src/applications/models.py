@@ -24,7 +24,8 @@ class App(models.Model):
     name_dokku = models.CharField(max_length=255, null=True, blank=True)
     git = models.URLField()
     branch = models.CharField(max_length=255, default='main')
-    project = models.ForeignKey(Project, on_delete=models.CASCADE)
+    # PROTECT: apagar o Project fisicamente levaria as Apps junto sem limpar o Dokku.
+    project = models.ForeignKey(Project, on_delete=models.PROTECT)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
