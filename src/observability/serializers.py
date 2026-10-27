@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from observability.models import AppLog
+from observability.models import AdminNotification, AppLog
 
 
 class AppLogSerializer(serializers.ModelSerializer):
@@ -41,3 +41,30 @@ class AppLogSummarySerializer(serializers.Serializer):
     last_update = serializers.DateTimeField()
     has_errors = serializers.BooleanField()
     is_complete = serializers.BooleanField()
+
+
+class AdminNotificationSerializer(serializers.ModelSerializer):
+    event_display = serializers.CharField(source='get_event_type_display', read_only=True)
+    app_name = serializers.CharField(source='app.name', read_only=True, default=None)
+    project_id = serializers.UUIDField(source='app.project_id', read_only=True, default=None)
+    service_name = serializers.CharField(source='service.name', read_only=True, default=None)
+
+    class Meta:
+        model = AdminNotification
+        fields = [
+            'id',
+            'event_type',
+            'event_display',
+            'level',
+            'title',
+            'message',
+            'app',
+            'app_name',
+            'project_id',
+            'service',
+            'service_name',
+            'metadata',
+            'created_at',
+            'read_at',
+        ]
+        read_only_fields = fields

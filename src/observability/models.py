@@ -181,6 +181,43 @@ class SSHCommandAudit(models.Model):
         ]
 
 
+class AdminNotificationEvent(models.TextChoices):
+    APP_DELETE_FAILED = 'app_delete_failed', 'Falha ao apagar app'
+    SERVICE_DELETE_FAILED = 'service_delete_failed', 'Falha ao apagar servico'
+
+
+class AdminNotification(models.Model):
+    """Alerta para superusers sobre falhas que exigem acao manual (ex: orfao no Dokku)."""
+
+    event_type = models.CharField(max_length=50, choices=AdminNotificationEvent.choices, db_index=True)
+    level = models.CharField(max_length=20, choices=LogLevel.choices, default=LogLevel.ERROR)
+    title = models.CharField(max_length=255)
+    message = models.TextField(blank=True, default='')
+    app = models.ForeignKey(App, on_delete=models.SET_NULL, null=True, blank=True, related_name='admin_notifications')
+    service = models.ForeignKey(
+        Service, on_delete=models.SET_NULL, null=True, blank=True, related_name='admin_notifications'
+    )
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+    read_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    read_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='read_admin_notifications',
+    )
+
+    def __str__(self):
+        return f'[{self.event_type}] {self.title}'
+
+    class Meta:
+        db_table = 'admin_notifications'
+        verbose_name = 'Admin Notification'
+        verbose_name_plural = 'Admin Notifications'
+        ordering = ['-created_at']
+
+
 class AppLogManager:
     """
     Gerenciador de logs para facilitar a criação de logs durante operações.

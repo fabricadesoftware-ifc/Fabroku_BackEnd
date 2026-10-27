@@ -7,6 +7,10 @@ everything in the DB. Reuses `core.apps.mixins.services.service_dokku`'s
 `delete_dokku_service`/`unlink_dokku_service` helpers as-is — they already
 only call methods that live on `IDokkuPort`, so no reimplementation needed.
 
+Deviation from the legacy mixin: if the Dokku container cannot be removed,
+the App is NOT soft-deleted (status=ERROR + InfrastructureError) — soft-deleting
+it anyway left orphan containers running on Dokku with no DB record.
+
 Same deviation as the other Fase 2/4 use cases: no `task.update_state(...)`
 calls. Unlike Create/Deploy/Update/Manage, "app already deleted" (or already
 gone from the DB) is a legitimate idempotent success here, not a failure
@@ -15,15 +19,28 @@ value instead of becoming a raised exception.
 """
 from dataclasses import dataclass
 
+from applications.domain.exceptions import InfrastructureError
 from applications.github_integration import remove_github_webhook
-from applications.models import App
+from applications.models import App, AppStatus
 from applications.ports.i_dokku import IDokkuPort
 from applications.ports.i_github import IGitHubPort
 from core.apps.mixins.services.service_dokku import delete_dokku_service, dokku_output_failed, unlink_dokku_service
 from identity.models import User
-from observability.models import AppLogManager, LogCategory
+from observability.admin_notifications import notify_admins
+from observability.models import AdminNotificationEvent, AppLogManager, LogCategory
 from service_mgmt.models import Service
 from service_mgmt.service_types import get_service_runtime
+
+
+def _notify_service_delete_failed(service: Service, dokku_service_name: str, detail: str) -> None:
+    notify_admins(
+        AdminNotificationEvent.SERVICE_DELETE_FAILED,
+        f'Falha ao apagar o serviço {dokku_service_name} no Dokku',
+        detail,
+        app=service.app,
+        service=service,
+        metadata={'dokku_service': dokku_service_name},
+    )
 
 
 @dataclass(frozen=True)
@@ -76,18 +93,27 @@ class DeleteAppUseCase:
             self.log_manager.info(
                 f'Removendo app {dokku_app_name} do Dokku...', category=LogCategory.DEPLOY, progress=60
             )
-            try:
-                result = self.dokku_port.delete_app(dokku_app_name)
-                if dokku_output_failed(result):
-                    self.log_manager.warning(
-                        f'Deleção do app retornou erro: {result}', category=LogCategory.DEPLOY, progress=80
-                    )
-                else:
-                    self.log_manager.dokku(result, category=LogCategory.DEPLOY, progress=80)
-            except Exception as e:
-                self.log_manager.warning(
-                    f'Erro ao deletar app no Dokku: {e}', category=LogCategory.DEPLOY, progress=80
+            failure = self._delete_dokku_app(dokku_app_name)
+            if failure:
+                app.status = AppStatus.ERROR
+                app.error_type = 'DeleteAppFailed'
+                app.error_details = failure
+                app.save(update_fields=['status', 'error_type', 'error_details'])
+                self.log_manager.error(
+                    f'Não foi possível remover {dokku_app_name} do Dokku; a aplicação não foi apagada. '
+                    'Tente apagar novamente.',
+                    category=LogCategory.DEPLOY,
+                    progress=100,
+                    metadata={'output': failure[:2000]},
                 )
+                notify_admins(
+                    AdminNotificationEvent.APP_DELETE_FAILED,
+                    f'Falha ao apagar o app {dokku_app_name} no Dokku',
+                    failure,
+                    app=app,
+                    metadata={'dokku_app': dokku_app_name, 'deleted_by_id': cmd.deleted_by_id},
+                )
+                raise InfrastructureError('Falha ao remover app do Dokku', details=failure)
 
         self._remove_github_webhook(app, cmd.deleted_by_id)
 
@@ -97,6 +123,31 @@ class DeleteAppUseCase:
         app.soft_delete(deleted_by_id=cmd.deleted_by_id)
 
         return AppDeleted(app_id=app.id, dokku_app_name=dokku_app_name)
+
+    def _delete_dokku_app(self, dokku_app_name: str) -> str | None:
+        """Remove o container; retorna a mensagem de falha, ou None se o app nao existe mais no Dokku."""
+        try:
+            result = self.dokku_port.delete_app(dokku_app_name)
+            failure = result if dokku_output_failed(result) else None
+        except Exception as e:
+            failure = str(e) or e.__class__.__name__
+
+        if not failure:
+            self.log_manager.dokku(result, category=LogCategory.DEPLOY, progress=80)
+            return None
+
+        # Falha na resposta mas o app ja sumiu (ex: timeout depois do destroy): segue com o soft delete.
+        try:
+            if not self.dokku_port.exists_app(dokku_app_name):
+                self.log_manager.warning(
+                    f'Deleção do app retornou erro, mas {dokku_app_name} já não existe no Dokku: {failure}',
+                    category=LogCategory.DEPLOY,
+                    progress=80,
+                )
+                return None
+        except Exception:
+            pass
+        return failure
 
     def _remove_github_webhook(self, app: App, deleted_by_id: int | None) -> None:
         """Best-effort: sem isso, o GitHub continua mandando push events pro app apagado."""
@@ -159,14 +210,11 @@ class DeleteAppUseCase:
                     progress=progress,
                 )
 
+        failure = None
         try:
             delete_output, _command = delete_dokku_service(self.dokku_port, runtime, dokku_service_name)
             if dokku_output_failed(delete_output):
-                self.log_manager.warning(
-                    f'Deleção do serviço {dokku_service_name} retornou erro: {delete_output}',
-                    category=LogCategory.DATABASE,
-                    progress=progress,
-                )
+                failure = f'Deleção do serviço {dokku_service_name} retornou erro: {delete_output}'
             else:
                 self.log_manager.success(
                     f'Serviço {dokku_service_name} removido do Dokku',
@@ -174,10 +222,10 @@ class DeleteAppUseCase:
                     progress=progress,
                 )
         except Exception as e:
-            self.log_manager.warning(
-                f'Erro ao deletar serviço {dokku_service_name}: {e}',
-                category=LogCategory.DATABASE,
-                progress=progress,
-            )
+            failure = f'Erro ao deletar serviço {dokku_service_name}: {e}'
+
+        if failure:
+            self.log_manager.warning(failure, category=LogCategory.DATABASE, progress=progress)
+            _notify_service_delete_failed(service, dokku_service_name, failure)
 
         service.soft_delete(deleted_by_id=deleted_by_id)

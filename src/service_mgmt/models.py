@@ -20,7 +20,8 @@ class Service(models.Model):
     host = models.CharField(max_length=255)
     port = models.IntegerField()
     app = models.ForeignKey(App, on_delete=models.SET_NULL, null=True, blank=True, related_name='services')
-    project = models.ForeignKey(Project, on_delete=models.CASCADE)
+    # PROTECT: apagar o Project fisicamente levaria os Services junto sem limpar o Dokku.
+    project = models.ForeignKey(Project, on_delete=models.PROTECT)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
