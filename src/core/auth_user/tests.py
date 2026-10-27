@@ -237,6 +237,8 @@ class UserAdminListTests(APITestCase):
         self.client.force_authenticate(user=self.superuser)
         cache.clear()
 
+    # Cache em memoria: aqui contamos queries de dominio, nao as do DatabaseCache.
+    @override_settings(CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}})
     def test_admin_list_avoids_n_plus_one_on_quota_counts(self):
         tracked_users = []
 

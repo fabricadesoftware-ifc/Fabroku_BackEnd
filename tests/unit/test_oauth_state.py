@@ -9,6 +9,9 @@ from infrastructure.adapters.utils.oauth_state import (
     validate_cli_port,
 )
 
+# O state vive no cache default, que e DatabaseCache (compartilhado entre processos).
+pytestmark = pytest.mark.django_db
+
 
 def test_consume_returns_the_data_generate_stored():
     state = generate_oauth_state(cli_port=54321)
