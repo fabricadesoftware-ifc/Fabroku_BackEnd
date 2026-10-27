@@ -20,10 +20,12 @@ from applications.ports.i_dokku import IDokkuPort
 from core.apps.mixins.services.service_dokku import (
     check_dokku_output,
     delete_dokku_service,
+    dokku_output_failed,
     promote_remaining_database_if_needed,
     unlink_dokku_service,
 )
-from observability.models import AppLogManager, LogCategory
+from observability.admin_notifications import notify_admins
+from observability.models import AdminNotificationEvent, AppLogManager, LogCategory
 from service_mgmt.models import Service
 from service_mgmt.service_types import ServiceRuntime, get_service_runtime
 
@@ -163,12 +165,26 @@ class DeleteServiceUseCase:
                 category=LogCategory.DATABASE,
                 progress=50,
             )
+        failure = None
         try:
             output, _command = delete_dokku_service(self.dokku_port, runtime, dokku_service_name)
             if log_manager:
                 log_manager.dokku(output, category=LogCategory.DATABASE, progress=80)
+            if dokku_output_failed(output):
+                failure = output
         except Exception as e:
+            failure = str(e) or e.__class__.__name__
             if log_manager:
                 log_manager.warning(
                     f'Erro ao deletar no Dokku (continuando...): {e}', category=LogCategory.DATABASE, progress=80
                 )
+
+        if failure:
+            notify_admins(
+                AdminNotificationEvent.SERVICE_DELETE_FAILED,
+                f'Falha ao apagar o serviço {dokku_service_name} no Dokku',
+                failure,
+                app=service.app,
+                service=service,
+                metadata={'dokku_service': dokku_service_name},
+            )

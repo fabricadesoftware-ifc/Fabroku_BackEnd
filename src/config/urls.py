@@ -22,10 +22,14 @@ from infrastructure.adapters.utils.git_redirect import github_login
 from infrastructure.adapters.utils.git_repos import get_git_repos
 from infrastructure.adapters.utils.git_webhook import github_webhook
 from infrastructure.platform_config import platform_config
+from observability.notification_views import AdminNotificationViewSet
 
 # Router para AllowedEmails
 allowed_emails_router = DefaultRouter()
 allowed_emails_router.register(r'allowed-emails', AllowedEmailViewSet, basename='allowed-email')
+
+admin_notifications_router = DefaultRouter()
+admin_notifications_router.register(r'notifications', AdminNotificationViewSet, basename='admin-notification')
 
 
 @api_view(['GET'])
@@ -52,6 +56,7 @@ urlpatterns = [
     path('api/token/refresh/', CustomTokenRefreshView.as_view(), name='token_refresh'),
     path('api/admin/', django_admin.site.urls),
     path('api/admin-api/storage-usage/', storage_usage, name='admin-storage-usage'),
+    path('api/admin-api/', include(admin_notifications_router.urls)),
     path('api/auth/github/callback/', github_callback),
     path('api/auth/github/login/', github_login),
     path('api/auth/cli/login/', cli_login, name='cli-login'),

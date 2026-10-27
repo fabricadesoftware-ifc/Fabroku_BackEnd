@@ -2,6 +2,8 @@
 import pytest
 from django.utils import timezone
 
+from applications.domain.exceptions import InfrastructureError
+from applications.models import AppStatus
 from applications.use_cases.delete_app import AppDeleted, DeleteAppCommand, DeleteAppUseCase
 from observability.models import AppLogManager
 from tests.factories.models import AppFactory, ProjectFactory, ServiceFactory, UserFactory
@@ -103,7 +105,8 @@ def test_delete_app_without_github_port_still_deletes():
     assert app.deleted_at is not None
 
 
-def test_delete_app_dokku_failure_does_not_abort_deletion():
+def test_delete_app_dokku_failure_keeps_app_and_raises():
+    """Sem isso o app sumia do banco e o container ficava orfao rodando no Dokku."""
     project = ProjectFactory()
     app = AppFactory(project=project, name_dokku='my-app')
     use_case, dokku = make_use_case(app)
@@ -113,6 +116,21 @@ def test_delete_app_dokku_failure_does_not_abort_deletion():
         raise RuntimeError('ssh connection error')
 
     dokku.delete_app = failing_delete
+
+    with pytest.raises(InfrastructureError):
+        use_case.execute(DeleteAppCommand(app_id=app.id))
+
+    app.refresh_from_db()
+    assert app.deleted_at is None
+    assert app.status == AppStatus.ERROR
+    assert app.error_type == 'DeleteAppFailed'
+    assert 'ssh connection error' in app.error_details
+
+
+def test_delete_app_dokku_failure_when_app_already_gone_still_deletes():
+    project = ProjectFactory()
+    app = AppFactory(project=project, name_dokku='my-app')
+    use_case, dokku = make_use_case(app)  # 'my-app' nao existe no fake Dokku
 
     result = use_case.execute(DeleteAppCommand(app_id=app.id))
 
