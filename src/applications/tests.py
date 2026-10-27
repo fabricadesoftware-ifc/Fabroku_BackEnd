@@ -86,19 +86,84 @@ class ManageAppEndpointTests(APITestCase):
         )
         self.client.force_authenticate(user=self.user)
 
-    @patch('applications.views.manage_app_task.delay')
-    def test_stop_endpoint_dispatches_manage_app_task(self, mock_delay):
-        mock_delay.return_value = Mock(id='task-stop-123')
-
+    @patch('applications.views.manage_app_task.apply_async')
+    def test_stop_endpoint_dispatches_manage_app_task(self, mock_apply_async):
         response = self.client.post(f'/api/apps/apps/{self.app.id}/stop/')
 
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.data['status'], 'STOPPING')
-        self.assertEqual(response.data['task_id'], 'task-stop-123')
-        mock_delay.assert_called_once_with(app_id=self.app.id, action='stop')
+        task_id = response.data['task_id']
+        mock_apply_async.assert_called_once_with(kwargs={'app_id': self.app.id, 'action': 'stop'}, task_id=task_id)
+
+        self.app.refresh_from_db()
+        self.assertEqual(self.app.status, 'STOPPING')
+        self.assertEqual(self.app.task_id, task_id)
+
+    @patch('applications.views.manage_app_task.apply_async')
+    def test_restart_saves_status_and_task_id_before_dispatch(self, mock_apply_async):
+        """get_app_status nao pode responder pela task anterior enquanto a nova esta na fila."""
+        self.app.task_id = 'task-antiga-ja-concluida'
+        self.app.save(update_fields=['task_id'])
+
+        def assert_saved_before_enqueue(*, kwargs, task_id):
+            saved = App.objects.get(id=self.app.id)
+            self.assertEqual(saved.status, 'RESTARTING')
+            self.assertEqual(saved.task_id, task_id)
+
+        mock_apply_async.side_effect = assert_saved_before_enqueue
+
+        response = self.client.post(f'/api/apps/apps/{self.app.id}/restart/')
+
+        self.assertEqual(response.status_code, 202)
+        mock_apply_async.assert_called_once()
+        self.assertNotEqual(response.data['task_id'], 'task-antiga-ja-concluida')
+
+    @patch('applications.views.manage_app_task.apply_async')
+    @patch('applications.views.AsyncResult')
+    def test_restart_is_rejected_while_another_operation_is_running(self, mock_async_result_cls, mock_apply_async):
+        self.app.status = 'DEPLOYING'
+        self.app.task_id = 'task-deploy-ativo'
+        self.app.save(update_fields=['status', 'task_id'])
+        mock_async_result_cls.return_value = Mock(state='PROGRESS')
+
+        for action_name in ('start', 'restart'):
+            response = self.client.post(f'/api/apps/apps/{self.app.id}/{action_name}/')
+            self.assertEqual(response.status_code, 409, action_name)
+
+        mock_apply_async.assert_not_called()
+        self.app.refresh_from_db()
+        self.assertEqual(self.app.status, 'DEPLOYING')
+        self.assertEqual(self.app.task_id, 'task-deploy-ativo')
+
+    @patch('applications.views.deploy_app_task.apply_async')
+    @patch('applications.views.AsyncResult')
+    def test_redeploy_is_rejected_while_restarting(self, mock_async_result_cls, mock_apply_async):
+        self.app.status = 'RESTARTING'
+        self.app.task_id = 'task-restart-ativo'
+        self.app.save(update_fields=['status', 'task_id'])
+        mock_async_result_cls.return_value = Mock(state='STARTED')
+
+        response = self.client.post(f'/api/apps/apps/{self.app.id}/redeploy/')
+
+        self.assertEqual(response.status_code, 409)
+        mock_apply_async.assert_not_called()
+
+    @patch('applications.views.manage_app_task.apply_async')
+    @patch('applications.views.AsyncResult')
+    def test_transient_status_with_finished_task_does_not_block(self, mock_async_result_cls, mock_apply_async):
+        """App preso em RESTARTING com a task ja morta precisa aceitar um novo restart."""
+        self.app.status = 'RESTARTING'
+        self.app.task_id = 'task-restart-que-falhou'
+        self.app.save(update_fields=['status', 'task_id'])
+        mock_async_result_cls.return_value = Mock(state='FAILURE')
+
+        response = self.client.post(f'/api/apps/apps/{self.app.id}/restart/')
+
+        self.assertEqual(response.status_code, 202)
+        mock_apply_async.assert_called_once()
 
     @patch('applications.views.AppLogManager')
-    @patch('applications.views.manage_app_task.delay')
+    @patch('applications.views.manage_app_task.apply_async')
     @patch('applications.views.AsyncResult')
     def test_stop_endpoint_cancels_redeploy_instead_of_stopping_app(
         self, mock_async_result_cls, mock_delay, mock_logger_cls,
