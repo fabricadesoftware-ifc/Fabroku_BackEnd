@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from django.conf import settings
 from django.core.cache import cache
@@ -152,6 +152,54 @@ class GithubCallbackStateTests(APITestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertIn('error=invalid_state', response.url)
+
+
+class GitBranchesEndpointTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(email='branches@example.com', password='senha123', name='Branches')
+        self.user.git_token = 'gh-token'
+        self.user.save(update_fields=['git_token'])
+        self.client.force_authenticate(user=self.user)
+
+    @staticmethod
+    def _github_page(names, status_code=200):
+        return Mock(status_code=status_code, json=Mock(return_value=[{'name': name} for name in names]))
+
+    @patch('infrastructure.adapters.utils.git_repos.requests.get')
+    def test_lists_branches_across_pages(self, mock_get):
+        first_page = [f'feature-{index}' for index in range(100)]
+        mock_get.side_effect = [self._github_page(first_page), self._github_page(['main'])]
+
+        response = self.client.get('/api/git/branches', {'repo': 'org/repo'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [*first_page, 'main'])
+        self.assertEqual(mock_get.call_count, 2)
+        self.assertEqual(mock_get.call_args.args[0], 'https://api.github.com/repos/org/repo/branches')
+        self.assertEqual(mock_get.call_args.kwargs['headers']['Authorization'], 'Bearer gh-token')
+
+    @patch('infrastructure.adapters.utils.git_repos.requests.get')
+    def test_rejects_repo_that_is_not_owner_slash_name(self, mock_get):
+        for repo in ('', 'semdono', 'org/repo/../../user', 'org/repo?x=1', '../org/repo'):
+            response = self.client.get('/api/git/branches', {'repo': repo})
+            self.assertEqual(response.status_code, 400, repo)
+
+        mock_get.assert_not_called()
+
+    @patch('infrastructure.adapters.utils.git_repos.requests.get')
+    def test_github_refusal_returns_400(self, mock_get):
+        mock_get.return_value = self._github_page([], status_code=404)
+
+        response = self.client.get('/api/git/branches', {'repo': 'org/privado'})
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_requires_authentication(self):
+        self.client.force_authenticate(user=None)
+
+        response = self.client.get('/api/git/branches', {'repo': 'org/repo'})
+
+        self.assertEqual(response.status_code, 401)
 
 
 class AdminUnfoldSmokeTests(APITestCase):
