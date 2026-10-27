@@ -1028,6 +1028,8 @@ class StorageUsageTests(APITestCase):
         self.client.force_authenticate(user=self.superuser)
         cache.clear()
 
+    # Cache em memoria: aqui contamos queries de dominio, nao as do DatabaseCache.
+    @override_settings(CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}})
     @patch('core.apps.admin_views.DokkuAdapter')
     def test_storage_usage_avoids_n_plus_one_when_resolving_apps(self, mock_dokku_cls):
         mock_dokku = Mock()

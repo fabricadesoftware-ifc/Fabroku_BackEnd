@@ -453,6 +453,15 @@ SERVICE_PROXY_RABBITMQ_HOST = os.getenv(
     'proxy.rabbitmq.coolify.fabricadesoftware.ifc.edu.br',
 )
 SERVICE_PROXY_RABBITMQ_PORT = int(os.getenv('SERVICE_PROXY_RABBITMQ_PORT', 5672))  # noqa: PLW1508
+# Cache compartilhado entre processos: com varios `web` (dokku ps:scale), o LocMemCache
+# padrao do Django e por processo, e o OAuth state criado em um processo nao era
+# encontrado no callback atendido por outro (login falhava com invalid_state).
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
+        'LOCATION': 'django_cache',
+    },
+}
 CACHE_TTL_DEFAULT = int(os.getenv('CACHE_TTL_DEFAULT', 60))
 # Caches especificos podem sobrescrever esse valor com env vars no formato CACHE_TTL_<NAMESPACE>.
 ADMIN_STORAGE_USAGE_MAX_WORKERS = int(os.getenv('ADMIN_STORAGE_USAGE_MAX_WORKERS', 6))

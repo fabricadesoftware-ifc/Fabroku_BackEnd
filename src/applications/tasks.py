@@ -25,6 +25,8 @@ from infrastructure.adapters.dokku import DokkuAdapter
 from infrastructure.adapters.github import GitHubAdapter
 from observability.models import AppLogManager
 
+MANAGE_APP_COMMAND_TIMEOUT = 10 * 60
+
 
 @shared_task(bind=True)
 def create_app_task(self, app_id: int, user_id: int, env_vars: dict | None = None) -> dict:
@@ -78,7 +80,9 @@ def manage_app_task(self, app_id: int, action: str) -> dict:
     app = App.objects.get(id=app_id)
     log_manager = AppLogManager(app, self.request.id)
 
-    use_case = ManageAppUseCase(dokku_port=DokkuAdapter(), log_manager=log_manager)
+    # ps:start/ps:restart esperam health checks do app; 120s padrao cortava apps maiores no meio.
+    dokku = DokkuAdapter(command_timeout=MANAGE_APP_COMMAND_TIMEOUT)
+    use_case = ManageAppUseCase(dokku_port=dokku, log_manager=log_manager)
     result = use_case.execute(ManageAppCommand(app_id=app_id, action=action, task_id=self.request.id))
     return {'status': 'success', 'action': result.action, 'app_id': result.app_id, 'output': result.output}
 

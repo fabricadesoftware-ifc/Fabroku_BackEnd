@@ -19,6 +19,16 @@ class AppStatus(models.TextChoices):
     DELETED = 'DELETED', 'Deleted'
 
 
+# Operacao em andamento no worker: nao aceitar outra acao por cima.
+TRANSIENT_APP_STATUSES = frozenset({
+    AppStatus.STARTING,
+    AppStatus.STOPPING,
+    AppStatus.RESTARTING,
+    AppStatus.DEPLOYING,
+    AppStatus.DELETING,
+})
+
+
 class App(models.Model):
     name = models.CharField(max_length=255)
     name_dokku = models.CharField(max_length=255, null=True, blank=True)
