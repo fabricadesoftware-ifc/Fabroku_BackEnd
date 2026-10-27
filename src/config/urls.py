@@ -19,7 +19,7 @@ from core.auth_user.cli_auth import cli_login
 from core.auth_user.views import CustomTokenRefreshView
 from infrastructure.adapters.utils.git_callback import github_callback
 from infrastructure.adapters.utils.git_redirect import github_login
-from infrastructure.adapters.utils.git_repos import get_git_repos
+from infrastructure.adapters.utils.git_repos import get_git_branches, get_git_repos
 from infrastructure.adapters.utils.git_webhook import github_webhook
 from infrastructure.platform_config import platform_config
 from observability.notification_views import AdminNotificationViewSet
@@ -61,6 +61,7 @@ urlpatterns = [
     path('api/auth/github/login/', github_login),
     path('api/auth/cli/login/', cli_login, name='cli-login'),
     path('api/git/repos', get_git_repos),
+    path('api/git/branches', get_git_branches),
     path('api/webhooks/github/<int:app_id>/', github_webhook, name='github-webhook'),
     path('', lambda request: redirect('api/', permanent=True)),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
