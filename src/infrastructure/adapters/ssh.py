@@ -270,6 +270,40 @@ class SSHAdapter:
 
         return exit_status
 
+    def _run_command_bytes_streaming(self, command: str, *, idle_timeout: float) -> Generator[bytes, None, int]:
+        """Stdout cru (sem PTY), em pedaços, para quem conta bytes. Retorna o exit status.
+
+        Diferente dos outros métodos, erros de conexão sobem como exceção: quem chama
+        decide se reconecta. Sem nenhum byte em `idle_timeout` segundos, sobe socket.timeout.
+        """
+        audit = begin_ssh_audit(command, self.audit_context)
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            client.connect(
+                self.host,
+                port=self.port,
+                username=self.username,
+                pkey=self._get_pkey(),
+                timeout=self.connect_timeout,
+                banner_timeout=self.connect_timeout,
+                auth_timeout=self.connect_timeout,
+            )
+            client.get_transport().set_keepalive(30)
+            _stdin, stdout, _stderr = client.exec_command(command)
+            channel = stdout.channel
+            channel.settimeout(idle_timeout)
+            while chunk := channel.recv(32768):
+                yield chunk
+            exit_status = channel.recv_exit_status()
+        except Exception as e:
+            finish_ssh_audit(audit, status='error', error_summary=str(e))
+            raise
+        finally:
+            client.close()
+        finish_ssh_audit(audit, status='success' if exit_status == 0 else 'failed', exit_status=exit_status)
+        return exit_status
+
     def _run_command_streaming_controlled(  # noqa: PLR0912
         self,
         command: str,

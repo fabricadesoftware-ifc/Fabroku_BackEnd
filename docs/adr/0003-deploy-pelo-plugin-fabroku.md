@@ -40,7 +40,10 @@ antigo continua.
 
 - O build não morre mais com a sessão SSH; o log completo fica no servidor em
   `/var/lib/dokku/data/fabroku/deploys/<id>/`, apagado pelo `fabroku:gc`.
-- Um deploy longo faz uma conexão SSH a cada 2 s em vez de uma conexão aberta.
+- Com o plugin 0.2.0+ o log vem por `fabroku:deploy-follow`: uma conexão aberta
+  por deploy, que reconecta do último byte se cair (ou se ficar 120 s sem dados).
+  Com o plugin 0.1.x o Fabroku lê por `fabroku:deploy-log` a cada 2 s, uma conexão
+  SSH por leitura.
 - O plugin é mais uma peça para instalar e atualizar no servidor.
 - Confirmado no servidor (Debian 13, Dokku 0.38.27) que um processo iniciado com
   `setsid` sobrevive à queda de uma sessão SSH com PTY.
