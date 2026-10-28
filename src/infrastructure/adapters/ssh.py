@@ -122,7 +122,10 @@ class SSHAdapter:
 
         raise ValueError('Não foi possível carregar a chave SSH. Formato não suportado.')
 
-    def _run_command(self, command: str) -> str:
+    def _run_command(self, command: str, *, audit: bool = True) -> str:
+        """`audit=False` pula o registro de auditoria (comandos de leitura repetidos em ciclo)."""
+        if not audit:
+            return self._run_command_unaudited(command)
         audit = begin_ssh_audit(command, self.audit_context)
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -163,6 +166,35 @@ class SSHAdapter:
             return f'SSH Command Timeout after {self.command_timeout}s while executing: {command}'
         except Exception as e:
             finish_ssh_audit(audit, status='error', error_summary=str(e))
+            return f'SSH Connection Error: {e}'
+        finally:
+            client.close()
+
+    def _run_command_unaudited(self, command: str) -> str:
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            client.connect(
+                self.host,
+                port=self.port,
+                username=self.username,
+                pkey=self._get_pkey(),
+                timeout=self.connect_timeout,
+                banner_timeout=self.connect_timeout,
+                auth_timeout=self.connect_timeout,
+            )
+            _stdin, stdout, stderr = client.exec_command(command)
+            stdout.channel.settimeout(self.command_timeout)
+            stderr.channel.settimeout(self.command_timeout)
+            output = stdout.read().decode('utf-8')
+            error_output = stderr.read().decode('utf-8')
+            if stdout.channel.recv_exit_status() != 0:
+                detail = error_output.strip() or output.strip() or '(sem detalhes)'
+                return f'Failed to execute command: {command}\n{detail}'
+            return self._successful_command_output(output, error_output)
+        except socket.timeout:
+            return f'SSH Command Timeout after {self.command_timeout}s while executing: {command}'
+        except Exception as e:
             return f'SSH Connection Error: {e}'
         finally:
             client.close()

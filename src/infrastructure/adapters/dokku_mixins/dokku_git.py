@@ -1,5 +1,23 @@
+import base64
+import codecs
+import json
+import logging
+import re
+import time
+import uuid
 from abc import abstractmethod
 from collections.abc import Callable, Generator
+
+from django.conf import settings
+
+logger = logging.getLogger(__name__)
+
+GIT_SYNC_FAILED_MESSAGE = 'Failed to sync Git repository and deploy.'
+REMOTE_DEPLOY_POLL_SECONDS = 2
+# ~1 min sem conseguir ler o log: desiste de acompanhar (o build segue no servidor).
+REMOTE_DEPLOY_MAX_POLL_FAILURES = 30
+REMOTE_DEPLOY_ID_PATTERN = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+REMOTE_DEPLOY_FINISHED_STATES = frozenset({'succeeded', 'failed', 'cancelled', 'lost'})
 
 GIT_SYNC_FAILURE_MARKERS = (
     '[error]',
@@ -16,11 +34,26 @@ GIT_SYNC_FAILURE_MARKERS = (
 )
 
 
+class RemoteDeployError(Exception):
+    """O plugin fabroku respondeu algo que não é JSON (plugin ausente, SSH caiu...)."""
+
+
+def _last_json_line(output: str) -> dict | None:
+    for raw_line in reversed((output or '').splitlines()):
+        line = raw_line.strip()
+        if line.startswith('{'):
+            try:
+                return json.loads(line)
+            except ValueError:
+                return None
+    return None
+
+
 class DokkuGitMixin:
     """Mixin que fornece métodos para integração Git com Dokku."""
 
     @abstractmethod
-    def _run_command(self, command: str) -> str:
+    def _run_command(self, command: str, *, audit: bool = True) -> str:
         """Executa um comando no servidor Dokku."""
         ...
 
@@ -51,6 +84,7 @@ class DokkuGitMixin:
         git_url: str,
         branch: str = 'main',
         on_line: Callable[[str], None] | None = None,
+        deploy_id: str | None = None,
     ) -> str:
         """
         Sincroniza repositório Git com streaming de logs em tempo real.
@@ -60,12 +94,16 @@ class DokkuGitMixin:
             git_url: URL do repositório Git
             branch: Branch a sincronizar (default: main)
             on_line: Callback chamado para cada linha de output
+            deploy_id: ID do deploy no plugin fabroku (o task_id); gerado se ausente
 
         Returns:
             Output completo do comando
         """
         if not self.exists_app(app_name):
             return 'Application not found.'
+
+        if settings.DOKKU_REMOTE_DEPLOY_PLUGIN and self.remote_deploy_available():
+            return self._sync_git_remote(app_name, git_url, branch, on_line, deploy_id or str(uuid.uuid4()))
 
         command = f'git:sync --build {app_name} {git_url} {branch}'
         lines = []
@@ -79,9 +117,90 @@ class DokkuGitMixin:
 
         output_lower = output.lower()
         if any(marker in output_lower for marker in GIT_SYNC_FAILURE_MARKERS):
-            return 'Failed to sync Git repository and deploy.'
+            return GIT_SYNC_FAILED_MESSAGE
 
         return output
+
+    # --- Plugin fabroku (Fabroku_Plugin): build roda no servidor, fora da sessão SSH ---
+
+    def _remote_deploy_json(self, command: str, *, audit: bool = True) -> dict:
+        data = _last_json_line(self._run_command(command, audit=audit))
+        if data is None:
+            raise RemoteDeployError(f'Resposta inesperada do plugin fabroku para "{command.split(maxsplit=1)[0]}"')
+        return data
+
+    def remote_deploy_available(self) -> bool:
+        try:
+            return 'version' in self._remote_deploy_json('fabroku:version')
+        except Exception:
+            logger.warning('Plugin fabroku indisponível; usando git:sync pela sessão SSH.', exc_info=True)
+            return False
+
+    def get_remote_deploy_status(self, deploy_id: str) -> dict | None:
+        """Estado do deploy no plugin, ou None se o plugin não conhece esse id."""
+        if not REMOTE_DEPLOY_ID_PATTERN.match(deploy_id or ''):
+            return None
+        data = self._remote_deploy_json(f'fabroku:deploy-status {deploy_id}')
+        return None if 'error' in data else data
+
+    def cancel_remote_deploy(self, deploy_id: str) -> dict | None:
+        """Cancela o deploy no servidor (SIGTERM, SIGKILL após o prazo, dokku cleanup)."""
+        if not REMOTE_DEPLOY_ID_PATTERN.match(deploy_id or ''):
+            return None
+        data = self._remote_deploy_json(f'fabroku:deploy-cancel {deploy_id}')
+        return None if 'error' in data else data
+
+    def _sync_git_remote(
+        self,
+        app_name: str,
+        git_url: str,
+        branch: str,
+        on_line: Callable[[str], None] | None,
+        deploy_id: str,
+    ) -> str:
+        def emit(line: str) -> None:
+            if on_line:
+                on_line(line.rstrip('\r'))
+
+        started = self._remote_deploy_json(f'fabroku:deploy {app_name} {git_url} {branch} {deploy_id}')
+        if 'error' in started:
+            emit(f'[ERROR] {started.get("message") or started["error"]}')
+            return f'{GIT_SYNC_FAILED_MESSAGE} ({started["error"]})'
+
+        decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
+        offset, pending, failures = 0, '', 0
+        while True:
+            try:
+                # Sem auditoria: um registro por leitura de log seriam centenas por deploy.
+                data = self._remote_deploy_json(f'fabroku:deploy-log {deploy_id} {offset}', audit=False)
+                if 'error' in data:
+                    raise RemoteDeployError(data.get('message') or data['error'])
+            except RemoteDeployError as exc:
+                failures += 1
+                if failures >= REMOTE_DEPLOY_MAX_POLL_FAILURES:
+                    emit(f'[SSH ERROR] Não foi possível acompanhar o deploy {deploy_id}: {exc}')
+                    return f'{GIT_SYNC_FAILED_MESSAGE} (log indisponível)'
+                time.sleep(REMOTE_DEPLOY_POLL_SECONDS)
+                continue
+
+            failures = 0
+            *lines, pending = (pending + decoder.decode(base64.b64decode(data['chunk']))).split('\n')
+            for line in lines:
+                emit(line)
+            offset = data['next_offset']
+
+            if data['eof']:
+                tail = pending + decoder.decode(b'', final=True)
+                if tail:
+                    emit(tail)
+                break
+            if offset >= data['size']:
+                time.sleep(REMOTE_DEPLOY_POLL_SECONDS)
+
+        if data['state'] == 'succeeded':
+            # O exit code é a verdade: não procura marcadores de erro no log.
+            return f'Remote deploy {deploy_id} succeeded'
+        return f'{GIT_SYNC_FAILED_MESSAGE} ({data["state"]})'
 
     def set_git_remote(self, app_name: str, git_url: str) -> str:
         """Configura o repositório Git remoto para a aplicação Dokku."""

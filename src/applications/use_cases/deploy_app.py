@@ -168,7 +168,7 @@ class DeployAppUseCase:
             git_url = git_sync_plan.git_url or app.git
             self.log_manager.info(git_sync_plan.message, category=LogCategory.GIT, progress=10)
 
-            output = self._sync_git(dokku_app_name, git_url, app.branch)
+            output = self._sync_git(dokku_app_name, git_url, app.branch, deploy_id=cmd.task_id)
             if 'Failed' in output or 'failed' in output.lower():
                 safe_output = mask_git_credentials(output)
                 self.log_manager.error(f'Erro no redeploy: {safe_output}', category=LogCategory.DEPLOY, progress=90)
@@ -239,7 +239,7 @@ class DeployAppUseCase:
         if _dokku_output_failed(output):
             raise DeploymentFailed(reason=output, step='apply_env_vars')
 
-    def _sync_git(self, dokku_app_name: str, git_url: str, branch: str) -> str:
+    def _sync_git(self, dokku_app_name: str, git_url: str, branch: str, *, deploy_id: str | None = None) -> str:
         line_count = [0]
         base_progress, max_progress = 10, 90
 
@@ -251,7 +251,9 @@ class DeployAppUseCase:
             progress = min(base_progress + (line_count[0] * 0.5), max_progress - 1)
             self.log_manager.dokku(safe_line, category=LogCategory.GIT, progress=int(progress))
 
-        return self.dokku_port.sync_git_streaming(dokku_app_name, git_url, branch, on_line=on_log_line)
+        return self.dokku_port.sync_git_streaming(
+            dokku_app_name, git_url, branch, on_line=on_log_line, deploy_id=deploy_id
+        )
 
     def _ensure_letsencrypt(self, app: App, dokku_app_name: str) -> None:
         """Re-check Let's Encrypt/domain only if they weren't already configured (e.g. first deploy failed)."""

@@ -35,6 +35,19 @@ executar os comandos Dokku necessarios. O importante e o backend conseguir
 criar apps, configurar variaveis, rodar deploys, escalar processos e gerenciar
 servicos pelo Dokku.
 
+Opcional, recomendado: instale o plugin
+[Fabroku_Plugin](https://github.com/fabricadesoftware-ifc/Fabroku_Plugin) e
+ligue `DOKKU_REMOTE_DEPLOY_PLUGIN=true`. Com ele o build roda no servidor, fora
+da sessao SSH: cancelar o deploy, reiniciar o worker ou perder a rede nao
+interrompe o build no meio. Sem o plugin (ou com a variavel desligada) o
+Fabroku continua usando `git:sync --build` pela sessao SSH. Detalhes em
+`docs/adr/0003-deploy-pelo-plugin-fabroku.md`.
+
+```bash
+sudo dokku plugin:install https://github.com/fabricadesoftware-ifc/Fabroku_Plugin.git --name fabroku
+dokku fabroku:version
+```
+
 ### 2. Configurar o backend do Fabroku
 
 O backend precisa de um banco para guardar usuarios, projetos, apps, logs,
