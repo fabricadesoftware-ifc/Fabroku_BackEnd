@@ -110,7 +110,7 @@ class CreateAppUseCase:
             if head_sha:
                 self.github_port.set_deploy_pending(user.git_token, app.git, head_sha, app.name)
 
-            self._configure_git(dokku_app_name, git_url, app.branch)
+            self._configure_git(dokku_app_name, git_url, app.branch, deploy_id=cmd.task_id)
 
             try:
                 reapply_saved_process_scales(app, self.dokku_port, self.log_manager, progress=86)
@@ -302,7 +302,7 @@ class CreateAppUseCase:
             return None
         return self.github_port.get_branch_head_sha(repo_name, app.branch, user_id=user.id)
 
-    def _configure_git(self, dokku_app_name: str, git_url: str, branch: str) -> None:
+    def _configure_git(self, dokku_app_name: str, git_url: str, branch: str, *, deploy_id: str | None = None) -> None:
         self.log_manager.info('Iniciando sincronização do repositório Git...', category=LogCategory.GIT, progress=45)
         self.log_manager.info(
             f'Clonando branch "{branch}"... Esta etapa pode demorar alguns minutos.',
@@ -322,7 +322,7 @@ class CreateAppUseCase:
             self.log_manager.dokku(safe_line, category=LogCategory.GIT, progress=int(progress))
 
         output = self.dokku_port.sync_git_streaming(
-            dokku_app_name, git_url, branch, on_line=on_log_line
+            dokku_app_name, git_url, branch, on_line=on_log_line, deploy_id=deploy_id
         )
         safe_output = mask_git_credentials(output)
 

@@ -49,6 +49,6 @@ class DokkuAdapter(
             audit_context=audit_context,
         )
 
-    def _run_command(self, command: str) -> str:
+    def _run_command(self, command: str, *, audit: bool = True) -> str:
         """Executa comando via SSH no servidor Dokku."""
-        return super()._run_command(command)
+        return super()._run_command(command, audit=audit)

@@ -88,8 +88,13 @@ class IDokkuPort(ABC):
         git_url: str,
         branch: str = 'main',
         on_line: Callable[[str], None] | None = None,
+        deploy_id: str | None = None,
     ) -> str:
-        """Sync (and build/deploy) an app's Git repository, streaming output lines via on_line."""
+        """Sync (and build/deploy) an app's Git repository, streaming output lines via on_line.
+
+        `deploy_id` identifies the build in the fabroku plugin (the Celery task_id), so it can be
+        cancelled or queried later.
+        """
 
     @abstractmethod
     def set_git_remote(self, app_name: str, git_url: str) -> str:

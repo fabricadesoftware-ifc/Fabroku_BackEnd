@@ -24,6 +24,7 @@ from applications.models import App, AppProcessScale, AppRunArtifact, AppRunArti
 from applications.ownership import FINISHED_TASK_STATES, dispatch_app_task, is_app_busy, save_if_owner
 from applications.pending_redeploy import clear_pending_redeploy
 from applications.process_scale import get_process_max_instances, sync_app_process_scales_from_dokku
+from applications.remote_deploy import cancel_remote_deploy, reconcile_orphan_remote_deploy
 from applications.tasks import (
     delete_app_task,
     deploy_app_task,
@@ -405,6 +406,8 @@ class AppViewSet(ModelViewSet):
 
             # Quem cancela nao quer que um push guardado redeploye logo em seguida.
             clear_pending_redeploy(app.id)
+            # Com o plugin, o build roda fora da task: matar a task nao o para.
+            cancel_remote_deploy(app, cancelled_task_id)
             _cleanup_after_cancel(app)
             final_status, error_details = _app_status_after_cancel(app)
             extra = {'error_type': 'RedeployCancelled', 'error_details': error_details} if error_details else {}
@@ -690,6 +693,7 @@ class AppViewSet(ModelViewSet):
     @action(detail=True, methods=['get'])
     def get_app_status(self, request, pk=None):
         app = self.get_object()
+        reconcile_orphan_remote_deploy(app)
 
         if not app.task_id:
             return Response({'state': 'UNKNOWN', 'status': 'Nenhuma task vinculada.'})

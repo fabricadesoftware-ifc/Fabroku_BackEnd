@@ -1,3 +1,5 @@
+import base64
+import json
 import socket
 from datetime import timedelta
 from unittest.mock import ANY, Mock, patch
@@ -1175,3 +1177,149 @@ class StorageUsageTests(APITestCase):
 
         self.assertEqual(refreshed_response.status_code, 200)
         self.assertEqual(len(refreshed_response.data['services']), 2)
+
+
+class FakeRemoteDeployAdapter(DokkuGitMixin):
+    """Responde aos comandos fabroku:* com respostas roteirizadas (uma lista por comando)."""
+
+    def __init__(self, responses):
+        self.responses = {name: list(items) for name, items in responses.items()}
+        self.calls = []
+
+    def _run_command(self, command: str, *, audit: bool = True) -> str:
+        self.calls.append((command, audit))
+        name = command.split(maxsplit=1)[0]
+        response = self.responses[name].pop(0)
+        return response if isinstance(response, str) else json.dumps(response)
+
+    def _run_command_streaming(self, command: str):
+        self.calls.append((command, True))
+        yield 'linha do caminho antigo'
+
+    def exists_app(self, app_name: str) -> bool:
+        return True
+
+
+def _log_chunk(text: str, offset: int, *, size: int, state: str = 'running', eof: bool = False) -> dict:
+    raw = text.encode('utf-8')
+    return {
+        'offset': offset,
+        'next_offset': offset + len(raw),
+        'size': size,
+        'state': state,
+        'eof': eof,
+        'chunk': base64.b64encode(raw).decode(),
+    }
+
+
+REMOTE_DEPLOY_ID = '0f0e0d0c-1111-4222-8333-444455556666'
+
+
+@override_settings(DOKKU_REMOTE_DEPLOY_PLUGIN=True)
+@patch('infrastructure.adapters.dokku_mixins.dokku_git.time.sleep')
+class DokkuRemoteDeployTests(SimpleTestCase):
+    def _sync(self, adapter):
+        lines = []
+        output = adapter.sync_git_streaming(
+            'my-app', 'https://x-access-token:t@github.com/org/repo.git', 'main',
+            on_line=lines.append, deploy_id=REMOTE_DEPLOY_ID,
+        )
+        return output, lines
+
+    def test_streams_log_by_offset_until_build_succeeds(self, _sleep):
+        adapter = FakeRemoteDeployAdapter({
+            'fabroku:version': [{'version': '0.1.0'}],
+            'fabroku:deploy': [{'id': REMOTE_DEPLOY_ID, 'state': 'running'}],
+            'fabroku:deploy-log': [
+                _log_chunk('linha 1\nlinha', 0, size=13),
+                _log_chunk(' 2\r\n', 13, size=17, state='succeeded', eof=True),
+            ],
+        })
+
+        output, lines = self._sync(adapter)
+
+        self.assertEqual(lines, ['linha 1', 'linha 2'])
+        self.assertEqual(output, f'Remote deploy {REMOTE_DEPLOY_ID} succeeded')
+        self.assertIn(
+            (f'fabroku:deploy my-app https://x-access-token:t@github.com/org/repo.git main {REMOTE_DEPLOY_ID}', True),
+            adapter.calls,
+        )
+        self.assertIn((f'fabroku:deploy-log {REMOTE_DEPLOY_ID} 13', False), adapter.calls)
+
+    def test_failed_build_is_reported_even_without_error_markers_in_log(self, _sleep):
+        adapter = FakeRemoteDeployAdapter({
+            'fabroku:version': [{'version': '0.1.0'}],
+            'fabroku:deploy': [{'id': REMOTE_DEPLOY_ID, 'state': 'running'}],
+            'fabroku:deploy-log': [_log_chunk('saida qualquer\n', 0, size=15, state='cancelled', eof=True)],
+        })
+
+        output, _lines = self._sync(adapter)
+
+        self.assertIn('Failed to sync Git repository and deploy.', output)
+        self.assertIn('cancelled', output)
+
+    def test_utf8_character_split_between_chunks_is_kept(self, _sleep):
+        raw = 'Instalação\n'.encode()
+        first, second = raw[:8], raw[8:]
+        adapter = FakeRemoteDeployAdapter({
+            'fabroku:version': [{'version': '0.1.0'}],
+            'fabroku:deploy': [{'id': REMOTE_DEPLOY_ID, 'state': 'running'}],
+            'fabroku:deploy-log': [
+                {**_log_chunk('', 0, size=len(raw)), 'next_offset': len(first),
+                 'chunk': base64.b64encode(first).decode()},
+                {**_log_chunk('', len(first), size=len(raw), state='succeeded', eof=True),
+                 'next_offset': len(raw), 'chunk': base64.b64encode(second).decode()},
+            ],
+        })
+
+        _output, lines = self._sync(adapter)
+
+        self.assertEqual(lines, ['Instalação'])
+
+    def test_busy_app_fails_without_polling(self, _sleep):
+        adapter = FakeRemoteDeployAdapter({
+            'fabroku:version': [{'version': '0.1.0'}],
+            'fabroku:deploy': [
+                'Failed to execute command: fabroku:deploy ...\n'
+                '{"error":"app_busy","message":"outro deploy deste app esta em andamento"}'
+            ],
+        })
+
+        output, lines = self._sync(adapter)
+
+        self.assertIn('app_busy', output)
+        self.assertEqual(lines, ['[ERROR] outro deploy deste app esta em andamento'])
+        self.assertNotIn('fabroku:deploy-log', adapter.responses)
+
+    def test_transient_poll_failures_are_retried(self, _sleep):
+        adapter = FakeRemoteDeployAdapter({
+            'fabroku:version': [{'version': '0.1.0'}],
+            'fabroku:deploy': [{'id': REMOTE_DEPLOY_ID, 'state': 'running'}],
+            'fabroku:deploy-log': [
+                'SSH Connection Error: timed out',
+                _log_chunk('ok\n', 0, size=3, state='succeeded', eof=True),
+            ],
+        })
+
+        output, lines = self._sync(adapter)
+
+        self.assertEqual(lines, ['ok'])
+        self.assertIn('succeeded', output)
+
+    def test_missing_plugin_falls_back_to_ssh_session(self, _sleep):
+        adapter = FakeRemoteDeployAdapter({
+            'fabroku:version': ['Failed to execute command: fabroku:version\n`fabroku:version` is not a dokku command.'],
+        })
+
+        output, lines = self._sync(adapter)
+
+        self.assertEqual(lines, ['linha do caminho antigo'])
+        self.assertEqual(output, 'linha do caminho antigo')
+
+    @override_settings(DOKKU_REMOTE_DEPLOY_PLUGIN=False)
+    def test_flag_off_never_calls_plugin(self, _sleep):
+        adapter = FakeRemoteDeployAdapter({})
+
+        self._sync(adapter)
+
+        self.assertEqual(adapter.calls, [('git:sync --build my-app https://x-access-token:t@github.com/org/repo.git main', True)])

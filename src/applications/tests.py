@@ -1259,3 +1259,105 @@ class ConcurrentAppActionsTests(APITestCase):
         self.assertEqual(response.data['status'], 'ERROR')
         self.app.refresh_from_db()
         self.assertEqual(self.app.error_type, 'RedeployCancelled')
+
+
+REMOTE_TASK_ID = '0f0e0d0c-1111-4222-8333-444455556666'
+
+
+@override_settings(DOKKU_REMOTE_DEPLOY_PLUGIN=True)
+class RemoteDeployRecoveryTests(APITestCase):
+    """Deploy pelo plugin fabroku: worker morto no meio e cancelamento."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(email='remote@example.com', password='senha123', name='Remoto')
+        self.user.is_superuser = True
+        self.user.save(update_fields=['is_superuser'])
+        self.project = Project.objects.create(name='Projeto Remoto')
+        self.project.users.add(self.user)
+        self.app = App.objects.create(
+            name='app-remoto',
+            name_dokku='app-remoto',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=self.project,
+            status='DEPLOYING',
+            task_id=REMOTE_TASK_ID,
+            domain='app-remoto.example.com',
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def _remote(self, state, minutes_ago):
+        finished = (timezone.now() - timedelta(minutes=minutes_ago)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        return {'id': REMOTE_TASK_ID, 'state': state, 'exit_code': 0, 'finished_at': finished}
+
+    @patch('applications.remote_deploy.DokkuAdapter')
+    def test_build_finished_long_ago_without_task_marks_running(self, mock_dokku_cls):
+        from applications.remote_deploy import reconcile_orphan_remote_deploy  # noqa: PLC0415
+
+        mock_dokku_cls.return_value.get_remote_deploy_status.return_value = self._remote('succeeded', 10)
+
+        self.assertTrue(reconcile_orphan_remote_deploy(self.app))
+
+        self.app.refresh_from_db()
+        self.assertEqual(self.app.status, 'RUNNING')
+        mock_dokku_cls.return_value.get_remote_deploy_status.assert_called_once_with(REMOTE_TASK_ID)
+
+    @patch('applications.remote_deploy.DokkuAdapter')
+    def test_recent_build_is_left_to_the_task(self, mock_dokku_cls):
+        from applications.remote_deploy import reconcile_orphan_remote_deploy  # noqa: PLC0415
+
+        mock_dokku_cls.return_value.get_remote_deploy_status.return_value = self._remote('succeeded', 1)
+
+        self.assertFalse(reconcile_orphan_remote_deploy(self.app))
+        self.app.refresh_from_db()
+        self.assertEqual(self.app.status, 'DEPLOYING')
+
+    @patch('applications.remote_deploy.DokkuAdapter')
+    def test_failed_build_marks_error_and_checks_are_throttled(self, mock_dokku_cls):
+        from applications.remote_deploy import reconcile_orphan_remote_deploy  # noqa: PLC0415
+
+        mock_dokku_cls.return_value.get_remote_deploy_status.return_value = self._remote('running', 0)
+        self.assertFalse(reconcile_orphan_remote_deploy(self.app))
+        mock_dokku_cls.return_value.get_remote_deploy_status.return_value = self._remote('failed', 10)
+        self.assertFalse(reconcile_orphan_remote_deploy(self.app))  # dentro dos 30 s: nem consulta
+
+        cache.clear()
+        self.assertTrue(reconcile_orphan_remote_deploy(self.app))
+        self.app.refresh_from_db()
+        self.assertEqual(self.app.status, 'ERROR')
+        self.assertEqual(self.app.error_type, 'RemoteDeployOrphaned')
+        self.assertEqual(mock_dokku_cls.return_value.get_remote_deploy_status.call_count, 2)
+
+    @override_settings(DOKKU_REMOTE_DEPLOY_PLUGIN=False)
+    @patch('applications.remote_deploy.DokkuAdapter')
+    def test_flag_off_never_queries_plugin(self, mock_dokku_cls):
+        from applications.remote_deploy import reconcile_orphan_remote_deploy  # noqa: PLC0415
+
+        self.assertFalse(reconcile_orphan_remote_deploy(self.app))
+        mock_dokku_cls.assert_not_called()
+
+    @patch('applications.remote_deploy.DokkuAdapter')
+    @patch('applications.views.AsyncResult')
+    def test_get_app_status_reconciles_orphan_deploy(self, mock_async_result_cls, mock_dokku_cls):
+        mock_async_result_cls.return_value = Mock(state='PROGRESS', info={'current': 50})
+        mock_dokku_cls.return_value.get_remote_deploy_status.return_value = self._remote('succeeded', 10)
+
+        self.client.get(f'/api/apps/apps/{self.app.id}/get_app_status/')
+
+        self.app.refresh_from_db()
+        self.assertEqual(self.app.status, 'RUNNING')
+
+    @patch('applications.remote_deploy.DokkuAdapter')
+    @patch('applications.views.DokkuAdapter')
+    @patch('applications.views.AsyncResult')
+    def test_cancel_stops_build_on_server(self, mock_async_result_cls, mock_views_dokku_cls, mock_dokku_cls):
+        mock_async_result_cls.return_value = Mock(state='PROGRESS')
+        mock_views_dokku_cls.return_value.ps_report.return_value = 'true'
+
+        response = self.client.post(f'/api/apps/apps/{self.app.id}/stop/')
+
+        self.assertEqual(response.status_code, 202)
+        mock_dokku_cls.return_value.cancel_remote_deploy.assert_called_once_with(REMOTE_TASK_ID)
+        self.app.refresh_from_db()
+        self.assertEqual(self.app.status, 'RUNNING')

@@ -124,8 +124,12 @@ class FakeDokkuPort(IDokkuPort):  # noqa: PLR0904
         git_url: str,
         branch: str = 'main',
         on_line: Callable[[str], None] | None = None,
+        deploy_id: str | None = None,
     ) -> str:
-        self._log_call('sync_git_streaming', {'app_name': app_name, 'git_url': git_url, 'branch': branch})
+        self._log_call(
+            'sync_git_streaming',
+            {'app_name': app_name, 'git_url': git_url, 'branch': branch, 'deploy_id': deploy_id},
+        )
         app = self._require_app(app_name)
         app['git_url'] = git_url
         app['branch'] = branch
