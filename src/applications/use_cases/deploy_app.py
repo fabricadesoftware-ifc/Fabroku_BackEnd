@@ -19,11 +19,13 @@ Two deliberate deviations from the legacy task, both noted in REFACTOR-PLAN.md:
 from dataclasses import dataclass
 from typing import Callable
 
+from django.core.cache import cache
 from django.utils import timezone
 
 from applications.domain.exceptions import DeploymentFailed
 from applications.github_integration import GitSyncPlan, reconcile_github_webhook, resolve_git_sync_plan
 from applications.models import App, AppStatus
+from applications.ownership import claim_app, save_if_owner
 from applications.ports.i_dokku import IDokkuPort
 from applications.ports.i_github import IGitHubPort
 from applications.process_scale import reapply_saved_process_scales
@@ -61,6 +63,25 @@ class AppDeployed:
     commit_sha: str | None
 
 
+PENDING_COMMIT_STATUS_TTL_SECONDS = 2 * 60 * 60
+
+
+def _pending_commit_status_key(task_id: str) -> str:
+    return f'deploy-commit-status-pending:{task_id}'
+
+
+def pop_pending_commit_status(task_id: str) -> str | None:
+    """Commit que este deploy marcou como pending no GitHub e ainda nao resolveu.
+
+    Usado ao cancelar o deploy: a task morre com SIGTERM e nao chega a marcar
+    sucesso/falha, entao quem cancela precisa resolver o check do commit.
+    """
+    key = _pending_commit_status_key(task_id)
+    sha = cache.get(key)
+    cache.delete(key)
+    return sha
+
+
 class DeployAppUseCase:
     """Redeploy an already-provisioned `App`: sync git, reapply config, verify it's up."""
 
@@ -82,13 +103,11 @@ class DeployAppUseCase:
     def execute(self, cmd: DeployAppCommand) -> AppDeployed:
         app = App.objects.get(id=cmd.app_id, deleted_at__isnull=True)
 
-        app.task_id = cmd.task_id
-        app.status = AppStatus.DEPLOYING
-        update_fields = ['task_id', 'status']
+        claim_app(app, cmd.task_id)
+        start_fields = {'status': AppStatus.DEPLOYING}
         if cmd.commit_sha:
-            app.last_commit_sha = cmd.commit_sha
-            update_fields.append('last_commit_sha')
-        app.save(update_fields=update_fields)
+            start_fields['last_commit_sha'] = cmd.commit_sha
+        save_if_owner(app, cmd.task_id, **start_fields)
 
         commit_display = cmd.commit_sha[:7] if cmd.commit_sha else 'latest'
         self.log_manager.info(
@@ -116,6 +135,10 @@ class DeployAppUseCase:
             )
         if cmd.commit_sha and git_token:
             self.github_port.set_deploy_pending(git_token, app.git, cmd.commit_sha, app.name)
+            if cmd.task_id:
+                cache.set(
+                    _pending_commit_status_key(cmd.task_id), cmd.commit_sha, timeout=PENDING_COMMIT_STATUS_TTL_SECONDS
+                )
 
         dokku_app_name = app.name_dokku
 
@@ -151,8 +174,11 @@ class DeployAppUseCase:
                 self.log_manager.error(f'Erro no redeploy: {safe_output}', category=LogCategory.DEPLOY, progress=90)
                 raise DeploymentFailed(reason=safe_output, step='git_sync')
 
-            app.status = AppStatus.RUNNING
-            app.save(update_fields=['status'])
+            if not save_if_owner(app, cmd.task_id, status=AppStatus.RUNNING):
+                self.log_manager.warning(
+                    'Outra operação assumiu o app durante o redeploy; o status não foi alterado.',
+                    category=LogCategory.DEPLOY,
+                )
 
             try:
                 applied = reapply_saved_process_scales(app, self.dokku_port, self.log_manager, progress=90)
@@ -181,8 +207,7 @@ class DeployAppUseCase:
 
         except Exception as e:
             self.log_manager.error(f'Erro no redeploy: {e}', category=LogCategory.DEPLOY)
-            app.status = AppStatus.ERROR
-            app.save(update_fields=['status'])
+            save_if_owner(app, cmd.task_id, status=AppStatus.ERROR)
             if cmd.commit_sha and git_token:
                 self.github_port.set_deploy_failure(git_token, app.git, cmd.commit_sha, app.name, str(e)[:100])
             raise

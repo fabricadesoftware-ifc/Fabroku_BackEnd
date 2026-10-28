@@ -13,6 +13,8 @@ Fase E).
 from celery import shared_task
 
 from applications.models import App
+from applications.ownership import OperationSuperseded
+from applications.pending_redeploy import clear_pending_redeploy, run_pending_redeploy
 from applications.use_cases.create_app import CreateAppCommand, CreateAppUseCase
 from applications.use_cases.delete_app import DeleteAppCommand, DeleteAppUseCase
 from applications.use_cases.deploy_app import DeployAppCommand, DeployAppUseCase
@@ -56,9 +58,14 @@ def deploy_app_task(self, app_id: int, commit: str | None = None, requested_by_i
         github_port=GitHubAdapter(),
         log_manager=log_manager,
     )
-    result = use_case.execute(
-        DeployAppCommand(app_id=app_id, task_id=self.request.id, commit_sha=commit, user_id=requested_by_id)
-    )
+    try:
+        result = use_case.execute(
+            DeployAppCommand(app_id=app_id, task_id=self.request.id, commit_sha=commit, user_id=requested_by_id)
+        )
+    except OperationSuperseded:
+        return {'status': 'superseded', 'app_id': app_id}
+    finally:
+        run_pending_redeploy(app_id, self.request.id)
     return {'status': 'success', 'app_id': result.app_id, 'commit': result.commit_sha}
 
 
@@ -83,7 +90,12 @@ def manage_app_task(self, app_id: int, action: str) -> dict:
     # ps:start/ps:restart esperam health checks do app; 120s padrao cortava apps maiores no meio.
     dokku = DokkuAdapter(command_timeout=MANAGE_APP_COMMAND_TIMEOUT)
     use_case = ManageAppUseCase(dokku_port=dokku, log_manager=log_manager)
-    result = use_case.execute(ManageAppCommand(app_id=app_id, action=action, task_id=self.request.id))
+    try:
+        result = use_case.execute(ManageAppCommand(app_id=app_id, action=action, task_id=self.request.id))
+    except OperationSuperseded:
+        return {'status': 'superseded', 'action': action, 'app_id': app_id}
+    finally:
+        run_pending_redeploy(app_id, self.request.id)
     return {'status': 'success', 'action': result.action, 'app_id': result.app_id, 'output': result.output}
 
 
@@ -94,9 +106,13 @@ def delete_app_task(self, app_id: int, deleted_by_id: int | None = None) -> dict
     log_manager = AppLogManager(app, self.request.id)
 
     use_case = DeleteAppUseCase(dokku_port=DokkuAdapter(), log_manager=log_manager, github_port=GitHubAdapter())
-    result = use_case.execute(
-        DeleteAppCommand(app_id=app_id, task_id=self.request.id, deleted_by_id=deleted_by_id)
-    )
+    clear_pending_redeploy(app_id)
+    try:
+        result = use_case.execute(
+            DeleteAppCommand(app_id=app_id, task_id=self.request.id, deleted_by_id=deleted_by_id)
+        )
+    except OperationSuperseded:
+        return {'status': 'superseded', 'app_id': app_id}
     return {'status': 'deleted', 'app_id': result.app_id, 'dokku_app': result.dokku_app_name}
 
 

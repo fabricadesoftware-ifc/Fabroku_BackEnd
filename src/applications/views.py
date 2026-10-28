@@ -2,7 +2,6 @@ import json
 import logging
 import re
 import time
-import uuid
 from pathlib import PurePosixPath
 
 from celery.result import AsyncResult
@@ -21,7 +20,9 @@ from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
 from applications.github_integration import ensure_github_webhook
-from applications.models import TRANSIENT_APP_STATUSES, App, AppProcessScale, AppRunArtifact, AppRunArtifactKind
+from applications.models import App, AppProcessScale, AppRunArtifact, AppRunArtifactKind
+from applications.ownership import FINISHED_TASK_STATES, dispatch_app_task, is_app_busy, save_if_owner
+from applications.pending_redeploy import clear_pending_redeploy
 from applications.process_scale import get_process_max_instances, sync_app_process_scales_from_dokku
 from applications.tasks import (
     delete_app_task,
@@ -33,6 +34,7 @@ from applications.tasks import (
     run_migrate_task,
     scale_processes_task,
 )
+from applications.use_cases.deploy_app import pop_pending_commit_status
 from core.apps.mixins.apps.interactive_run import (
     TERMINAL_SESSION_STATUSES,
     cleanup_expired_interactive_sessions,
@@ -55,6 +57,7 @@ from core.apps.utils import has_global_access
 from identity.models import User
 from infrastructure.adapters import DokkuAdapter
 from infrastructure.adapters.git_utils import get_github_hook_events, normalize_webhook_url, parse_github_repo_name
+from infrastructure.adapters.github import GitHubAdapter
 from infrastructure.cache_versioning import APP_LAST_COMMIT_CACHE_NAMESPACE, build_versioned_cache_key, get_cache_ttl
 from interactive_sessions.interactive_crypto import decrypt_interactive_text
 from interactive_sessions.interactive_runner import has_live_interactive_runner
@@ -247,18 +250,9 @@ def _find_project_user_for_github_repo(app: App, preferred_user=None, *, require
     return None, None, attempts
 
 
-_FINISHED_TASK_STATES = frozenset({'SUCCESS', 'FAILURE', 'REVOKED'})
-
-
 def _app_busy_response(app: App) -> Response | None:
-    """409 se ha operacao em andamento no worker; None se o app esta livre.
-
-    Status transitorio cuja task ja terminou (FAILURE/REVOKED) nao trava: senao um app
-    que ficou preso nunca mais aceitaria start/restart.
-    """
-    if app.status not in TRANSIENT_APP_STATUSES:
-        return None
-    if app.task_id and AsyncResult(app.task_id).state in _FINISHED_TASK_STATES:
+    """409 se ha operacao em andamento no worker; None se o app esta livre."""
+    if not is_app_busy(app):
         return None
     return Response(
         {'error': f'App está em estado {app.status}. Aguarde a operação atual terminar.'},
@@ -266,18 +260,37 @@ def _app_busy_response(app: App) -> Response | None:
     )
 
 
-def _dispatch_app_task(app: App, new_status: str, task, **task_kwargs) -> str:
-    """Grava status + task_id ANTES de enfileirar.
+def _app_status_after_cancel(app: App) -> tuple[str, str | None]:
+    """Status real no Dokku depois de cancelar um redeploy (status, detalhe de erro).
 
-    Antes o task_id so era gravado quando o worker pegava a task; ate la get_app_status
-    respondia pela task anterior (SUCCESS) e o front parava o polling cedo.
+    Antes o cancelamento gravava RUNNING sempre, mesmo com o app parado ou com erro
+    antes do redeploy.
     """
-    task_id = str(uuid.uuid4())
-    app.status = new_status
-    app.task_id = task_id
-    app.save(update_fields=['status', 'task_id'])
-    task.apply_async(kwargs=task_kwargs, task_id=task_id)
-    return task_id
+    try:
+        output = DokkuAdapter().ps_report(app.name_dokku, '--running').strip().lower()
+    except Exception as exc:
+        output = f'erro: {exc}'
+    if output in {'true', 'mixed'}:
+        return 'RUNNING', None
+    if output == 'false':
+        return 'STOPPED', None
+    return 'ERROR', f'Redeploy cancelado; não foi possível confirmar o estado do app no Dokku ({output[:500]}).'
+
+
+def _mark_cancelled_commit(app: App, task_id: str, user) -> None:
+    """Resolve o check do commit no GitHub que o deploy cancelado deixou como pending."""
+    sha = pop_pending_commit_status(task_id)
+    if not sha:
+        return
+    project_user = next(_iter_project_users_with_git_token(app, preferred_user=user), None)
+    if project_user is None:
+        return
+    try:
+        GitHubAdapter().set_deploy_failure(
+            project_user.git_token, app.git, sha, app.name, 'Redeploy cancelado pelo usuário'
+        )
+    except Exception:
+        logger.exception('Falha ao marcar commit %s como cancelado no GitHub', sha)
 
 
 @extend_schema(tags=['apps'])
@@ -310,7 +323,7 @@ class AppViewSet(ModelViewSet):
         """Override destroy para lançar task de deleção no Dokku."""
         instance = self.get_object()
 
-        task_id = _dispatch_app_task(
+        task_id = dispatch_app_task(
             instance, 'DELETING', delete_app_task, app_id=instance.id, deleted_by_id=request.user.id,
         )
 
@@ -356,7 +369,7 @@ class AppViewSet(ModelViewSet):
         if busy := _app_busy_response(app):
             return busy
 
-        task_id = _dispatch_app_task(app, 'STARTING', manage_app_task, app_id=app.id, action='start')
+        task_id = dispatch_app_task(app, 'STARTING', manage_app_task, app_id=app.id, action='start')
 
         return Response(
             {
@@ -373,25 +386,30 @@ class AppViewSet(ModelViewSet):
         app = self.get_object()
 
         if app.status == 'DEPLOYING' and app.task_id:
-            current_task = AsyncResult(app.task_id)
-            if current_task.state not in ('SUCCESS', 'FAILURE', 'REVOKED'):
+            cancelled_task_id = app.task_id
+            current_task = AsyncResult(cancelled_task_id)
+            if current_task.state not in FINISHED_TASK_STATES:
                 current_task.revoke(terminate=True, signal='SIGTERM')
 
-            AppLogManager(app, app.task_id).warning(
-                'Redeploy cancelado pelo usuário.',
+            # Quem cancela nao quer que um push guardado redeploye logo em seguida.
+            clear_pending_redeploy(app.id)
+            final_status, error_details = _app_status_after_cancel(app)
+            extra = {'error_type': 'RedeployCancelled', 'error_details': error_details} if error_details else {}
+            save_if_owner(app, cancelled_task_id, status=final_status, **extra)
+            _mark_cancelled_commit(app, cancelled_task_id, request.user)
+
+            AppLogManager(app, cancelled_task_id).warning(
+                f'Redeploy cancelado pelo usuário. Status atual: {app.status}.',
                 category=LogCategory.DEPLOY,
                 progress=100,
             )
 
-            app.status = 'RUNNING'
-            app.save(update_fields=['status'])
-
             return Response(
                 {
-                    'status': 'RUNNING',
+                    'status': app.status,
                     'message': f'Redeploy de {app.name} cancelado.',
-                    'task_id': app.task_id,
-                    'cancelled_task_id': app.task_id,
+                    'task_id': cancelled_task_id,
+                    'cancelled_task_id': cancelled_task_id,
                 },
                 status=status.HTTP_202_ACCEPTED,
             )
@@ -405,7 +423,7 @@ class AppViewSet(ModelViewSet):
         if busy := _app_busy_response(app):
             return busy
 
-        task_id = _dispatch_app_task(app, 'STOPPING', manage_app_task, app_id=app.id, action='stop')
+        task_id = dispatch_app_task(app, 'STOPPING', manage_app_task, app_id=app.id, action='stop')
 
         return Response(
             {
@@ -430,7 +448,7 @@ class AppViewSet(ModelViewSet):
         if busy := _app_busy_response(app):
             return busy
 
-        task_id = _dispatch_app_task(app, 'RESTARTING', manage_app_task, app_id=app.id, action='restart')
+        task_id = dispatch_app_task(app, 'RESTARTING', manage_app_task, app_id=app.id, action='restart')
 
         return Response(
             {
@@ -452,11 +470,8 @@ class AppViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if app.status in {'DEPLOYING', 'DELETING', 'STARTING'}:
-            return Response(
-                {'error': f'App esta em estado {app.status}. Aguarde a operacao atual terminar.'},
-                status=status.HTTP_409_CONFLICT,
-            )
+        if busy := _app_busy_response(app):
+            return busy
 
         serializer = EnvVarsUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -470,6 +485,7 @@ class AppViewSet(ModelViewSet):
             if current_variables.get(key) != value
         }
         removed_keys = sorted(set(current_variables) - set(next_variables))
+        restart_task_id = None
 
         if changed_variables or removed_keys:
             dokku_adapter = DokkuAdapter()
@@ -503,12 +519,10 @@ class AppViewSet(ModelViewSet):
                 app.save(update_fields=['variables', 'updated_at'])
 
                 if should_restart and app.status == 'RUNNING':
-                    restart_output = dokku_adapter.restart_app(app.name_dokku)
-                    if dokku_output_failed(restart_output):
-                        return Response(
-                            {'error': 'Variaveis salvas no Dokku, mas o restart falhou.'},
-                            status=status.HTTP_502_BAD_GATEWAY,
-                        )
+                    # Restart pela task: aparece no card e nos logs, e nao prende a request por minutos.
+                    restart_task_id = dispatch_app_task(
+                        app, 'RESTARTING', manage_app_task, app_id=app.id, action='restart'
+                    )
             except Exception as exc:
                 return Response(
                     {'error': f'Nao foi possivel sincronizar variaveis: {exc}'},
@@ -522,7 +536,8 @@ class AppViewSet(ModelViewSet):
             'app': AppSerializer(app, context={'request': request}).data,
             'updated_keys': sorted(changed_variables.keys()),
             'removed_keys': removed_keys,
-            'restarted': bool(should_restart and app.status == 'RUNNING' and (changed_variables or removed_keys)),
+            'restarted': restart_task_id is not None,
+            'task_id': restart_task_id,
         })
 
     @action(detail=True, methods=['get'])
@@ -586,11 +601,8 @@ class AppViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if app.status in {'DEPLOYING', 'STARTING', 'DELETING'}:
-            return Response(
-                {'error': f'App esta em estado {app.status}. Aguarde a operacao atual terminar.'},
-                status=status.HTTP_409_CONFLICT,
-            )
+        if busy := _app_busy_response(app):
+            return busy
 
         serializer = ScaleProcessesSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -644,7 +656,7 @@ class AppViewSet(ModelViewSet):
         if busy := _app_busy_response(app):
             return busy
 
-        task_id = _dispatch_app_task(
+        task_id = dispatch_app_task(
             app,
             'DEPLOYING',
             deploy_app_task,
@@ -712,6 +724,9 @@ class AppViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        if busy := _app_busy_response(app):
+            return busy
+
         command = request.data.get('command', '').strip()
         if not command:
             return Response(
@@ -754,6 +769,9 @@ class AppViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        if busy := _app_busy_response(app):
+            return busy
+
         try:
             manage_path = validate_manage_path(request.data.get('manage_path'))
         except ValueError as e:
@@ -788,6 +806,9 @@ class AppViewSet(ModelViewSet):
                 {'error': 'App nao tem name_dokku configurado'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        if busy := _app_busy_response(app):
+            return busy
 
         try:
             manage_path = validate_manage_path(request.data.get('manage_path'))
@@ -824,6 +845,9 @@ class AppViewSet(ModelViewSet):
                 {'error': 'App nao tem name_dokku configurado'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        if busy := _app_busy_response(app):
+            return busy
 
         try:
             manage_path = validate_manage_path(request.data.get('manage_path'))

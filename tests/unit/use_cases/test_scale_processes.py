@@ -37,8 +37,9 @@ def test_scale_processes_applies_scale_and_persists_desired_quantities():
     assert process_scale.desired_quantity == 2
     assert process_scale.current_quantity == 2
 
+    # Escala e task auxiliar: nao toma posse do app (quem grava task_id e a view, no request).
     app.refresh_from_db()
-    assert app.task_id == 'test-task-id'
+    assert app.task_id is None
 
 
 def test_scale_processes_missing_app_raises_app_not_found():

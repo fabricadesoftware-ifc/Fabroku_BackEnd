@@ -80,7 +80,7 @@ class RunDataUseCase:
         self.log_manager = log_manager
 
     def execute_migrate(self, cmd: RunMigrateCommand) -> DataCommandRun:
-        app = self._get_app_with_dokku_name(cmd.app_id, cmd.task_id)
+        app = self._get_app_with_dokku_name(cmd.app_id)
         command = build_migrate_command(cmd.manage_path, noinput=cmd.noinput)
         try:
             self.log_manager.info(
@@ -100,7 +100,7 @@ class RunDataUseCase:
             cleanup_expired_run_artifacts()
 
     def execute_loaddata(self, cmd: RunLoaddataCommand) -> DataCommandRun:
-        app = self._get_app_with_dokku_name(cmd.app_id, cmd.task_id)
+        app = self._get_app_with_dokku_name(cmd.app_id)
         command = build_loaddata_command(cmd.manage_path, cmd.fixture_path)
         try:
             self.log_manager.info(
@@ -120,7 +120,7 @@ class RunDataUseCase:
             cleanup_expired_run_artifacts()
 
     def execute_dumpdata(self, cmd: RunDumpdataCommand) -> DumpdataRun:
-        app = self._get_app_with_dokku_name(cmd.app_id, cmd.task_id)
+        app = self._get_app_with_dokku_name(cmd.app_id)
         command = build_dumpdata_command(cmd.manage_path, cmd.dump_args)
         try:
             self.log_manager.info(
@@ -178,12 +178,10 @@ class RunDataUseCase:
         finally:
             cleanup_expired_run_artifacts()
 
-    def _get_app_with_dokku_name(self, app_id: int, task_id: str | None) -> App:
+    def _get_app_with_dokku_name(self, app_id: int) -> App:
         app = App.objects.get(id=app_id, deleted_at__isnull=True)
         if not app.name_dokku:
             raise DeploymentFailed(reason='App sem name_dokku configurado', step='validate')
-        app.task_id = task_id
-        app.save(update_fields=['task_id'])
         return app
 
     def _run_and_check(self, app: App, command: str, *, action: str, error_type: str, log_lines: bool) -> str:

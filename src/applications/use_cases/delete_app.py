@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from applications.domain.exceptions import InfrastructureError
 from applications.github_integration import remove_github_webhook
 from applications.models import App, AppStatus
+from applications.ownership import claim_app, save_if_owner
 from applications.ports.i_dokku import IDokkuPort
 from applications.ports.i_github import IGitHubPort
 from core.apps.mixins.services.service_dokku import delete_dokku_service, dokku_output_failed, unlink_dokku_service
@@ -74,8 +75,7 @@ class DeleteAppUseCase:
         if app.deleted_at:
             return AppDeleted(app_id=app.id, dokku_app_name=app.name_dokku, already_deleted=True)
 
-        app.task_id = cmd.task_id
-        app.save(update_fields=['task_id'])
+        claim_app(app, cmd.task_id)
 
         dokku_app_name = app.name_dokku
 
@@ -95,10 +95,9 @@ class DeleteAppUseCase:
             )
             failure = self._delete_dokku_app(dokku_app_name)
             if failure:
-                app.status = AppStatus.ERROR
-                app.error_type = 'DeleteAppFailed'
-                app.error_details = failure
-                app.save(update_fields=['status', 'error_type', 'error_details'])
+                save_if_owner(
+                    app, cmd.task_id, status=AppStatus.ERROR, error_type='DeleteAppFailed', error_details=failure
+                )
                 self.log_manager.error(
                     f'Não foi possível remover {dokku_app_name} do Dokku; a aplicação não foi apagada. '
                     'Tente apagar novamente.',

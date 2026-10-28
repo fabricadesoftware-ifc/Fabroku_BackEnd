@@ -13,6 +13,7 @@ from typing import Literal
 
 from applications.domain.exceptions import DeploymentFailed
 from applications.models import App, AppStatus
+from applications.ownership import claim_app, save_if_owner
 from applications.ports.i_dokku import IDokkuPort
 from core.apps.mixins.services.service_dokku import check_dokku_output
 from observability.models import AppLogManager, LogCategory
@@ -55,8 +56,7 @@ class ManageAppUseCase:
         app = App.objects.get(id=cmd.app_id, deleted_at__isnull=True)
         msg_progress, msg_done, final_status = _ACTION_MESSAGES[cmd.action]
 
-        app.task_id = cmd.task_id
-        app.save(update_fields=['task_id'])
+        claim_app(app, cmd.task_id)
 
         self.log_manager.info(f'{msg_progress} aplicação...', category=LogCategory.DEPLOY, progress=10)
 
@@ -80,13 +80,13 @@ class ManageAppUseCase:
             # O adapter SSH devolve o erro como texto em vez de lançar: sem isso, falha virava RUNNING/STOPPED.
             check_dokku_output(output, f'{msg_progress} {dokku_app_name}', allow_empty=True)
 
-            app.status = final_status
-            update_fields = ['status']
+            final_fields = {'status': final_status}
             if app.error_type == MANAGE_APP_FAILED:
-                app.error_type = None
-                app.error_details = None
-                update_fields += ['error_type', 'error_details']
-            app.save(update_fields=update_fields)
+                final_fields.update(error_type=None, error_details=None)
+            if not save_if_owner(app, cmd.task_id, **final_fields):
+                self.log_manager.warning(
+                    'Outra operação assumiu o app; o status não foi alterado.', category=LogCategory.DEPLOY
+                )
 
             self.log_manager.success(
                 f'Aplicação {msg_done} com sucesso!', category=LogCategory.DEPLOY, progress=100
@@ -96,10 +96,9 @@ class ManageAppUseCase:
 
         except Exception as e:
             self.log_manager.error(f'Erro ao {cmd.action} aplicação: {e}', category=LogCategory.DEPLOY)
-            app.status = AppStatus.ERROR
-            app.error_type = MANAGE_APP_FAILED
-            app.error_details = str(e)[:2000]
-            app.save(update_fields=['status', 'error_type', 'error_details'])
+            save_if_owner(
+                app, cmd.task_id, status=AppStatus.ERROR, error_type=MANAGE_APP_FAILED, error_details=str(e)[:2000]
+            )
             raise
 
     def _start_linked_databases(self, app: App) -> None:
