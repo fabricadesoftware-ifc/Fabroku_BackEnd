@@ -51,9 +51,6 @@ class ScaleProcessesUseCase:
         except App.DoesNotExist:
             raise AppNotFound(cmd.app_id) from None
 
-        app.task_id = cmd.task_id
-        app.save(update_fields=['task_id'])
-
         self.log_manager.info('Aplicando escala de processos...', category=LogCategory.DEPLOY, progress=10)
 
         if not app.name_dokku:

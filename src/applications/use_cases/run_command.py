@@ -86,9 +86,6 @@ class RunCommandUseCase:
         if not is_command_allowed(cmd.command):
             raise CommandNotAllowed(cmd.command)
 
-        app.task_id = cmd.task_id
-        app.save(update_fields=['task_id'])
-
         try:
             linked_services = self._warm_up_linked_databases(app)
 

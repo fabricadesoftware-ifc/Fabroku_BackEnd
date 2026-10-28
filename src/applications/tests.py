@@ -1,6 +1,6 @@
 import json
 from datetime import timedelta
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 from django.core.cache import cache
 from django.db import connection
@@ -119,7 +119,7 @@ class ManageAppEndpointTests(APITestCase):
         self.assertNotEqual(response.data['task_id'], 'task-antiga-ja-concluida')
 
     @patch('applications.views.manage_app_task.apply_async')
-    @patch('applications.views.AsyncResult')
+    @patch('applications.ownership.AsyncResult')
     def test_restart_is_rejected_while_another_operation_is_running(self, mock_async_result_cls, mock_apply_async):
         self.app.status = 'DEPLOYING'
         self.app.task_id = 'task-deploy-ativo'
@@ -136,7 +136,7 @@ class ManageAppEndpointTests(APITestCase):
         self.assertEqual(self.app.task_id, 'task-deploy-ativo')
 
     @patch('applications.views.deploy_app_task.apply_async')
-    @patch('applications.views.AsyncResult')
+    @patch('applications.ownership.AsyncResult')
     def test_redeploy_is_rejected_while_restarting(self, mock_async_result_cls, mock_apply_async):
         self.app.status = 'RESTARTING'
         self.app.task_id = 'task-restart-ativo'
@@ -149,7 +149,7 @@ class ManageAppEndpointTests(APITestCase):
         mock_apply_async.assert_not_called()
 
     @patch('applications.views.manage_app_task.apply_async')
-    @patch('applications.views.AsyncResult')
+    @patch('applications.ownership.AsyncResult')
     def test_transient_status_with_finished_task_does_not_block(self, mock_async_result_cls, mock_apply_async):
         """App preso em RESTARTING com a task ja morta precisa aceitar um novo restart."""
         self.app.status = 'RESTARTING'
@@ -162,11 +162,12 @@ class ManageAppEndpointTests(APITestCase):
         self.assertEqual(response.status_code, 202)
         mock_apply_async.assert_called_once()
 
+    @patch('applications.views.DokkuAdapter')
     @patch('applications.views.AppLogManager')
     @patch('applications.views.manage_app_task.apply_async')
     @patch('applications.views.AsyncResult')
     def test_stop_endpoint_cancels_redeploy_instead_of_stopping_app(
-        self, mock_async_result_cls, mock_delay, mock_logger_cls,
+        self, mock_async_result_cls, mock_delay, mock_logger_cls, mock_dokku_cls,
     ):
         self.app.status = 'DEPLOYING'
         self.app.task_id = 'task-redeploy-123'
@@ -175,6 +176,7 @@ class ManageAppEndpointTests(APITestCase):
         mock_async_result = Mock()
         mock_async_result.state = 'PROGRESS'
         mock_async_result_cls.return_value = mock_async_result
+        mock_dokku_cls.return_value.ps_report.return_value = 'true\n'
 
         response = self.client.post(f'/api/apps/apps/{self.app.id}/stop/')
 
@@ -216,8 +218,11 @@ class AppEnvVarsEndpointTests(APITestCase):
             variables={'OLD_KEY': 'old', 'KEEP': 'same'},
         )
 
+    @patch('applications.views.manage_app_task.apply_async')
     @patch('applications.views.DokkuAdapter')
-    def test_update_env_vars_sets_changed_unsets_removed_and_restarts_running_app(self, mock_dokku_cls):
+    def test_update_env_vars_sets_changed_unsets_removed_and_restarts_running_app(
+        self, mock_dokku_cls, mock_apply_async,
+    ):
         self.client.force_authenticate(user=self.user)
         mock_dokku = Mock()
         mock_dokku.set_config.return_value = 'OK'
@@ -244,10 +249,16 @@ class AppEnvVarsEndpointTests(APITestCase):
             keys=['OLD_KEY'],
             no_restart=True,
         )
-        mock_dokku.restart_app.assert_called_once_with('app-env-teste')
+        # Restart pela task (card + logs), nao mais sincrono dentro da request.
+        mock_dokku.restart_app.assert_not_called()
+        self.assertTrue(response.data['restarted'])
+        mock_apply_async.assert_called_once_with(
+            kwargs={'app_id': self.app.id, 'action': 'restart'}, task_id=response.data['task_id'],
+        )
 
         self.app.refresh_from_db()
         self.assertEqual(self.app.variables, {'KEEP': 'changed', 'NEW_KEY': 'new'})
+        self.assertEqual(self.app.status, 'RESTARTING')
 
     def test_update_env_vars_rejects_invalid_key(self):
         self.client.force_authenticate(user=self.user)
@@ -929,9 +940,8 @@ class WebhookSetupTests(APITestCase):
         self.assertEqual(webhook_check['usable_hooks'], 0)
         self.assertIn('precisa ser reparado', webhook_check['message'])
 
-    @patch('infrastructure.adapters.utils.git_webhook.deploy_app_task.delay')
+    @patch('infrastructure.adapters.utils.git_webhook.deploy_app_task.apply_async')
     def test_github_webhook_accepts_branch_names_with_slashes(self, mock_redeploy):
-        mock_redeploy.return_value = Mock(id='task-webhook-123')
         self.app.branch = 'feature/auto-deploy'
         self.app.save(update_fields=['branch'])
 
@@ -948,11 +958,12 @@ class WebhookSetupTests(APITestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['status'], 'deploy_started')
-        mock_redeploy.assert_called_once_with(app_id=self.app.id, commit='abc123def4567890')
+        mock_redeploy.assert_called_once_with(
+            kwargs={'app_id': self.app.id, 'commit': 'abc123def4567890'}, task_id=response.json()['task_id'],
+        )
 
-    @patch('infrastructure.adapters.utils.git_webhook.deploy_app_task.delay')
+    @patch('infrastructure.adapters.utils.git_webhook.deploy_app_task.apply_async')
     def test_github_webhook_ignores_repeated_delivery_id(self, mock_redeploy):
-        mock_redeploy.return_value = Mock(id='task-webhook-deduplicated')
         payload = json.dumps({
             'ref': 'refs/heads/main',
             'after': 'abc123def4567890',
@@ -979,9 +990,9 @@ class WebhookSetupTests(APITestCase):
         self.assertEqual(first_response.json()['status'], 'deploy_started')
         self.assertEqual(duplicate_response.status_code, 200)
         self.assertEqual(duplicate_response.json()['status'], 'duplicate')
-        mock_redeploy.assert_called_once_with(app_id=self.app.id, commit='abc123def4567890')
+        mock_redeploy.assert_called_once_with(kwargs={'app_id': self.app.id, 'commit': 'abc123def4567890'}, task_id=ANY)
 
-    @patch('infrastructure.adapters.utils.git_webhook.deploy_app_task.delay')
+    @patch('infrastructure.adapters.utils.git_webhook.deploy_app_task.apply_async')
     def test_github_webhook_releases_delivery_when_task_cannot_be_queued(self, mock_redeploy):
         payload = json.dumps({
             'ref': 'refs/heads/main',
@@ -994,6 +1005,7 @@ class WebhookSetupTests(APITestCase):
             'HTTP_X_GITHUB_DELIVERY': 'delivery-queue-failure-123',
         }
         mock_redeploy.side_effect = RuntimeError('broker unavailable')
+        status_before = self.app.status
 
         with self.assertRaisesRegex(RuntimeError, 'broker unavailable'):
             self.client.post(
@@ -1002,8 +1014,11 @@ class WebhookSetupTests(APITestCase):
                 **headers,
             )
 
+        # Falha ao enfileirar desfaz o DEPLOYING: senao o app ficaria preso numa task que nunca roda.
+        self.app.refresh_from_db()
+        self.assertEqual(self.app.status, status_before)
+
         mock_redeploy.side_effect = None
-        mock_redeploy.return_value = Mock(id='task-webhook-retry')
         retry_response = self.client.post(
             f'/api/webhooks/github/{self.app.id}/',
             data=payload,
@@ -1059,3 +1074,186 @@ class WebhookSetupTests(APITestCase):
         )
         self.assertEqual(updated_result['status'], 'webhook atualizado')
         self.assertTrue(hook.edited)
+
+
+@override_settings(GITHUB_WEBHOOK_SECRET=None)
+class ConcurrentAppActionsTests(APITestCase):
+    """Acoes que chegam com outra operacao em andamento (docs/flows/app-concurrent-actions)."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user(email='concurrent@example.com', password='senha123', name='Concorrente')
+        self.user.is_superuser = True
+        self.user.git_token = 'gh-token'
+        self.user.save(update_fields=['is_superuser', 'git_token'])
+        self.project = Project.objects.create(name='Projeto Concorrente')
+        self.project.users.add(self.user)
+        self.app = App.objects.create(
+            name='app-concorrente',
+            name_dokku='app-concorrente',
+            git='https://github.com/org/repo.git',
+            branch='main',
+            project=self.project,
+            status='DEPLOYING',
+            task_id='task-deploy-ativo',
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def _push(self, commit):
+        return self.client.post(
+            f'/api/webhooks/github/{self.app.id}/',
+            data=json.dumps({'ref': 'refs/heads/main', 'after': commit, 'pusher': {'name': 'aluno'}}),
+            content_type='application/json',
+            HTTP_X_GITHUB_EVENT='push',
+        )
+
+    # A-01: comandos e escala nao sequestram o task_id de uma operacao em andamento.
+    @patch('applications.views.scale_processes_task.delay')
+    @patch('applications.views.run_dumpdata_task.delay')
+    @patch('applications.views.run_loaddata_task.delay')
+    @patch('applications.views.run_migrate_task.delay')
+    @patch('applications.views.run_command_task.delay')
+    @patch('applications.ownership.AsyncResult')
+    def test_commands_and_scale_are_rejected_during_operation(self, mock_async_result_cls, *task_mocks):
+        mock_async_result_cls.return_value = Mock(state='PROGRESS')
+
+        requests = [
+            ('run_command', {'command': 'python manage.py migrate'}),
+            ('run_migrate', {'manage_path': 'manage.py'}),
+            ('run_loaddata', {'fixture_path': 'fixtures/data.json', 'manage_path': 'manage.py'}),
+            ('run_dumpdata', {'manage_path': 'manage.py'}),
+            ('scale_processes', {'processes': {'web': 2}}),
+        ]
+        for endpoint, payload in requests:
+            response = self.client.post(f'/api/apps/apps/{self.app.id}/{endpoint}/', payload, format='json')
+            self.assertEqual(response.status_code, 409, endpoint)
+
+        for task_mock in task_mocks:
+            task_mock.assert_not_called()
+        self.app.refresh_from_db()
+        self.assertEqual(self.app.task_id, 'task-deploy-ativo')
+
+    # A-06: env vars usa a mesma guarda (antes deixava passar RESTARTING/STOPPING).
+    @patch('applications.views.DokkuAdapter')
+    @patch('applications.ownership.AsyncResult')
+    def test_env_vars_rejected_while_restarting(self, mock_async_result_cls, mock_dokku_cls):
+        self.app.status = 'RESTARTING'
+        self.app.save(update_fields=['status'])
+        mock_async_result_cls.return_value = Mock(state='STARTED')
+
+        response = self.client.patch(
+            f'/api/apps/apps/{self.app.id}/env_vars/', {'variables': {'NOVA': '1'}}, format='json',
+        )
+
+        self.assertEqual(response.status_code, 409)
+        mock_dokku_cls.return_value.set_config.assert_not_called()
+
+    # A-02: task que perdeu a posse nao grava status final.
+    def test_manage_task_does_not_overwrite_status_after_losing_ownership(self):
+        from applications.use_cases.manage_app import ManageAppCommand, ManageAppUseCase  # noqa: PLC0415
+
+        self.app.status = 'RESTARTING'
+        self.app.task_id = 'task-restart'
+        self.app.save(update_fields=['status', 'task_id'])
+
+        def delete_dispatched_mid_restart(_name):
+            App.objects.filter(id=self.app.id).update(status='DELETING', task_id='task-delete')
+            return 'Restarting app-concorrente'
+
+        dokku = Mock()
+        dokku.restart_app.side_effect = delete_dispatched_mid_restart
+        ManageAppUseCase(dokku_port=dokku, log_manager=Mock()).execute(
+            ManageAppCommand(app_id=self.app.id, action='restart', task_id='task-restart')
+        )
+
+        self.app.refresh_from_db()
+        self.assertEqual(self.app.status, 'DELETING')
+        self.assertEqual(self.app.task_id, 'task-delete')
+
+    def test_superseded_deploy_stops_before_touching_dokku(self):
+        from applications.ownership import OperationSuperseded  # noqa: PLC0415
+        from applications.use_cases.deploy_app import DeployAppCommand, DeployAppUseCase  # noqa: PLC0415
+
+        dokku = Mock()
+        use_case = DeployAppUseCase(dokku_port=dokku, github_port=Mock(), log_manager=Mock())
+
+        with self.assertRaises(OperationSuperseded):
+            use_case.execute(DeployAppCommand(app_id=self.app.id, task_id='task-deploy-antigo'))
+
+        dokku.exists_app.assert_not_called()
+        self.app.refresh_from_db()
+        self.assertEqual(self.app.task_id, 'task-deploy-ativo')
+
+    # A-03: push com app ocupado vira redeploy pendente; o ultimo push vence.
+    @patch('applications.tasks.deploy_app_task.apply_async')
+    @patch('applications.ownership.AsyncResult')
+    def test_push_while_busy_is_queued_and_runs_after_operation(self, mock_async_result_cls, mock_apply_async):
+        from applications.pending_redeploy import run_pending_redeploy  # noqa: PLC0415
+
+        mock_async_result_cls.return_value = Mock(state='PROGRESS')
+
+        first = self._push('aaaaaaa1111111')
+        second = self._push('bbbbbbb2222222')
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(first.json()['status'], 'queued')
+        self.assertEqual(second.json()['status'], 'queued')
+        mock_apply_async.assert_not_called()
+
+        # Outra task nao dispara o pendente: so a dona atual, ao terminar.
+        self.assertIsNone(run_pending_redeploy(self.app.id, 'task-de-outro'))
+        task_id = run_pending_redeploy(self.app.id, 'task-deploy-ativo')
+
+        self.assertIsNotNone(task_id)
+        mock_apply_async.assert_called_once_with(
+            kwargs={'app_id': self.app.id, 'commit': 'bbbbbbb2222222'}, task_id=task_id,
+        )
+        self.assertIsNone(run_pending_redeploy(self.app.id, task_id))
+
+    @patch('applications.tasks.deploy_app_task.apply_async')
+    def test_push_while_deleting_is_ignored(self, mock_apply_async):
+        self.app.status = 'DELETING'
+        self.app.save(update_fields=['status'])
+
+        response = self._push('ccccccc3333333')
+
+        self.assertEqual(response.json()['status'], 'ignored')
+        mock_apply_async.assert_not_called()
+
+    # A-04: cancelar redeploy grava o estado real e resolve o commit no GitHub.
+    @patch('applications.views.GitHubAdapter')
+    @patch('applications.views.DokkuAdapter')
+    @patch('applications.views.AsyncResult')
+    def test_cancel_redeploy_uses_real_dokku_state_and_resolves_commit(
+        self, mock_async_result_cls, mock_dokku_cls, mock_github_cls,
+    ):
+        from applications.pending_redeploy import queue_pending_redeploy  # noqa: PLC0415
+        from applications.use_cases.deploy_app import _pending_commit_status_key  # noqa: PLC0415
+
+        mock_async_result_cls.return_value = Mock(state='PROGRESS')
+        mock_dokku_cls.return_value.ps_report.return_value = 'false'
+        cache.set(_pending_commit_status_key('task-deploy-ativo'), 'abc123')
+        queue_pending_redeploy(self.app.id, 'ddddddd4444444')
+
+        response = self.client.post(f'/api/apps/apps/{self.app.id}/stop/')
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.data['status'], 'STOPPED')
+        self.app.refresh_from_db()
+        self.assertEqual(self.app.status, 'STOPPED')
+        mock_github_cls.return_value.set_deploy_failure.assert_called_once_with(
+            'gh-token', self.app.git, 'abc123', self.app.name, 'Redeploy cancelado pelo usuário',
+        )
+        self.assertIsNone(cache.get(f'app-pending-redeploy:{self.app.id}'))
+
+    @patch('applications.views.DokkuAdapter')
+    @patch('applications.views.AsyncResult')
+    def test_cancel_redeploy_marks_error_when_dokku_state_is_unknown(self, mock_async_result_cls, mock_dokku_cls):
+        mock_async_result_cls.return_value = Mock(state='PROGRESS')
+        mock_dokku_cls.return_value.ps_report.side_effect = TimeoutError('timed out')
+
+        response = self.client.post(f'/api/apps/apps/{self.app.id}/stop/')
+
+        self.assertEqual(response.data['status'], 'ERROR')
+        self.app.refresh_from_db()
+        self.assertEqual(self.app.error_type, 'RedeployCancelled')

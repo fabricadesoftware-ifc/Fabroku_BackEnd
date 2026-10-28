@@ -10,7 +10,9 @@ from django.views.decorators.csrf import csrf_exempt
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 
-from applications.models import App
+from applications.models import App, AppStatus
+from applications.ownership import dispatch_app_task, is_app_busy
+from applications.pending_redeploy import queue_pending_redeploy, run_pending_redeploy
 from applications.tasks import deploy_app_task
 from infrastructure.adapters.git_utils import parse_github_branch_from_ref
 
@@ -34,6 +36,31 @@ def verify_github_signature(payload_body: bytes, signature: str | None, secret: 
 
     expected = hmac.new(secret.encode(), payload_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)
+
+
+def _queue_redeploy_while_busy(app: App, commit: str | None, branch: str | None) -> JsonResponse:
+    """App ocupado: guarda o push para rodar quando a operacao atual terminar."""
+    queue_pending_redeploy(app.id, commit)
+    # A operacao pode ter terminado entre a checagem e o queue: nesse caso ninguem
+    # mais consumiria o pendente, entao tentamos disparar agora.
+    app.refresh_from_db(fields=['status', 'task_id'])
+    task_id = None if is_app_busy(app) else run_pending_redeploy(app.id, app.task_id)
+    if task_id:
+        logger.info('Redeploy pendente disparado na hora: task_id=%s app=%s', task_id, app.name)
+        return JsonResponse({
+            'status': 'deploy_started',
+            'message': f'Redeploy iniciado para {app.name}',
+            'task_id': task_id,
+            'branch': branch,
+            'commit': commit[:7] if commit else None,
+        })
+    logger.info('Push guardado: app %s ocupado (%s)', app.name, app.status)
+    return JsonResponse({
+        'status': 'queued',
+        'message': f'{app.name} está em {app.status}; o redeploy roda quando a operação atual terminar.',
+        'branch': branch,
+        'commit': commit[:7] if commit else None,
+    }, status=202)
 
 
 @csrf_exempt
@@ -114,10 +141,21 @@ def github_webhook(request, app_id: int):
         pusher,
     )
 
+    if app.status == AppStatus.DELETING:
+        return JsonResponse({'status': 'ignored', 'message': f'App {app.name} está sendo removido.'})
+
     # O status do commit e atualizado pela task. O endpoint precisa responder
     # rapidamente ao GitHub e nao deve depender de uma segunda chamada externa.
     try:
-        task_result = deploy_app_task.delay(app_id=app.id, commit=commit)
+        task_id = None
+        if not is_app_busy(app):
+            # Troca atomica: dois pushes simultaneos nao disparam dois deploys.
+            task_id = dispatch_app_task(
+                app, AppStatus.DEPLOYING, deploy_app_task,
+                expected_task_id=app.task_id, app_id=app.id, commit=commit,
+            )
+        if task_id is None:
+            return _queue_redeploy_while_busy(app, commit, branch)
     except Exception:
         # O GitHub pode reenviar a entrega. Se nem sequer conseguimos colocar
         # a task na fila, ela ainda nao foi processada e deve poder ser tentada novamente.
@@ -128,12 +166,12 @@ def github_webhook(request, app_id: int):
                 logger.exception('Falha ao liberar entrega GitHub apos erro de enfileiramento: %s', delivery_id)
         raise
 
-    logger.info('Task de redeploy disparada: task_id=%s app=%s', task_result.id, app.name)
+    logger.info('Task de redeploy disparada: task_id=%s app=%s', task_id, app.name)
 
     return JsonResponse({
         'status': 'deploy_started',
         'message': f'Redeploy iniciado para {app.name}',
-        'task_id': task_result.id,
+        'task_id': task_id,
         'branch': branch,
         'commit': commit[:7] if commit else None,
         'pusher': pusher,
