@@ -1196,6 +1196,15 @@ class FakeRemoteDeployAdapter(DokkuGitMixin):
         self.calls.append((command, True))
         yield 'linha do caminho antigo'
 
+    def _run_command_bytes_streaming(self, command: str, *, idle_timeout: float):
+        # Cada item da lista é uma conexão: bytes chegam em ordem; uma exceção derruba a conexão.
+        self.calls.append((command, True))
+        for item in self.responses['fabroku:deploy-follow'].pop(0):
+            if isinstance(item, Exception):
+                raise item
+            yield item
+        return 0
+
     def exists_app(self, app_name: str) -> bool:
         return True
 
@@ -1305,6 +1314,49 @@ class DokkuRemoteDeployTests(SimpleTestCase):
 
         self.assertEqual(lines, ['ok'])
         self.assertIn('succeeded', output)
+
+    def test_plugin_with_follow_uses_one_connection_for_the_log(self, _sleep):
+        adapter = FakeRemoteDeployAdapter({
+            'fabroku:version': [{'version': '0.2.0'}],
+            'fabroku:deploy': [{'id': REMOTE_DEPLOY_ID, 'state': 'running'}],
+            'fabroku:deploy-follow': [[b'linha 1\nlin', b'ha 2\r\n', 'Instalação\n'.encode()[:8]]],
+            'fabroku:deploy-status': [{'state': 'succeeded'}],
+        })
+        adapter.responses['fabroku:deploy-follow'][0].append('Instalação\n'.encode()[8:])
+
+        output, lines = self._sync(adapter)
+
+        self.assertEqual(lines, ['linha 1', 'linha 2', 'Instalação'])
+        self.assertEqual(output, f'Remote deploy {REMOTE_DEPLOY_ID} succeeded')
+        self.assertIn((f'fabroku:deploy-follow {REMOTE_DEPLOY_ID} 0', True), adapter.calls)
+        self.assertFalse(any(command.startswith('fabroku:deploy-log') for command, _ in adapter.calls))
+
+    def test_follow_reconnects_from_last_byte_when_connection_drops(self, _sleep):
+        adapter = FakeRemoteDeployAdapter({
+            'fabroku:version': [{'version': '0.2.0'}],
+            'fabroku:deploy': [{'id': REMOTE_DEPLOY_ID, 'state': 'running'}],
+            'fabroku:deploy-follow': [[b'abc\nde', OSError('conexao caiu')], [b'f\n']],
+            'fabroku:deploy-status': [{'state': 'failed'}],
+        })
+
+        output, lines = self._sync(adapter)
+
+        self.assertEqual(lines, ['abc', 'def'])
+        self.assertIn((f'fabroku:deploy-follow {REMOTE_DEPLOY_ID} 6', True), adapter.calls)
+        self.assertIn('Failed to sync Git repository and deploy. (failed)', output)
+
+    def test_follow_gives_up_after_repeated_connection_failures(self, _sleep):
+        adapter = FakeRemoteDeployAdapter({
+            'fabroku:version': [{'version': '0.2.0'}],
+            'fabroku:deploy': [{'id': REMOTE_DEPLOY_ID, 'state': 'running'}],
+            'fabroku:deploy-follow': [[OSError('sem rede')] for _ in range(30)],
+        })
+
+        output, lines = self._sync(adapter)
+
+        self.assertIn('log indisponível', output)
+        self.assertTrue(lines[-1].startswith('[SSH ERROR]'))
+        self.assertEqual(adapter.responses['fabroku:deploy-follow'], [])
 
     def test_missing_plugin_falls_back_to_ssh_session(self, _sleep):
         adapter = FakeRemoteDeployAdapter({
