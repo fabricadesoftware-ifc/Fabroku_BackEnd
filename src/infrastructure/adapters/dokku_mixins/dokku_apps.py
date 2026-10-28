@@ -28,6 +28,14 @@ class DokkuAppsMixin:
         """Deleta uma aplicação do Dokku (força a deleção)."""
         return self._run_command(f'apps:destroy {app_name} --force')
 
+    def cleanup_app(self, app_name: str) -> str:
+        """Remove containers parados do app (`dokku cleanup <app>`).
+
+        Build/release interrompido no meio (SSH caiu, deploy cancelado) deixa um container
+        parado preso ao volume de cache, e o `apps:destroy` falha com "volume is in use".
+        """
+        return self._run_command(f'cleanup {app_name}')
+
     def report_app(self, app_name: str) -> str:
         """Exibe relatório detalhado de uma aplicação."""
         return self._run_command(f'apps:report {app_name}')

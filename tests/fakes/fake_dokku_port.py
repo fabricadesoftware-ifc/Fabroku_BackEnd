@@ -82,6 +82,10 @@ class FakeDokkuPort(IDokkuPort):  # noqa: PLR0904
         del self.apps[app_name]
         return f'App {app_name} deleted'
 
+    def cleanup_app(self, app_name: str) -> str:
+        self._log_call('cleanup_app', {'app_name': app_name})
+        return ''
+
     def exists_app(self, app_name: str) -> bool:
         self._log_call('exists_app', {'app_name': app_name})
         return app_name in self.apps

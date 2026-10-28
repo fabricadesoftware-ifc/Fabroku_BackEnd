@@ -54,6 +54,10 @@ class IDokkuPort(ABC):
         """Delete an app from Dokku."""
 
     @abstractmethod
+    def cleanup_app(self, app_name: str) -> str:
+        """Remove exited containers Dokku left behind for an app (interrupted builds/release phases)."""
+
+    @abstractmethod
     def exists_app(self, app_name: str) -> bool:
         """Check whether an app already exists in Dokku."""
 
