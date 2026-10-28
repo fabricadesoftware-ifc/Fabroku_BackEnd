@@ -2,6 +2,8 @@ import shlex
 from abc import abstractmethod
 from collections.abc import Callable, Generator
 
+from django.conf import settings
+
 
 def _dokku_app_list_failed(output: str) -> bool:
     normalized = (output or '').lower()
@@ -33,7 +35,14 @@ class DokkuAppsMixin:
 
         Build/release interrompido no meio (SSH caiu, deploy cancelado) deixa um container
         parado preso ao volume de cache, e o `apps:destroy` falha com "volume is in use".
+
+        Com o plugin fabroku 0.3.0+ usa `fabroku:cleanup`, que remove os containers mesmo
+        com `DOKKU_SKIP_CLEANUP` ligado no servidor (o `dokku cleanup` não faz nada nesse caso).
         """
+        if settings.DOKKU_REMOTE_DEPLOY_PLUGIN:
+            output = self._run_command(f'fabroku:cleanup {app_name}')
+            if '"removed"' in output:
+                return output
         return self._run_command(f'cleanup {app_name}')
 
     def report_app(self, app_name: str) -> str:

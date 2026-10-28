@@ -1179,6 +1179,44 @@ class StorageUsageTests(APITestCase):
         self.assertEqual(len(refreshed_response.data['services']), 2)
 
 
+class FakeCleanupAdapter(DokkuAppsMixin):
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def _run_command(self, command: str, *, audit: bool = True) -> str:
+        self.calls.append(command)
+        return self.responses.pop(0)
+
+
+class DokkuCleanupTests(SimpleTestCase):
+    @override_settings(DOKKU_REMOTE_DEPLOY_PLUGIN=True)
+    def test_uses_plugin_cleanup_that_ignores_skip_cleanup(self):
+        adapter = FakeCleanupAdapter(['{"app":"my-app","removed":2}'])
+
+        self.assertIn('"removed":2', adapter.cleanup_app('my-app'))
+        self.assertEqual(adapter.calls, ['fabroku:cleanup my-app'])
+
+    @override_settings(DOKKU_REMOTE_DEPLOY_PLUGIN=True)
+    def test_old_plugin_falls_back_to_dokku_cleanup(self):
+        adapter = FakeCleanupAdapter([
+            'Failed to execute command: fabroku:cleanup my-app\n`fabroku:cleanup` is not a dokku command.',
+            '',
+        ])
+
+        adapter.cleanup_app('my-app')
+
+        self.assertEqual(adapter.calls, ['fabroku:cleanup my-app', 'cleanup my-app'])
+
+    @override_settings(DOKKU_REMOTE_DEPLOY_PLUGIN=False)
+    def test_flag_off_uses_dokku_cleanup_only(self):
+        adapter = FakeCleanupAdapter([''])
+
+        adapter.cleanup_app('my-app')
+
+        self.assertEqual(adapter.calls, ['cleanup my-app'])
+
+
 class FakeRemoteDeployAdapter(DokkuGitMixin):
     """Responde aos comandos fabroku:* com respostas roteirizadas (uma lista por comando)."""
 
