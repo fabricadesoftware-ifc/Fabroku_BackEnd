@@ -137,3 +137,41 @@ def test_delete_app_dokku_failure_when_app_already_gone_still_deletes():
     assert result.already_deleted is False
     app.refresh_from_db()
     assert app.deleted_at is not None
+
+
+class VolumeInUseOnceDokku(FakeDokkuPort):
+    """`apps:destroy` falha com volume em uso ate o `cleanup` rodar (container de release parado)."""
+
+    def __init__(self):
+        super().__init__()
+        self.cleaned = False
+
+    def cleanup_app(self, app_name):
+        super().cleanup_app(app_name)
+        self.cleaned = True
+        return ''
+
+    def delete_app(self, app_name):
+        if not self.cleaned:
+            self._log_call('delete_app', {'app_name': app_name})
+            return (
+                f'Failed to execute command: apps:destroy {app_name} --force\n'
+                f'Error response from daemon: remove cache-{app_name}: volume is in use - [5df7bce15e90]'
+            )
+        return super().delete_app(app_name)
+
+
+def test_delete_app_cleans_stopped_containers_when_cache_volume_is_in_use():
+    project = ProjectFactory()
+    app = AppFactory(project=project, name_dokku='my-app')
+    use_case, dokku = make_use_case(app, dokku=VolumeInUseOnceDokku())
+    dokku.create_app('my-app')
+
+    use_case.execute(DeleteAppCommand(app_id=app.id, deleted_by_id=None))
+
+    calls = [call['method'] for call in dokku.get_calls()]
+    assert calls.count('delete_app') == 2
+    assert 'cleanup_app' in calls
+    assert 'my-app' not in dokku.apps
+    app.refresh_from_db()
+    assert app.deleted_at is not None

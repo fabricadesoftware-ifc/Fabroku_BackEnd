@@ -58,6 +58,9 @@ class AppDeleted:
     already_deleted: bool = False
 
 
+VOLUME_IN_USE_MARKER = 'volume is in use'
+
+
 class DeleteAppUseCase:
     """Delete an App: unlink/delete its services, delete the Dokku container, soft-delete both."""
 
@@ -123,13 +126,30 @@ class DeleteAppUseCase:
 
         return AppDeleted(app_id=app.id, dokku_app_name=dokku_app_name)
 
-    def _delete_dokku_app(self, dokku_app_name: str) -> str | None:
-        """Remove o container; retorna a mensagem de falha, ou None se o app nao existe mais no Dokku."""
+    def _destroy(self, dokku_app_name: str) -> tuple[str | None, str | None]:
+        """Roda `apps:destroy`; devolve (saida, falha)."""
         try:
             result = self.dokku_port.delete_app(dokku_app_name)
-            failure = result if dokku_output_failed(result) else None
         except Exception as e:
-            failure = str(e) or e.__class__.__name__
+            return None, str(e) or e.__class__.__name__
+        return result, (result if dokku_output_failed(result) else None)
+
+    def _delete_dokku_app(self, dokku_app_name: str) -> str | None:
+        """Remove o container; retorna a mensagem de falha, ou None se o app nao existe mais no Dokku."""
+        result, failure = self._destroy(dokku_app_name)
+
+        if failure and VOLUME_IN_USE_MARKER in failure:
+            # Container parado de build/release interrompido segura o volume de cache.
+            self.log_manager.warning(
+                'Um container parado do app está prendendo o volume de cache; limpando e tentando de novo...',
+                category=LogCategory.DEPLOY,
+                progress=70,
+            )
+            try:
+                self.dokku_port.cleanup_app(dokku_app_name)
+            except Exception as e:
+                self.log_manager.warning(f'Falha ao limpar containers parados: {e}', category=LogCategory.DEPLOY)
+            result, failure = self._destroy(dokku_app_name)
 
         if not failure:
             self.log_manager.dokku(result, category=LogCategory.DEPLOY, progress=80)

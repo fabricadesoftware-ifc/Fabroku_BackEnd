@@ -1244,6 +1244,8 @@ class ConcurrentAppActionsTests(APITestCase):
         mock_github_cls.return_value.set_deploy_failure.assert_called_once_with(
             'gh-token', self.app.git, 'abc123', self.app.name, 'Redeploy cancelado pelo usuário',
         )
+        # Container de build/release interrompido pelo SIGTERM nao pode ficar prendendo o volume.
+        mock_dokku_cls.return_value.cleanup_app.assert_called_once_with('app-concorrente')
         self.assertIsNone(cache.get(f'app-pending-redeploy:{self.app.id}'))
 
     @patch('applications.views.DokkuAdapter')

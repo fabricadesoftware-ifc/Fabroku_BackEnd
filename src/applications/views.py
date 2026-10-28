@@ -260,6 +260,18 @@ def _app_busy_response(app: App) -> Response | None:
     )
 
 
+def _cleanup_after_cancel(app: App) -> None:
+    """Remove o container de build/release que o cancelamento interrompeu.
+
+    O SIGTERM derruba a conexao SSH com PTY e o Dokku morre antes de limpar o container;
+    ele fica parado prendendo o volume de cache e depois impede apagar o app.
+    """
+    try:
+        DokkuAdapter().cleanup_app(app.name_dokku)
+    except Exception:
+        logger.exception('Falha ao limpar containers parados de %s apos cancelar redeploy', app.name_dokku)
+
+
 def _app_status_after_cancel(app: App) -> tuple[str, str | None]:
     """Status real no Dokku depois de cancelar um redeploy (status, detalhe de erro).
 
@@ -393,6 +405,7 @@ class AppViewSet(ModelViewSet):
 
             # Quem cancela nao quer que um push guardado redeploye logo em seguida.
             clear_pending_redeploy(app.id)
+            _cleanup_after_cancel(app)
             final_status, error_details = _app_status_after_cancel(app)
             extra = {'error_type': 'RedeployCancelled', 'error_details': error_details} if error_details else {}
             save_if_owner(app, cancelled_task_id, status=final_status, **extra)

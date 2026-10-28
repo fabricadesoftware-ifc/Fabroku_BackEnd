@@ -1,7 +1,7 @@
 ---
 flow: app-status-lifecycle
 commit: backend b93646c · frontend 947e819
-status: aguardando decisão
+status: implementado (2026-10-27)
 ---
 
 # Decisões: ciclo de status do App
@@ -16,7 +16,7 @@ Marque cada achado com **aprovar**, **reprovar** ou **ajustar** (e comente). Só
 - **Proposta:** uma constante única `TRANSIENT_STATUSES` (STARTING, STOPPING, RESTARTING, DEPLOYING, DELETING), usada em polling, watch, logs e lock de processos. Restart aplica RESTARTING e stop aplica STOPPING com polling.
 - **Custo:** pequeno (~30 min) · **Risco da mudança:** baixo
 - **Certeza:** verificado
-- **Decisão:** [ ] aprovar  [ ] reprovar  [ ] ajustar
+- **Decisão:** [x] aprovar  [ ] reprovar  [ ] ajustar
 - **Comentário:**
 
 ## A-02 · `task_id` não é gravado no request (corrida com task antiga) · severidade: alta
@@ -27,7 +27,7 @@ Marque cada achado com **aprovar**, **reprovar** ou **ajustar** (e comente). Só
 - **Proposta:** gerar o id antes (`task_id = uuid4()`), gravar `status` + `task_id` juntos e despachar com `apply_async(task_id=...)`. Vale para start, stop, restart, redeploy e delete.
 - **Custo:** pequeno (~30 min) · **Risco da mudança:** baixo
 - **Certeza:** verificado
-- **Decisão:** [ ] aprovar  [ ] reprovar  [ ] ajustar
+- **Decisão:** [x] aprovar  [ ] reprovar  [ ] ajustar
 - **Comentário:**
 
 ## A-03 · Falha no Dokku vira RUNNING/STOPPED · severidade: alta
@@ -38,7 +38,7 @@ Marque cada achado com **aprovar**, **reprovar** ou **ajustar** (e comente). Só
 - **Proposta:** usar `check_dokku_output(output, ...)`, que já existe, logo após a chamada. Falha vira ERROR + `error_type='ManageAppFailed'` + `error_details`. Para restart/start, subir o timeout do comando (ex.: 600 s) via adapter dedicado.
 - **Custo:** pequeno (~20 min) · **Risco da mudança:** baixo
 - **Certeza:** verificado (o timeout ideal depende do tamanho dos apps: inferido)
-- **Decisão:** [ ] aprovar  [ ] reprovar  [ ] ajustar
+- **Decisão:** [x] aprovar  [ ] reprovar  [ ] ajustar
 - **Comentário:**
 
 ## A-04 · Nada destrava status transitório órfão · severidade: média
@@ -49,8 +49,8 @@ Marque cada achado com **aprovar**, **reprovar** ou **ajustar** (e comente). Só
 - **Proposta:** (a) em `get_app_status`, se o app está transitório e a task está FAILURE/REVOKED, gravar ERROR; (b) task periódica (beat, a cada 5 min) que põe em ERROR apps transitórios cuja task está PENDING/STARTED há mais de 35 min; (c) se `.delay` lançar, voltar o status anterior e responder 503.
 - **Custo:** médio (~1h30) · **Risco da mudança:** baixo
 - **Certeza:** inferido (depende de como o worker é reiniciado em produção)
-- **Decisão:** [ ] aprovar  [ ] reprovar  [ ] ajustar
-- **Comentário:**
+- **Decisão:** [ ] aprovar  [x] reprovar  [ ] ajustar
+- **Comentário:** não aprovado nesta rodada. Depois, `app-concurrent-actions` cobriu em parte: a guarda de ocupado ignora task FAILURE/REVOKED e o despacho desfaz o status se o broker recusar a task (item c). Os itens a e b continuam sem implementação.
 
 ## A-05 · Start/stop/restart sem trava de concorrência · severidade: média
 
@@ -60,10 +60,21 @@ Marque cada achado com **aprovar**, **reprovar** ou **ajustar** (e comente). Só
 - **Proposta:** 409 se o status estiver em `TRANSIENT_STATUSES`. A exceção é stop durante DEPLOYING, que continua cancelando.
 - **Custo:** pequeno (~15 min) · **Risco da mudança:** baixo
 - **Certeza:** verificado
-- **Decisão:** [ ] aprovar  [ ] reprovar  [ ] ajustar
+- **Decisão:** [x] aprovar  [ ] reprovar  [ ] ajustar
 - **Comentário:**
 
 ## Registro de reprovados
 
 | ID | Motivo da reprovação | Data |
 |----|----------------------|------|
+| A-04 | não aprovado nesta rodada (sem motivo registrado) | 2026-10-27 |
+
+## Implementação
+
+| ID | Onde |
+|----|------|
+| A-01 | front: `TRANSIENT_APP_STATUSES` em polling, watch, logs e lock de processos; restart aplica RESTARTING e stop aplica STOPPING com polling |
+| A-02 | `dispatch_app_task` grava status + `task_id` antes de enfileirar (hoje em `applications/ownership.py`) |
+| A-03 | `check_dokku_output` no `ManageAppUseCase`; falha vira ERROR `ManageAppFailed`; timeout de start/restart em 10 min |
+| A-05 | 409 em start/stop/restart/redeploy com operação em andamento; stop em DEPLOYING continua cancelando |
+
