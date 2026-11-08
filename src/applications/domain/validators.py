@@ -13,6 +13,10 @@ ENV_VAR_KEY_PATTERN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 ENV_VAR_MAX_KEY_LENGTH = 128
 ENV_VAR_MAX_VALUE_LENGTH = 8192
 ENV_VAR_MAX_ITEMS = 100
+# Variaveis que o proprio Dokku le do config do app (DOKKU_PROXY_PORT_MAP,
+# DOKKU_DOCKERFILE_PORTS, DOKKU_APP_RESTORE...). Deixar o aluno defini-las muda
+# como a plataforma roteia/sobe o app, nao so o app.
+RESERVED_ENV_VAR_PREFIXES = ('DOKKU_',)
 
 # App name constraints
 APP_NAME_MIN_LENGTH = 2
@@ -88,6 +92,9 @@ def validate_env_var_key(key: str) -> None:
             key,
             'key must start with a letter or underscore, followed by alphanumeric or underscore'
         )
+
+    if key.upper().startswith(RESERVED_ENV_VAR_PREFIXES):
+        raise InvalidEnvVar(key, 'key uses a prefix reserved for the platform (DOKKU_)')
 
 
 def validate_env_var_value(value: str) -> None:

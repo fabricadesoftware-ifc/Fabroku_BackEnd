@@ -47,6 +47,7 @@ class DokkuAdapter(
             self.port,
             command_timeout=command_timeout,
             audit_context=audit_context,
+            host_key=getattr(settings, 'DOKKU_SSH_HOST_KEY', None),
         )
 
     def _run_command(self, command: str, *, audit: bool = True) -> str:

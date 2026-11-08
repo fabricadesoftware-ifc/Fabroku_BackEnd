@@ -1,13 +1,20 @@
 import re
 
 from django.conf import settings
+from django.db import models
 from rest_framework import serializers
 
-from applications.domain.exceptions import AppLimitExceeded, AppNameConflict
+from applications.domain.exceptions import ApplicationDomainError, AppLimitExceeded, AppNameConflict
+from applications.domain.validators import (
+    RESERVED_ENV_VAR_PREFIXES,
+    validate_app_name,
+    validate_app_name_available,
+)
 from applications.models import App, AppProcessScale
 from applications.process_scale import validate_process_quantities
 from applications.tasks import create_app_task, update_app_task
 from applications.use_cases.register_app import RegisterAppCommand, RegisterAppUseCase
+from core.apps.utils import slugify_dokku
 from interactive_sessions.models import InteractiveRunCommandKind
 from service_mgmt.serializers import ServiceSerializer
 
@@ -15,6 +22,10 @@ ENV_VAR_KEY_PATTERN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 ENV_VAR_MAX_ITEMS = 100
 ENV_VAR_MAX_KEY_LENGTH = 128
 ENV_VAR_MAX_VALUE_LENGTH = 8192
+# Nome de branch/ref: vai direto para `dokku git:sync ... <branch>` via SSH, sem aspas.
+# Mesmo alfabeto que o plugin fabroku aceita (fn-fabroku-validate-branch).
+GIT_BRANCH_PATTERN = re.compile(r'^[A-Za-z0-9._/-]+$')
+GIT_BRANCH_MAX_LENGTH = 255
 
 
 class InteractiveSessionCreateSerializer(serializers.Serializer):
@@ -64,6 +75,8 @@ class EnvVarsUpdateSerializer(serializers.Serializer):
                 raise serializers.ValidationError(f'{key} excede {ENV_VAR_MAX_KEY_LENGTH} caracteres.')
             if not ENV_VAR_KEY_PATTERN.match(key):
                 raise serializers.ValidationError(f'Nome de variavel invalido: {key}')
+            if key.upper().startswith(RESERVED_ENV_VAR_PREFIXES):
+                raise serializers.ValidationError(f'{key}: prefixo reservado para a plataforma (DOKKU_).')
             if len(env_value) > ENV_VAR_MAX_VALUE_LENGTH:
                 raise serializers.ValidationError(f'{key} excede {ENV_VAR_MAX_VALUE_LENGTH} caracteres.')
 
@@ -115,8 +128,49 @@ class AppSerializer(serializers.ModelSerializer):
             'last_commit_sha',
         ]
 
+    def validate_variables(self, value):
+        """Mesmas regras do endpoint env_vars (chave valida, sem prefixo DOKKU_, limites)."""
+        if not value:
+            return {}
+        if not isinstance(value, dict):
+            raise serializers.ValidationError('variables deve ser um objeto chave/valor.')
+        return EnvVarsUpdateSerializer().validate_variables(value)
+
+    def validate_branch(self, value):
+        """Branch segue sem aspas para `dokku git:sync`: só caracteres de ref Git, sem flags."""
+        branch = (value or '').strip()
+        if not branch:
+            raise serializers.ValidationError('Branch não pode ser vazia.')
+        if len(branch) > GIT_BRANCH_MAX_LENGTH:
+            raise serializers.ValidationError(f'Branch excede {GIT_BRANCH_MAX_LENGTH} caracteres.')
+        if not GIT_BRANCH_PATTERN.match(branch) or branch.startswith('-') or '..' in branch:
+            raise serializers.ValidationError(
+                'Branch inválida: use apenas letras, números, ".", "_", "-" e "/", sem começar com "-".'
+            )
+        return branch
+
+    def validate_project(self, project):
+        """Só membros do projeto (ou admins) podem criar/mover apps nele."""
+        request = self.context.get('request')
+        user = getattr(request, 'user', None) if request else None
+        if user is None or getattr(user, 'is_superuser', False):
+            return project
+        if self.instance is not None and self.instance.project_id == project.id:
+            return project
+        if not project.users.filter(id=user.id).exists():
+            raise serializers.ValidationError('Você não é membro deste projeto.')
+        return project
+
     def validate_name_dokku(self, value):
-        """Apenas perfis privilegiados ou admins podem definir nome personalizado."""
+        """Apenas perfis privilegiados ou admins podem definir nome personalizado.
+
+        O name_dokku é o nome real do app no servidor Dokku: ele vai para `apps:destroy`,
+        `config:set`, `run` etc. Por isso ele é imutável depois do provisionamento e passa
+        pelas mesmas regras de nome do RegisterAppUseCase (slug canônico, nomes reservados
+        como `fabroku-api`, sem colidir com outro app ativo). Sem isso um membro da fábrica
+        conseguia apontar o próprio registro para o container de outro app, ou do próprio
+        Fabroku, e operar nele.
+        """
         request = self.context.get('request')
         if request and request.user:
             is_fabric = getattr(request.user, 'is_fabric', False)
@@ -125,7 +179,31 @@ class AppSerializer(serializers.ModelSerializer):
                     f'Apenas {settings.FABROKU_PRIVILEGED_ROLE_LABEL} ou administradores podem '
                     'personalizar o nome do app.'
                 )
-        return value
+
+        if not value:
+            return value
+
+        slug = slugify_dokku(str(value))
+        if self.instance is not None and self.instance.name_dokku and slug != self.instance.name_dokku:
+            raise serializers.ValidationError(
+                'O nome Dokku não pode ser alterado depois do app ter sido provisionado.'
+            )
+
+        try:
+            validate_app_name(slug)
+            validate_app_name_available(slug)
+        except ApplicationDomainError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+
+        conflicts = App.objects.filter(deleted_at__isnull=True).filter(
+            models.Q(name__iexact=slug) | models.Q(name_dokku__iexact=slug)
+        )
+        if self.instance is not None:
+            conflicts = conflicts.exclude(pk=self.instance.pk)
+        if conflicts.exists():
+            raise serializers.ValidationError(f'Já existe um app chamado "{slug}".')
+
+        return slug
 
     def _get_project_users(self, obj):
         """Reaproveita o prefetch do projeto quando disponivel."""
