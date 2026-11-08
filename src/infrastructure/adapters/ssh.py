@@ -1,4 +1,6 @@
+import base64
 import io
+import logging
 import os
 import socket
 from collections.abc import Generator
@@ -7,6 +9,8 @@ from typing import Callable
 import paramiko
 
 from observability.ssh_audit import begin_ssh_audit, finish_ssh_audit
+
+logger = logging.getLogger(__name__)
 
 INTERACTIVE_CHANNEL_OUTPUT_CHUNK_SIZE = 4096
 
@@ -80,6 +84,7 @@ class SSHAdapter:
         connect_timeout=30,
         command_timeout=120,
         audit_context=None,
+        host_key=None,
     ):
         self.host = host
         self.username = username
@@ -88,7 +93,40 @@ class SSHAdapter:
         self.connect_timeout = connect_timeout
         self.command_timeout = command_timeout
         self.audit_context = audit_context or {}
+        self.host_key = host_key
         self._temp_key_file = None
+
+    def _new_client(self) -> paramiko.SSHClient:
+        """SSHClient com verificacao da host key do servidor.
+
+        Com `host_key` ("<tipo> <base64>", como em known_hosts) a chave e fixada e qualquer
+        outro servidor e recusado (RejectPolicy). Sem ela mantem o comportamento antigo
+        (AutoAddPolicy), que aceita qualquer host e deixa a conexao sujeita a MITM: a chave
+        privada nao vaza, mas os comandos (inclusive config:set com segredos) iriam para o
+        impostor.
+        """
+        client = paramiko.SSHClient()
+        pinned = self._pinned_host_key()
+        if pinned is None:
+            logger.warning('DOKKU_SSH_HOST_KEY nao configurada: aceitando qualquer host key SSH de %s', self.host)
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            return client
+
+        key_type, key = pinned
+        host_keys = client.get_host_keys()
+        for hostname in {self.host, f'[{self.host}]:{self.port}'}:
+            host_keys.add(hostname, key_type, key)
+        client.set_missing_host_key_policy(paramiko.RejectPolicy())
+        return client
+
+    def _pinned_host_key(self) -> tuple[str, paramiko.PKey] | None:
+        if not self.host_key:
+            return None
+        parts = str(self.host_key).split()
+        if len(parts) < 2:  # noqa: PLR2004
+            raise ValueError('DOKKU_SSH_HOST_KEY deve estar no formato "<tipo> <chave-base64>".')
+        key_type, key_b64 = parts[0], parts[1]
+        return key_type, paramiko.PKey.from_type_string(key_type, base64.b64decode(key_b64))
 
     @staticmethod
     def _successful_command_output(output: str, error_output: str) -> str:
@@ -127,8 +165,7 @@ class SSHAdapter:
         if not audit:
             return self._run_command_unaudited(command)
         audit = begin_ssh_audit(command, self.audit_context)
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client = self._new_client()
         try:
             pkey = self._get_pkey()
             client.connect(
@@ -171,8 +208,7 @@ class SSHAdapter:
             client.close()
 
     def _run_command_unaudited(self, command: str) -> str:
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client = self._new_client()
         try:
             client.connect(
                 self.host,
@@ -202,8 +238,7 @@ class SSHAdapter:
     def _run_command_with_stdin(self, command: str, stdin_data: str) -> str:
         """Executa um comando via SSH enviando dados no stdin."""
         audit = begin_ssh_audit(command, self.audit_context)
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client = self._new_client()
         try:
             pkey = self._get_pkey()
             client.connect(self.host, port=self.port, username=self.username, pkey=pkey)
@@ -240,8 +275,7 @@ class SSHAdapter:
                 print(line)
         """
         audit = begin_ssh_audit(command, self.audit_context)
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client = self._new_client()
         exit_status = -1
 
         try:
@@ -277,8 +311,7 @@ class SSHAdapter:
         decide se reconecta. Sem nenhum byte em `idle_timeout` segundos, sobe socket.timeout.
         """
         audit = begin_ssh_audit(command, self.audit_context)
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client = self._new_client()
         try:
             client.connect(
                 self.host,
@@ -313,8 +346,7 @@ class SSHAdapter:
     ) -> Generator[str, None, int]:
         """Executa comando streaming permitindo encerrar quando `should_stop` retornar True."""
         audit = begin_ssh_audit(command, self.audit_context)
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client = self._new_client()
         exit_status = -1
         text_buffer = ''
         stopped_by_request = False
@@ -389,8 +421,7 @@ class SSHAdapter:
         `auth_timeout` that `_run_command` passes — this call never had them, and Fase E's
         hard restriction is byte-identical behavior, not fixing that inconsistency.
         """
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client = self._new_client()
         pkey = self._get_pkey()
         client.connect(self.host, port=self.port, username=self.username, pkey=pkey)
         stdin, stdout, stderr = client.exec_command(command, get_pty=True)

@@ -48,6 +48,15 @@ class ServiceSerializer(serializers.ModelSerializer):
             'updated_at',
         ]
 
+    def _require_membership(self, project):
+        """Sem isso qualquer usuario criava servico ligado ao app de outro (link + restart do app alheio)."""
+        request = self.context.get('request')
+        user = getattr(request, 'user', None) if request else None
+        if project is None or user is None or getattr(user, 'is_superuser', False):
+            return
+        if not project.users.filter(id=user.id).exists():
+            raise serializers.ValidationError('Você não é membro do projeto deste app/serviço.')
+
     def validate(self, attrs):
         """Valida criacao: app OU (project + service_type) para standalone."""
         if self.instance:
@@ -59,6 +68,8 @@ class ServiceSerializer(serializers.ModelSerializer):
 
         if service_type and not is_supported_service_type(service_type):
             raise serializers.ValidationError('Apenas PostgreSQL, PostGIS e Redis estao habilitados no momento.')
+
+        self._require_membership(app.project if app else project)
 
         if app:
             if not project:

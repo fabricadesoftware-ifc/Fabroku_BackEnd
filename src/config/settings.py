@@ -45,12 +45,12 @@ LOCAL_DEV_ORIGINS = [
     'http://127.0.0.1:5173',
 ]
 
+# Sem wildcard: `https://*.fabricadesoftware.ifc.edu.br` incluiria os apps dos alunos
+# (`*.class.fabricadesoftware.ifc.edu.br`), que sao codigo de terceiros.
 DEFAULT_TRUSTED_ORIGINS = [
     *LOCAL_DEV_ORIGINS,
     'https://fabroku.fabricadesoftware.ifc.edu.br',
     'https://fabroku-api.fabricadesoftware.ifc.edu.br',
-    'https://*.fabricadesoftware.ifc.edu.br',
-    'https://*.fexcompany.me',
 ]
 
 
@@ -58,7 +58,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.getenv('SECRET_KEY')
 
-CELERY_BROKER_URL = os.getenv('BROKER_URL', 'amqp://paineluser:senha123@172.21.238.11:5672/painel')
+# Sem credencial real como padrao: o valor de producao vem so da variavel BROKER_URL.
+CELERY_BROKER_URL = os.getenv('BROKER_URL', 'amqp://guest:guest@127.0.0.1:5672//')
 
 BROKER_URL = CELERY_BROKER_URL
 
@@ -339,13 +340,20 @@ CORS_ALLOWED_ORIGINS = _parse_csv_env('CORS_ALLOWED_ORIGINS', LOCAL_DEV_ORIGINS 
     'https://fabroku-api.fabricadesoftware.ifc.edu.br',
 ])
 
-CORS_ALLOWED_ORIGIN_REGEXES = _parse_csv_env('CORS_ALLOWED_ORIGIN_REGEXES', [
-    r'^https://.*\.fabricadesoftware\.ifc\.edu\.br$',
-    r'^https://.*\.fexcompany\.me$',
-])
+# Nenhum regex por padrao. `^https://.*\.fabricadesoftware\.ifc\.edu\.br$` casava com os
+# apps dos alunos em `*.class.fabricadesoftware.ifc.edu.br` e, com
+# CORS_ALLOW_CREDENTIALS=True, deixava qualquer app hospedado chamar a API como o
+# usuario logado que o visitasse. Se precisar, informe origens exatas em CORS_ALLOWED_ORIGINS.
+CORS_ALLOWED_ORIGIN_REGEXES = _parse_csv_env('CORS_ALLOWED_ORIGIN_REGEXES', [])
 
-AUTH_COOKIE_DOMAIN = _optional_env('AUTH_COOKIE_DOMAIN', '.fabricadesoftware.ifc.edu.br')
-AUTH_COOKIE_SAMESITE = os.getenv('AUTH_COOKIE_SAMESITE', 'None')
+# Cookie host-only (sem atributo Domain): fica restrito ao host da API. Com
+# Domain=.fabricadesoftware.ifc.edu.br o navegador enviava access_token/refresh_token
+# para todo subdominio, inclusive os apps dos alunos. O frontend em outro host continua
+# funcionando: o cookie e do host da API, e e para ela que o withCredentials manda.
+AUTH_COOKIE_DOMAIN = _optional_env('AUTH_COOKIE_DOMAIN', None)
+# Frontend e API estao no mesmo site (fabricadesoftware.ifc.edu.br), entao Lax basta e
+# bloqueia o envio automatico do cookie a partir de sites de terceiros.
+AUTH_COOKIE_SAMESITE = os.getenv('AUTH_COOKIE_SAMESITE', 'Lax')
 AUTH_COOKIE_SECURE = _parse_bool_env('AUTH_COOKIE_SECURE', True)
 
 CORS_ALLOW_CREDENTIALS = True
@@ -398,6 +406,9 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
+    # Chave propria para os JWT: trocar JWT_SIGNING_KEY derruba todas as sessoes (ex.: depois
+    # de um vazamento de cookies) sem invalidar o que e cifrado com SECRET_KEY.
+    'SIGNING_KEY': os.getenv('JWT_SIGNING_KEY') or SECRET_KEY,
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     'ROTATE_REFRESH_TOKENS': True,
@@ -429,6 +440,9 @@ DOKKU_SSH_KEY = os.getenv('DOKKU_SSH_KEY')
 DOKKU_SSH_USERNAME = os.getenv('DOKKU_SSH_USERNAME', 'dokku')
 DOKKU_SSH_HOST = os.getenv('DOKKU_SSH_HOST', '127.0.0.1')
 DOKKU_SSH_PORT = int(os.getenv('DOKKU_SSH_PORT', 22))  # noqa: PLW1508
+# Chave publica do host Dokku no formato de known_hosts ("ssh-ed25519 AAAA..."). Com ela o
+# backend recusa um servidor desconhecido (anti-MITM). Sem ela aceita qualquer host key.
+DOKKU_SSH_HOST_KEY = _optional_env('DOKKU_SSH_HOST_KEY')
 # Deploy pelo plugin fabroku (Fabroku_Plugin): o build roda no servidor, fora da sessao SSH.
 DOKKU_REMOTE_DEPLOY_PLUGIN = _parse_bool_env('DOKKU_REMOTE_DEPLOY_PLUGIN', False)
 GITHUB_REDIRECT_URI = os.getenv('GITHUB_REDIRECT_URI', 'http://localhost:8000/api/auth/github/callback')
