@@ -12,6 +12,8 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from applications.domain.exceptions import InvalidEnvVar
+from applications.domain.validators import validate_env_var_key
 from applications.serializers import AppSerializer, EnvVarsUpdateSerializer
 from core.apps.mixins.apps.run_command import is_command_allowed
 from core.auth_user.authentication import CookieJWTAuthentication, trusted_cookie_origins
@@ -126,6 +128,29 @@ class EnvVarsReservedPrefixTests(SimpleTestCase):
     def test_env_vars_endpoint_rejects_dokku_prefix(self):
         serializer = EnvVarsUpdateSerializer(data={'variables': {'dokku_app_restore': '0'}})
         self.assertFalse(serializer.is_valid())
+
+    def test_env_vars_endpoint_rejects_names_reserved_for_host_tooling(self):
+        keys = (
+            'DOCKER_BIN', 'docker_host', 'SIGIL_DELIMS', 'PATH', 'LD_PRELOAD', 'BASH_ENV', 'IMAGE', 'GIT_SSH_COMMAND',
+        )
+        for key in keys:
+            with self.subTest(key=key):
+                serializer = EnvVarsUpdateSerializer(data={'variables': {key: 'x'}})
+                self.assertFalse(serializer.is_valid())
+
+    def test_env_vars_endpoint_keeps_ordinary_names(self):
+        variables = {
+            'DATABASE_URL': 'x', 'SECRET_KEY': 'x', 'DEBUG': '1', 'PORT': '8000',
+            'NODE_ENV': 'production', 'PYTHONPATH': 'src',
+        }
+        serializer = EnvVarsUpdateSerializer(data={'variables': variables})
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_domain_validator_rejects_reserved_names(self):
+        for key in ('DOCKER_BIN', 'SIGIL_DELIMS', 'PATH', 'IMAGE'):
+            with self.subTest(key=key), self.assertRaises(InvalidEnvVar):
+                validate_env_var_key(key)
+        validate_env_var_key('DATABASE_URL')
 
 
 class ServiceMembershipTests(TestCase):
