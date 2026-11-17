@@ -6,6 +6,7 @@ from rest_framework import serializers
 
 from applications.domain.exceptions import ApplicationDomainError, AppLimitExceeded, AppNameConflict
 from applications.domain.validators import (
+    RESERVED_ENV_VAR_NAMES,
     RESERVED_ENV_VAR_PREFIXES,
     validate_app_name,
     validate_app_name_available,
@@ -75,8 +76,8 @@ class EnvVarsUpdateSerializer(serializers.Serializer):
                 raise serializers.ValidationError(f'{key} excede {ENV_VAR_MAX_KEY_LENGTH} caracteres.')
             if not ENV_VAR_KEY_PATTERN.match(key):
                 raise serializers.ValidationError(f'Nome de variavel invalido: {key}')
-            if key.upper().startswith(RESERVED_ENV_VAR_PREFIXES):
-                raise serializers.ValidationError(f'{key}: prefixo reservado para a plataforma (DOKKU_).')
+            if key.upper().startswith(RESERVED_ENV_VAR_PREFIXES) or key in RESERVED_ENV_VAR_NAMES:
+                raise serializers.ValidationError(f'{key}: nome reservado para a plataforma.')
             if len(env_value) > ENV_VAR_MAX_VALUE_LENGTH:
                 raise serializers.ValidationError(f'{key} excede {ENV_VAR_MAX_VALUE_LENGTH} caracteres.')
 

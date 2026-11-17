@@ -16,7 +16,40 @@ ENV_VAR_MAX_ITEMS = 100
 # Variaveis que o proprio Dokku le do config do app (DOKKU_PROXY_PORT_MAP,
 # DOKKU_DOCKERFILE_PORTS, DOKKU_APP_RESTORE...). Deixar o aluno defini-las muda
 # como a plataforma roteia/sobe o app, nao so o app.
-RESERVED_ENV_VAR_PREFIXES = ('DOKKU_',)
+#
+# Tambem ficam reservados nomes usados pelo shell e pelas ferramentas do host (docker, git,
+# sigil, nginx) e pelos scripts de build/deploy da plataforma.
+# Prefixos sao comparados em maiusculas; nomes exatos, como estao (bash diferencia caixa).
+RESERVED_ENV_VAR_PREFIXES = (
+    'DOKKU_',
+    'DOCKER_',
+    'BUILDKIT_',
+    'COMPOSE_',
+    'SIGIL_',
+    'PLUGIN_',
+    'PLUGN_',
+    'NGINX_',
+    'BASH_',
+    'LD_',
+    'GIT_',
+    'SSH_',
+    'XDG_',
+)
+RESERVED_ENV_VAR_NAMES = frozenset({
+    # Shell e ferramentas do host
+    'PATH', 'HOME', 'SHELL', 'IFS', 'ENV', 'PS4', 'PROMPT_COMMAND', 'CDPATH', 'GLOBIGNORE',
+    'SHELLOPTS', 'BASHOPTS', 'TMPDIR', 'INPUTRC', 'TAR_OPTIONS', 'POSIXLY_CORRECT',
+    'GREP_OPTIONS', 'CURL_HOME', 'WGETRC', 'GNUPGHOME', 'LESSOPEN', 'LESSCLOSE',
+    'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
+    'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy',
+    # Nomes usados pelos scripts de build/deploy da plataforma
+    'APP', 'IMAGE', 'SCHEDULER', 'BUILDER_TYPE', 'SOURCECODE_WORK_DIR', 'ARG_ARRAY',
+    'DOCKERFILE_ARGS', 'NIXPACKS_ARGS', 'PACK_ARGS', 'RAILPACK_ARGS', 'CID', 'TAR_CID',
+    'CHECKS_PATH', 'CHECKS_FILENAME', 'TMP_CHECKS_FILE', 'SOURCE_IMAGE_APPS', 'STATE',
+    'TYPE', 'CURRENT_TIME', 'DEAD_FILE', 'DEAD_CONTAINER_FILE', 'DEAD_IMAGE_FILE',
+    'NEW_DOKKU_IMAGE', 'SIGIL_PARAMS', 'app_source_image', 'source_app', 'stack',
+    'cid', 'post', 'value',
+})
 
 # App name constraints
 APP_NAME_MIN_LENGTH = 2
@@ -94,7 +127,10 @@ def validate_env_var_key(key: str) -> None:
         )
 
     if key.upper().startswith(RESERVED_ENV_VAR_PREFIXES):
-        raise InvalidEnvVar(key, 'key uses a prefix reserved for the platform (DOKKU_)')
+        raise InvalidEnvVar(key, 'key uses a prefix reserved for the platform (e.g. DOKKU_, DOCKER_)')
+
+    if key in RESERVED_ENV_VAR_NAMES:
+        raise InvalidEnvVar(key, 'key is reserved for the platform')
 
 
 def validate_env_var_value(value: str) -> None:
