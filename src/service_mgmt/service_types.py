@@ -60,6 +60,18 @@ SERVICE_RUNTIMES = {
         env_key='REDIS_URL',
         dokku_plugin='redis',
     ),
+    # Não é plugin do Dokku: bucket + chave no Garage (VM s3). Ver service_mgmt/s3.py.
+    ServiceType.S3.value: ServiceRuntime(
+        service_type=ServiceType.S3.value,
+        label='Armazenamento S3',
+        default_prefix='s3',
+        attached_suffix='storage',
+        user='',
+        port=443,
+        host_prefix='',
+        env_key='S3_URL',
+        dokku_plugin='garage',
+    ),
 }
 
 
@@ -84,6 +96,10 @@ def is_supported_service_type(service_type: str | ServiceType | None) -> bool:
 
 def is_postgres_runtime(runtime: ServiceRuntime) -> bool:
     return runtime.dokku_plugin == 'postgres'
+
+
+def is_s3_runtime(runtime: ServiceRuntime) -> bool:
+    return runtime.dokku_plugin == 'garage'
 
 
 def is_postgres_service_type(service_type: str | ServiceType | None) -> bool:

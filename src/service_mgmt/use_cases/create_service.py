@@ -18,6 +18,8 @@ import time
 import uuid
 from dataclasses import dataclass
 
+from django.conf import settings
+
 from applications.domain.exceptions import DeploymentFailed
 from applications.models import App
 from applications.ports.i_dokku import IDokkuPort
@@ -33,8 +35,14 @@ from core.apps.mixins.services.service_dokku import (
 from core.apps.utils import slugify_dokku
 from observability.models import AppLogManager, LogCategory
 from projects.models import Project
+from service_mgmt import s3
 from service_mgmt.models import Service
-from service_mgmt.service_types import ServiceRuntime, get_service_runtime, is_postgres_runtime
+from service_mgmt.service_types import (
+    ServiceRuntime,
+    get_service_runtime,
+    is_postgres_runtime,
+    is_s3_runtime,
+)
 
 
 @dataclass(frozen=True)
@@ -65,9 +73,19 @@ class ServiceCreated:
 class CreateServiceUseCase:
     """Provision a Dokku service, attached to an App or standalone in a Project."""
 
-    def __init__(self, dokku_port: IDokkuPort, log_manager: AppLogManager | None = None):
+    def __init__(self, dokku_port: IDokkuPort, log_manager: AppLogManager | None = None, storage_port=None):
         self.dokku_port = dokku_port
         self.log_manager = log_manager
+        self._storage_port = storage_port
+
+    @property
+    def storage(self):
+        """Garage (S3). Criado só quando um serviço S3 é pedido."""
+        if self._storage_port is None:
+            from infrastructure.adapters.garage import GarageAdapter  # noqa: PLC0415
+
+            self._storage_port = GarageAdapter()
+        return self._storage_port
 
     def execute_attached(self, cmd: CreateServiceCommand) -> ServiceCreated:
         app = App.objects.get(id=cmd.app_id, deleted_at__isnull=True)
@@ -90,6 +108,9 @@ class CreateServiceUseCase:
         if not app.name_dokku:
             log_manager.error('App sem name_dokku configurado', category=LogCategory.DATABASE)
             raise DeploymentFailed(reason='App sem name_dokku configurado', step='validate')
+
+        if is_s3_runtime(runtime):
+            return self._execute_attached_s3(app, service, runtime, service_name, env_key, log_manager)
 
         self._create_remote_service(log_manager, runtime, dokku_service_name, password, service)
         self._link_remote_service(log_manager, app, runtime, dokku_service_name, env_key)
@@ -129,6 +150,14 @@ class CreateServiceUseCase:
         # don't already own belongs to something else — never silently adopt it.
         previously_owned = service.container_name == dokku_service_name
 
+        if is_s3_runtime(runtime):
+            bucket = s3.bucket_name(dokku_service_name)
+            self._check_bucket_ownership(bucket, previously_owned=service.container_name == bucket)
+            self._save_s3_credentials(service, s3.provision(self.storage, bucket))
+            service.task_id = None
+            service.save(update_fields=['task_id'])
+            return ServiceCreated(service_id=service.id, service_name=bucket, service_type=runtime.service_type)
+
         output, _command, operation = create_dokku_service(self.dokku_port, runtime, dokku_service_name, password)
         if 'already exists' in output.lower():
             if not previously_owned:
@@ -155,6 +184,72 @@ class CreateServiceUseCase:
         service.save(update_fields=['task_id'])
 
         return ServiceCreated(service_id=service.id, service_name=dokku_service_name, service_type=runtime.service_type)
+
+    def _check_bucket_ownership(self, bucket: str, *, previously_owned: bool) -> None:
+        # Mesmo cuidado do Postgres: um bucket que já existe e não é deste Service
+        # pertence a outro aluno (ou à plataforma). Nunca adotar.
+        if not previously_owned and self.storage.get_bucket(bucket):
+            raise DeploymentFailed(
+                reason=f'Já existe um bucket "{bucket}" no armazenamento que não pertence a este serviço.',
+                step='create_s3_bucket',
+            )
+
+    @staticmethod
+    def _save_s3_credentials(service: Service, creds) -> None:
+        service.user = creds.access_key_id
+        service.password = creds.secret_access_key
+        service.host = creds.host
+        service.port = 443
+        service.container_name = creds.bucket
+        service.image = None
+        service.image_version = None
+        if service.pk is None:
+            service.save()
+            return
+        service.save(update_fields=['user', 'password', 'host', 'port', 'container_name', 'image', 'image_version'])
+
+    def _execute_attached_s3(  # noqa: PLR0913, PLR0917
+        self,
+        app: App,
+        service: Service | None,
+        runtime: ServiceRuntime,
+        service_name: str,
+        env_key: str,
+        log_manager: AppLogManager,
+    ) -> ServiceCreated:
+        bucket = s3.bucket_name(slugify_dokku(f'{service_name}-{app.id}'))
+        self._check_bucket_ownership(bucket, previously_owned=bool(service and service.container_name == bucket))
+
+        log_manager.info(f'Criando bucket S3 {bucket}...', category=LogCategory.DATABASE, progress=10)
+        creds = s3.provision(self.storage, bucket)
+        log_manager.info(
+            f'Bucket {bucket} criado (cota {settings.FABROKU_S3_QUOTA_MB} MB).',
+            category=LogCategory.DATABASE,
+            progress=50,
+        )
+
+        service = service or Service(
+            name=service_name, service_type=runtime.service_type, app=app, project=app.project, env_key=env_key
+        )
+        service.env_key = env_key
+        service.task_id = None
+        self._save_s3_credentials(service, creds)
+        service.save(update_fields=['env_key', 'task_id'])
+
+        output = s3.link(self.dokku_port, app, creds, env_key, runtime)
+        log_manager.dokku(output, category=LogCategory.CONFIG, progress=80)
+        check_dokku_output(output, 'config:set (S3)', allow_empty=True)
+
+        restart_output = self.dokku_port.restart_app(app.name_dokku)
+        log_manager.dokku(restart_output, category=LogCategory.DEPLOY, progress=94)
+        log_manager.success(
+            f'Armazenamento S3 criado e vinculado. Variáveis {env_key} e AWS_* configuradas.'
+            if env_key == runtime.env_key
+            else f'Armazenamento S3 criado e vinculado. Variável {env_key} configurada.',
+            category=LogCategory.DATABASE,
+            progress=100,
+        )
+        return ServiceCreated(service_id=service.id, service_name=bucket, service_type=runtime.service_type)
 
     def _create_remote_service(  # noqa: PLR0913, PLR0917
         self,

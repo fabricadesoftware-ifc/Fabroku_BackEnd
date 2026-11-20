@@ -67,7 +67,7 @@ class ServiceSerializer(serializers.ModelSerializer):
         service_type = attrs.get('service_type')
 
         if service_type and not is_supported_service_type(service_type):
-            raise serializers.ValidationError('Apenas PostgreSQL, PostGIS e Redis estao habilitados no momento.')
+            raise serializers.ValidationError('Apenas PostgreSQL, PostGIS, Redis e Armazenamento S3 estao habilitados no momento.')
 
         self._require_membership(app.project if app else project)
 
