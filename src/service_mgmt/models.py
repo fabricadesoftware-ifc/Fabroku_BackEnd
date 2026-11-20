@@ -11,6 +11,7 @@ class ServiceType(models.TextChoices):
     POSTGIS = 'postgis', 'PostGIS'
     RABBITMQ = 'rabbitmq', 'RabbitMQ'
     REDIS = 'redis', 'Redis'
+    S3 = 's3', 'Armazenamento S3'
 
 
 class Service(models.Model):

@@ -24,8 +24,9 @@ from applications.ports.i_dokku import IDokkuPort
 from core.apps.mixins.services.service_dokku import check_dokku_output, link_dokku_service, sync_service_url_from_dokku
 from core.apps.mixins.services.service_env import allocate_service_env_key
 from observability.models import AppLogManager, LogCategory
+from service_mgmt import s3
 from service_mgmt.models import Service
-from service_mgmt.service_types import get_service_runtime
+from service_mgmt.service_types import get_service_runtime, is_s3_runtime
 
 
 @dataclass(frozen=True)
@@ -83,21 +84,28 @@ class LinkServiceUseCase:
             progress=20,
         )
 
-        link_output, _command, link_operation = link_dokku_service(
-            self.dokku_port, runtime, dokku_service_name, app.name_dokku, no_restart=True, env_key=service.env_key
-        )
-        log_manager.dokku(link_output, category=LogCategory.DATABASE, progress=50)
-        if 'already linked' not in link_output.lower():
-            check_dokku_output(link_output, link_operation)
+        if is_s3_runtime(runtime):
+            link_output = s3.link(
+                self.dokku_port, app, s3.credentials_from_service(service), service.env_key, runtime
+            )
+            log_manager.dokku(link_output, category=LogCategory.CONFIG, progress=50)
+            check_dokku_output(link_output, 'config:set (S3)', allow_empty=True)
+        else:
+            link_output, _command, link_operation = link_dokku_service(
+                self.dokku_port, runtime, dokku_service_name, app.name_dokku, no_restart=True, env_key=service.env_key
+            )
+            log_manager.dokku(link_output, category=LogCategory.DATABASE, progress=50)
+            if 'already linked' not in link_output.lower():
+                check_dokku_output(link_output, link_operation)
 
-        sync_service_url_from_dokku(
-            app=app,
-            dokku_adapter=self.dokku_port,
-            logger=log_manager,
-            runtime=runtime,
-            env_key=service.env_key,
-            progress=80,
-        )
+            sync_service_url_from_dokku(
+                app=app,
+                dokku_adapter=self.dokku_port,
+                logger=log_manager,
+                runtime=runtime,
+                env_key=service.env_key,
+                progress=80,
+            )
 
         service.app = app
         service.task_id = None

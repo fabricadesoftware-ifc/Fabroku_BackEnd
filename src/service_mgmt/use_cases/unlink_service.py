@@ -21,8 +21,9 @@ from core.apps.mixins.services.service_dokku import (
     unlink_dokku_service,
 )
 from observability.models import AppLogManager, LogCategory
+from service_mgmt import s3
 from service_mgmt.models import Service
-from service_mgmt.service_types import get_service_runtime
+from service_mgmt.service_types import get_service_runtime, is_s3_runtime
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,22 @@ class UnlinkServiceUseCase:
 
         removed_env_key = service.env_key or runtime.env_key
         log_manager.info('Desvinculando serviço...', category=LogCategory.DATABASE, progress=30)
+
+        if is_s3_runtime(runtime):
+            unset_output = s3.unlink(self.dokku_port, app, removed_env_key, runtime)
+            log_manager.dokku(unset_output, category=LogCategory.CONFIG, progress=60)
+            check_dokku_output(unset_output, 'config:unset (S3)', allow_empty=True)
+            service.app = None
+            service.env_key = None
+            service.save(update_fields=['app', 'env_key'])
+            restart_output = self.dokku_port.restart_app(app.name_dokku)
+            log_manager.dokku(restart_output, category=LogCategory.DEPLOY, progress=90)
+            log_manager.success(
+                'Armazenamento S3 desvinculado. O bucket e os arquivos continuam guardados.',
+                category=LogCategory.DATABASE,
+                progress=100,
+            )
+            return ServiceUnlinked(service_id=service.id)
 
         unlink_output, _command = unlink_dokku_service(self.dokku_port, runtime, dokku_service_name, app.name_dokku)
         log_manager.dokku(unlink_output, category=LogCategory.DATABASE, progress=60)

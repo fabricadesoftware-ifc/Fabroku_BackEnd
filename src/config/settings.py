@@ -457,6 +457,13 @@ FABROKU_REGULAR_ROLE_LABEL = os.getenv('FABROKU_REGULAR_ROLE_LABEL', 'Aluno')
 FABROKU_APP_DOMAIN_SUFFIX = os.getenv('FABROKU_APP_DOMAIN_SUFFIX', '.class.fabricadesoftware.ifc.edu.br')
 FABROKU_POSTGIS_IMAGE = os.getenv('FABROKU_POSTGIS_IMAGE', 'postgis/postgis')
 FABROKU_POSTGIS_IMAGE_VERSION = os.getenv('FABROKU_POSTGIS_IMAGE_VERSION', '17-3.5')
+# Armazenamento S3 (Garage, VM s3). O admin so aceita conexoes do host do Fabroku.
+FABROKU_S3_ENDPOINT = os.getenv('FABROKU_S3_ENDPOINT', 'https://s3.fabricadesoftware.ifc.edu.br')
+FABROKU_S3_REGION = os.getenv('FABROKU_S3_REGION', 'garage')
+GARAGE_ADMIN_URL = os.getenv('GARAGE_ADMIN_URL', 'https://s3.fabricadesoftware.ifc.edu.br:3943')
+GARAGE_ADMIN_TOKEN = _optional_env('GARAGE_ADMIN_TOKEN')
+FABROKU_S3_QUOTA_MB = int(os.getenv('FABROKU_S3_QUOTA_MB', '1024'))
+FABROKU_S3_MAX_OBJECTS = int(os.getenv('FABROKU_S3_MAX_OBJECTS', '50000'))
 SERVICE_PROXY_POSTGRES_HOST = os.getenv(
     'SERVICE_PROXY_POSTGRES_HOST',
     'proxy.pg.coolify.fabricadesoftware.ifc.edu.br',
