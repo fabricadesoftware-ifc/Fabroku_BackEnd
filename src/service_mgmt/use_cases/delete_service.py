@@ -26,8 +26,9 @@ from core.apps.mixins.services.service_dokku import (
 )
 from observability.admin_notifications import notify_admins
 from observability.models import AdminNotificationEvent, AppLogManager, LogCategory
+from service_mgmt import s3
 from service_mgmt.models import Service
-from service_mgmt.service_types import ServiceRuntime, get_service_runtime
+from service_mgmt.service_types import ServiceRuntime, get_service_runtime, is_s3_runtime
 
 
 @dataclass(frozen=True)
@@ -46,8 +47,17 @@ class ServiceDeleted:
 class DeleteServiceUseCase:
     """Unlink a service from its app, delete it in Dokku, and soft-delete the local record."""
 
-    def __init__(self, dokku_port: IDokkuPort):
+    def __init__(self, dokku_port: IDokkuPort, storage_port=None):
         self.dokku_port = dokku_port
+        self._storage_port = storage_port
+
+    @property
+    def storage(self):
+        if self._storage_port is None:
+            from infrastructure.adapters.garage import GarageAdapter  # noqa: PLC0415
+
+            self._storage_port = GarageAdapter()
+        return self._storage_port
 
     def execute(self, cmd: DeleteServiceCommand) -> ServiceDeleted:
         try:
@@ -103,6 +113,12 @@ class DeleteServiceUseCase:
         if not app:
             return
 
+        if is_s3_runtime(runtime):
+            output = s3.unlink(self.dokku_port, app, env_key, runtime, no_restart=False)
+            if log_manager:
+                log_manager.dokku(output, category=LogCategory.CONFIG, progress=35)
+            return
+
         if not app.name_dokku:
             self._remove_app_env_key(app, env_key)
             return
@@ -155,6 +171,20 @@ class DeleteServiceUseCase:
             del app.variables[env_key]
             app.save(update_fields=['variables'])
 
+    def _run_remote_delete(
+        self, service: Service, runtime: ServiceRuntime, dokku_service_name: str, log_manager: AppLogManager | None
+    ) -> str | None:
+        """Apaga no Dokku (ou no Garage, se S3). Devolve a saída de erro, ou None se deu certo."""
+        if is_s3_runtime(runtime):
+            output = self.storage.delete_bucket(service.container_name)
+            if log_manager:
+                log_manager.info(output, category=LogCategory.DATABASE, progress=80)
+            return None
+        output, _command = delete_dokku_service(self.dokku_port, runtime, dokku_service_name)
+        if log_manager:
+            log_manager.dokku(output, category=LogCategory.DATABASE, progress=80)
+        return output if dokku_output_failed(output) else None
+
     def _delete_remote_service(
         self, service: Service, runtime: ServiceRuntime, log_manager: AppLogManager | None
     ) -> None:
@@ -165,13 +195,13 @@ class DeleteServiceUseCase:
                 category=LogCategory.DATABASE,
                 progress=50,
             )
+        # S3 sem container_name: o bucket nunca foi criado. NUNCA cair no service.name,
+        # que pode ser o bucket de outro aluno.
+        if is_s3_runtime(runtime) and not service.container_name:
+            return
         failure = None
         try:
-            output, _command = delete_dokku_service(self.dokku_port, runtime, dokku_service_name)
-            if log_manager:
-                log_manager.dokku(output, category=LogCategory.DATABASE, progress=80)
-            if dokku_output_failed(output):
-                failure = output
+            failure = self._run_remote_delete(service, runtime, dokku_service_name, log_manager)
         except Exception as e:
             failure = str(e) or e.__class__.__name__
             if log_manager:
