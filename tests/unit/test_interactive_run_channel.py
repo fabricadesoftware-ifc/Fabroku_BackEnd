@@ -120,3 +120,20 @@ def test_run_postgres_connect_loop_streams_output_and_input():
     assert dokku.get_calls()[0]['args']['command'] == 'postgres:connect my-app-postgres'
     chunk = session.audit_chunks.get(direction=InteractiveRunAuditDirection.OUTPUT)
     assert chunk is not None
+
+
+def test_interrupt_remote_command_sends_ctrl_c_when_command_still_running():
+    """Sessão encerrada (expirada/cancelada/erro) não pode deixar o `dokku run` vivo."""
+    from core.apps.mixins.apps.interactive_run import _interrupt_remote_command
+
+    channel = FakeInteractiveChannel(['Usuário: ', 'mais saída'])
+    _interrupt_remote_command(channel)
+    assert channel.written_inputs[0] == '\x03'
+
+
+def test_interrupt_remote_command_does_nothing_when_command_finished():
+    from core.apps.mixins.apps.interactive_run import _interrupt_remote_command
+
+    channel = FakeInteractiveChannel([])
+    _interrupt_remote_command(channel)
+    assert channel.written_inputs == []
