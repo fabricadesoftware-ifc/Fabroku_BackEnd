@@ -205,6 +205,12 @@ class InteractiveRunValidationTests(SimpleTestCase):
         samples = [
             ('Email address: ', 'email', False),
             ('Name: ', 'name', False),
+            ('Username: ', 'username', False),
+            ("Username (leave blank to use 'herokuishuser'): ", 'username', False),
+            ("Usuário (leave blank to use 'herokuishuser'): ", 'username', False),
+            ('Endereço de email: ', 'email', False),
+            ('Senha: ', 'password', True),
+            ('Senha (novamente): ', 'password_confirmation', True),
             ('Password: ', 'password', True),
             ('Password (again): ', 'password_confirmation', True),
             (

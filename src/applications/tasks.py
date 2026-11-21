@@ -192,4 +192,16 @@ def run_dumpdata_task(  # noqa: PLR0913, PLR0917
             task_id=self.request.id,
         )
     )
-    return {'status': 'success', 'app_id': result.app_id, 'artifact_id': result.artifact_id}
+    # A CLI (`fabroku run dumpdata`) baixa o arquivo por `artifact.download_url`,
+    # que get_app_status repassa a partir deste retorno.
+    return {
+        'status': 'success',
+        'app_id': result.app_id,
+        'artifact_id': result.artifact_id,
+        'artifact': {
+            'id': result.artifact_id,
+            'filename': result.filename,
+            'size': result.size,
+            'download_url': f'/api/apps/apps/{result.app_id}/artifacts/{result.artifact_id}/download/',
+        },
+    }

@@ -78,6 +78,17 @@ class DjangoCreatesuperuserDriver:
             secret=False,
             pattern=re.compile(r'((?:e-?mail(?:\s+address)?|email(?:\s+address)?)\s*:\s*)$', re.IGNORECASE),
         ),
+        # Modelo de usuário padrão do Django: "Username (leave blank to use 'herokuishuser'): ",
+        # ou "Usuário (leave blank to use ...): " com LANGUAGE_CODE pt-br.
+        InteractivePromptSpec(
+            key='username',
+            label='Username',
+            secret=False,
+            pattern=re.compile(
+                r'((?:user\s*name|username|usu[aá]rio|nome\s+de\s+usu[aá]rio)(?:\s*\([^)\n]*\))?\s*:\s*)$',
+                re.IGNORECASE,
+            ),
+        ),
         InteractivePromptSpec(
             key='name',
             label='Name',
@@ -643,7 +654,26 @@ def _run_interactive_command_loop(
 
         return channel.exit_status(), output_state
     finally:
+        _interrupt_remote_command(channel)
         channel.close()
+
+
+def _interrupt_remote_command(channel) -> None:
+    """Encerra o comando remoto antes de fechar o canal.
+
+    Fechar só o SSH deixa o container do `dokku run` vivo, esperando entrada para
+    sempre (sessão expirada, cancelada ou com erro). Ctrl-C interrompe o comando;
+    Ctrl-D fecha a entrada de quem ainda estiver lendo (ex.: psql).
+    """
+    for control_char in ('\x03', '\x04'):
+        try:
+            if channel.exit_status_ready():
+                return
+            channel.write(control_char)
+        except Exception:  # noqa: BLE001 - limpeza best-effort; o canal pode já estar fechado
+            module_logger.debug('Falha ao interromper comando interativo remoto', exc_info=True)
+            return
+        time.sleep(INTERACTIVE_RUN_POLL_INTERVAL)
 
 
 def _run_postgres_connect_loop(
@@ -685,6 +715,7 @@ def _run_postgres_connect_loop(
 
         return channel.exit_status()
     finally:
+        _interrupt_remote_command(channel)
         channel.close()
 
 
