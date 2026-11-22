@@ -143,6 +143,31 @@ class UserViewSet(ReadOnlyModelViewSet):
 
         return Response(UserAdminSerializer(user).data)
 
+    @action(detail=True, methods=['post'], url_path='toggle_fabric')
+    def toggle_fabric(self, request, pk=None):
+        """Torna um usuário membro da Fábrica, ou remove (somente admin).
+
+        Membros da Fábrica têm cota maior e podem personalizar nome/domínio dos apps.
+        Ninguém altera o próprio status por aqui.
+        """
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Permissão negada'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        user = self.get_object()
+        if user.id == request.user.id:
+            return Response(
+                {'error': f'Você não pode alterar seu próprio status de {settings.FABROKU_PRIVILEGED_ROLE_LABEL}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user.is_fabric = not user.is_fabric
+        user.save(update_fields=['is_fabric'])
+
+        return Response(UserAdminSerializer(user).data)
+
     @action(detail=True, methods=['post'], url_path='set_quota')
     def set_quota(self, request, pk=None):
         """Define limites personalizados de apps/serviços para um usuário (somente admin)."""
