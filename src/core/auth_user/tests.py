@@ -367,6 +367,48 @@ class UserAdminListTests(APITestCase):
         self.assertTrue(self.superuser.is_superuser)
         self.assertTrue(self.superuser.is_staff)
 
+    def test_admin_can_make_and_remove_fabric_member(self):
+        target_user = User.objects.create_user(
+            email='target-fabric@example.com',
+            password='senha123',
+            name='Target Fabric',
+        )
+        self.assertFalse(target_user.is_fabric)
+
+        promote_response = self.client.post(f'/api/auth/users/{target_user.id}/toggle_fabric/')
+
+        self.assertEqual(promote_response.status_code, 200)
+        self.assertTrue(promote_response.data['is_fabric'])
+        target_user.refresh_from_db()
+        self.assertTrue(target_user.is_fabric)
+        self.assertFalse(target_user.is_superuser)
+
+        demote_response = self.client.post(f'/api/auth/users/{target_user.id}/toggle_fabric/')
+
+        self.assertEqual(demote_response.status_code, 200)
+        self.assertFalse(demote_response.data['is_fabric'])
+        target_user.refresh_from_db()
+        self.assertFalse(target_user.is_fabric)
+
+    def test_admin_cannot_change_own_fabric_status(self):
+        before = self.superuser.is_fabric
+        response = self.client.post(f'/api/auth/users/{self.superuser.id}/toggle_fabric/')
+
+        self.assertEqual(response.status_code, 400)
+        self.superuser.refresh_from_db()
+        self.assertEqual(self.superuser.is_fabric, before)
+
+    def test_non_admin_cannot_toggle_fabric(self):
+        regular = User.objects.create_user(email='regular-fabric@example.com', password='senha123', name='Regular')
+        target_user = User.objects.create_user(email='other-fabric@example.com', password='senha123', name='Other')
+        self.client.force_authenticate(user=regular)
+
+        response = self.client.post(f'/api/auth/users/{target_user.id}/toggle_fabric/')
+
+        self.assertIn(response.status_code, (403, 404))
+        target_user.refresh_from_db()
+        self.assertFalse(target_user.is_fabric)
+
     def test_admin_list_uses_cache_when_nothing_changes(self):
         User.objects.create_user(
             email='cached-user@example.com',
